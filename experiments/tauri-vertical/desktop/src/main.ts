@@ -485,7 +485,7 @@ async function poll(version: number) {
           views.get(event.sessionId)?.chat?.applyEvent(event);
         } else if (event.kind === 'output') {
           const view = views.get(event.sessionId) ?? ensure({ id: event.sessionId, title: event.sessionId, kind: 'unknown', cwd: null, status: 'recuperando', rows: 24, cols: 80 });
-          if (!replaying) interactivePoll.activity();
+          if (!replaying) interactivePoll.output();
           if (!replaying && views.get(event.sessionId)?.session.transport !== 'app-server' && !isAttended(event.sessionId)) attention.signal(event.sessionId, 'output');
           const binary = atob(event.data);
           const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));

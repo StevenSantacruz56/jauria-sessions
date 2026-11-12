@@ -1,6 +1,7 @@
 /** One awaited poll loop; input can wake its idle timer, never start another poll. */
 export class InteractivePoll {
   private activeUntil = 0;
+  private outputUntil = 0;
   private wake?: () => void;
   private now: () => number;
   constructor(now = () => performance.now()) { this.now = now; }
@@ -8,8 +9,11 @@ export class InteractivePoll {
     this.activeUntil = this.now() + 1200;
     this.wake?.();
   }
+  output() { this.outputUntil = this.now() + 100; }
   delay(foreground: boolean) {
-    return foreground && this.now() < this.activeUntil ? 12 : 150;
+    if (!foreground) return 150;
+    if (this.now() < this.activeUntil) return 12;
+    return this.now() < this.outputUntil ? 33 : 150;
   }
   wait(foreground: boolean): Promise<void> {
     return new Promise(resolve => {

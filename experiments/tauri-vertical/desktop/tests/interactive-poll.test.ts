@@ -15,6 +15,14 @@ now = 1201;
 assert.equal(poll.delay(true), 12);
 now = 2400;
 assert.equal(poll.delay(true), 150);
+poll.output();
+assert.equal(poll.delay(true), 33);
+assert.equal(poll.delay(false), 150);
+now = 2501;
+assert.equal(poll.delay(true), 150, 'periodic output does not hold the typing-speed loop');
+poll.activity(); poll.output();
+assert.equal(poll.delay(true), 12, 'output cannot shorten the typing window');
+now = 3702;
 await poll.wait(true); // Timed idle wait also clears its wake callback.
 poll.activity();
 console.log('PASS interactive polling: immediate wake, bounded activity window, background/idle backoff');
