@@ -393,7 +393,7 @@ impl Runner {
             let db = self.db.lock().unwrap();
             let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
             let unchanged=args["workspaceAfter"].as_str()==Some(revision.as_str());
-            let mut result=json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"workspaceNotModified":unchanged});
+            let mut result=json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"workspaceNotModified":unchanged});
             if !unchanged {result["projects"]=json!(crate::projects::projects(&db.0)?);result["tasks"]=json!(crate::projects::tasks(&db.0)?);}
             return Ok(result);
         }
@@ -1181,6 +1181,7 @@ mod standalone_native_tests {
         let status = r.request(json!({"version":1,"token":r.token,"op":"status","args":{}}))?;
         assert_eq!(status["terminalSessionVersion"], 1);
         assert_eq!(status["normalTerminalVersion"], 1);
+        assert_eq!(status["claudeNativeConfigVersion"], 1);
         Ok(())
     }
 

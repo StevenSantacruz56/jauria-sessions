@@ -24,7 +24,7 @@ import { shell, paneMarkup, icon } from './ui';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
 type Session = { transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type RunnerStatus = WorkspaceData & { claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
@@ -209,7 +209,7 @@ function refresh() {
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
   const capabilities=runner as RunnerStatus & {telemetryVersion?:number;verificationVersion?:number;recoveryVersion?:number;handoffVersion?:number;codexVersion?:number;terminalSessionVersion?:number;projectLifecycleVersion?:number};
-  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1);
+  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1);
   $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
   text('#cursor', `Eventos procesados: ${renderedSeq}`);
   const retained=runner?.retention;
