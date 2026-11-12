@@ -1,0 +1,21 @@
+/* Jauría — tokens de color y tipografía */
+:root {
+  /* Marca */
+  --jauria-tinta: #0E1116;   /* silueta, texto, fondos oscuros */
+  --jauria-ambar: #F0B323;   /* ojos/prompt, cursor, fondo del ícono — no usar para texto sobre blanco */
+  --jauria-gato:  #5C626C;   /* silueta en modo oscuro */
+  --jauria-oreja: #C98E8E;   /* solo detalles de la mascota */
+  --jauria-cielo: #EEF3FA;   /* fondo claro de la marca */
+  --jauria-claro: #E9EDF3;   /* texto sobre fondos oscuros */
+
+  /* Estados de sesión */
+  --jauria-trabajando: #5B9BFF;
+  --jauria-atencion:   #FF9F43;
+  --jauria-listo:      #2DBE7E;
+  --jauria-pausa:      #9AA4B2;
+
+  /* Tipografía */
+  --jauria-font-display: 'Bricolage Grotesque', system-ui, sans-serif; /* 700/800 */
+  --jauria-font-ui:      'Inter', system-ui, sans-serif;               /* 400/500/600 */
+  --jauria-font-mono:    'JetBrains Mono', ui-monospace, monospace;    /* 500/700 */
+}

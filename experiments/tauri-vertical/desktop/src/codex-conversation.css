@@ -1,0 +1,45 @@
+/* Operate: extension of the incumbent workbench and its theme tokens. */
+.codex-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; box-sizing: border-box; color: var(--text); background: var(--surface); font-size: 13px; line-height: 1.45; overflow: auto; overflow-wrap: anywhere; }
+.codex-conversation[hidden], .codex-conversation [hidden] { display: none; }
+.codex-conversation :is(h3, h4, p, pre) { margin: 0; }
+.codex-conversation h3 { font-size: 14px; font-weight: 650; }
+.codex-conversation h4 { font-size: 12px; font-weight: 600; }
+.codex-conversation-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.codex-conversation > header { flex: 0 0 auto; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--chrome); }
+.codex-conversation > header h3 { margin-right: auto; }
+.codex-conversation button { min-height: 30px; white-space: normal; }
+.codex-conversation button:disabled { opacity: .48; cursor: default; }
+.codex-conversation-muted { color: var(--muted); font-size: 12px; }
+.codex-conversation-feedback, .codex-conversation-partial { padding: 8px 12px; white-space: pre-wrap; }
+.codex-conversation-partial { color: var(--warning); background: var(--chrome); font-size: 12px; }
+.codex-conversation-error { color: var(--error); background: var(--error-bg); white-space: pre-wrap; }
+.codex-conversation-permissions { flex: 0 0 auto; padding: 0 12px; background: var(--notice-bg); }
+.codex-conversation-permission { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.codex-conversation-permission > * + * { margin-top: 8px; }
+.codex-conversation-permission button { margin-right: 8px; }
+.codex-conversation-turns { flex: 0 0 auto; padding: 8px 12px; max-height: 120px; overflow: auto; border-bottom: 1px solid var(--border); }
+.codex-conversation-history { flex: 1 1 140px; padding: 0 16px 16px; min-height: 140px; overflow: auto; }
+.codex-conversation-history > p { padding-top: 16px; }
+.codex-conversation-entry { padding-top: 16px; max-width: 100%; }
+.codex-conversation-entry + .codex-conversation-entry { margin-top: 16px; border-top: 1px solid var(--border); }
+.codex-conversation-entry h4 { margin-bottom: 6px; color: var(--muted); }
+.codex-conversation :is(.codex-conversation-entry, .codex-conversation-permission) pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; tab-size: 4; font: inherit; line-height: 1.6; }
+.codex-conversation :is(.codex-conversation-command, .codex-conversation-permission) pre { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.codex-conversation-composer { flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--border); background: var(--chrome); }
+.codex-conversation-composer label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; }
+.codex-conversation-composer textarea { box-sizing: border-box; width: 100%; min-width: 0; max-height: 260px; resize: vertical; padding: 8px 9px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; line-height: 1.5; caret-color: var(--accent); }
+.codex-conversation-composer textarea:hover { border-color: var(--accent); }
+.codex-conversation-composer > * + * { margin-top: 8px; }
+.codex-conversation :where(button, textarea, pre, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.codex-conversation ::selection { background: var(--selected); color: var(--selected-text); }
+@media (forced-colors: active) {
+  .codex-conversation-partial, .codex-conversation-error { color: CanvasText; }
+  .codex-conversation :focus-visible { outline-color: Highlight; }
+}
+
+/* Keep the composer reachable at the native 760 × 560 minimum size. */
+@media (max-height: 680px) {
+  .codex-conversation-history { flex-basis: 48px; min-height: 48px; }
+  .codex-conversation-composer { padding: 8px; }
+  .codex-conversation-composer textarea { max-height: 100px; }
+}

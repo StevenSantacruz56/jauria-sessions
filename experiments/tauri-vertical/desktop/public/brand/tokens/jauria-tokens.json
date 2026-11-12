@@ -1,0 +1,23 @@
+{
+  "color": {
+    "marca": {
+      "tinta": "#0E1116",
+      "ambar": "#F0B323",
+      "gato": "#5C626C",
+      "oreja": "#C98E8E",
+      "cielo": "#EEF3FA",
+      "claro": "#E9EDF3"
+    },
+    "estado": {
+      "trabajando": "#5B9BFF",
+      "atencion": "#FF9F43",
+      "listo": "#2DBE7E",
+      "pausa": "#9AA4B2"
+    }
+  },
+  "font": {
+    "display": { "family": "Bricolage Grotesque", "weights": [700, 800] },
+    "ui": { "family": "Inter", "weights": [400, 500, 600] },
+    "mono": { "family": "JetBrains Mono", "weights": [500, 700] }
+  }
+}

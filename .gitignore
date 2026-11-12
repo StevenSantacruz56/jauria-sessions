@@ -1,0 +1,40 @@
+# Generated dependencies and native outputs
+**/node_modules/
+**/target/
+**/dist/
+**/gen/schemas/
+**/.cache/
+**/__pycache__/
+*.py[cod]
+.DS_Store
+# Local runtime, provider state, private evidence
+**/.runtime/
+**/evidence/
+**/.impeccable/
+**/.codex/
+**/.claude/
+**/profile/
+**/profiles/
+**/worktrees/
+**/.env
+**/.env.*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+*.sock
+*.pid
+*.pem
+*.key
+*.p12
+*.mobileprovision
+# Review materials and exploratory third-party trees
+/docs/reviews/
+/experiments/nimbalyst-eval/
+/experiments/stack-eval/
+# Local IDE state
+.idea/
+.vscode/

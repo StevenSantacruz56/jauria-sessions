@@ -1,0 +1,290 @@
+{
+  "sourceBasename": "jauria-marca",
+  "appIconSourceBasename": "jauria-icono-app-1024.png",
+  "method": "Original brand assets retained byte-for-byte; local provenance paths replaced for portability. See asset-sha256.json.",
+  "files": {
+    "public/brand/LEEME.md": {
+      "sha256": "a3afe5704f2cde7d5adc7047908a66cc53de224314bf7a218dc68829585b525d",
+      "bytes": 1300,
+      "source": "LEEME.md",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/apple-touch-icon.png": {
+      "sha256": "aaf8c2b7ca1c87a9e347b374d8ef6b70cb9e2504cafcf2fdc8c9c76d18f36b17",
+      "bytes": 10585,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "public/brand/favicon-32.png": {
+      "sha256": "f6168c5f66b73c88ef94f7306abc09a5aa48b789e88e9c1696794ad16be33066",
+      "bytes": 7013,
+      "source": "jauria-favicon-32.png",
+      "method": "byte-for-byte compatibility alias"
+    },
+    "public/brand/fuentes/LICENCIA-BricolageGrotesque-OFL.txt": {
+      "sha256": "923f4ddf0fd39f9b7794ab0df7332f3d95dc43e8ad7ec2289d6d9e8491177f51",
+      "bytes": 4401,
+      "source": "LICENCIA-BricolageGrotesque-OFL.txt",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/LICENCIA-Inter-OFL.txt": {
+      "sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345",
+      "bytes": 4477,
+      "source": "LICENCIA-Inter-OFL.txt",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/LICENCIA-JetBrainsMono-OFL.txt": {
+      "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
+      "bytes": 4524,
+      "source": "LICENCIA-JetBrainsMono-OFL.txt",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/bricolage-grotesque-latin-700-normal.woff2": {
+      "sha256": "4c373ce3c1cca41c864eb3e27c059a59fc6310547ab9c9b6cd780d387ba24206",
+      "bytes": 22384,
+      "source": "bricolage-grotesque-latin-700-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/bricolage-grotesque-latin-800-normal.woff2": {
+      "sha256": "3e1b5f0a56ee995b7c1445bc54e6ec98c5dffb585ef5c4baf86731cf68e27c61",
+      "bytes": 21844,
+      "source": "bricolage-grotesque-latin-800-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/inter-latin-400-normal.woff2": {
+      "sha256": "8909904ab6c872eb994093482a88a28eca2cd95912d7b6fecd72103b0dc07edc",
+      "bytes": 23664,
+      "source": "inter-latin-400-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/inter-latin-500-normal.woff2": {
+      "sha256": "f3779f1efccc4bdcdf9c0a02ab95bf6bd092ed09c48c08cedc725889edd1d19f",
+      "bytes": 24272,
+      "source": "inter-latin-500-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/inter-latin-600-normal.woff2": {
+      "sha256": "f9a06e79cd3a2a20951c0f0e28f66dd0e6d3fda73911d640a2125c8fcb78f21a",
+      "bytes": 24452,
+      "source": "inter-latin-600-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/jetbrains-mono-latin-500-normal.woff2": {
+      "sha256": "cb182feeed4d798ff6961d3c79f7026279448fca0676438aaecb21f3fc39553a",
+      "bytes": 21832,
+      "source": "jetbrains-mono-latin-500-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/fuentes/jetbrains-mono-latin-700-normal.woff2": {
+      "sha256": "d0d4e818808f2a0ba39b2b09d1989366f63494e295f003c7ef436697378507e8",
+      "bytes": 21908,
+      "source": "jetbrains-mono-latin-700-normal.woff2",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-favicon-32.png": {
+      "sha256": "f6168c5f66b73c88ef94f7306abc09a5aa48b789e88e9c1696794ad16be33066",
+      "bytes": 7013,
+      "source": "jauria-favicon-32.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-favicon-64.png": {
+      "sha256": "3cf9ebb586ff183fd45859df63deaafffc52b3748ef6370669785eaad27ebf83",
+      "bytes": 8175,
+      "source": "jauria-favicon-64.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-favicon.ico": {
+      "sha256": "f9efe755517d0bafc91cd4d28eb01b0a656fa9fd98b2e90e0e6469745e21e2d7",
+      "bytes": 9214,
+      "source": "jauria-favicon.ico",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-icono-app-1024.png": {
+      "sha256": "5bcb49c9d97c1955d4faa0856f912596a39f59f491792332ed09529308480d14",
+      "bytes": 68783,
+      "source": "jauria-icono-app-1024.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-icono-app.png": {
+      "sha256": "5bcb49c9d97c1955d4faa0856f912596a39f59f491792332ed09529308480d14",
+      "bytes": 68783,
+      "source": "jauria-icono-app-1024.png",
+      "method": "byte-for-byte compatibility alias"
+    },
+    "public/brand/jauria-icono-app.svg": {
+      "sha256": "03adbc0e95736374fc6d1acce5811ed171243755de21a34c3d9674dacd0675e7",
+      "bytes": 8627,
+      "source": "jauria-icono-app.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-claro.png": {
+      "sha256": "cf8e3b7df904af7f159f31aef25faab5530996a010a315bc3bd4c7b199b5c685",
+      "bytes": 110791,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/jauria-logo-claro.svg": {
+      "sha256": "b81269a42eea1628ff30b112a5a66dd3671f47ab4e050e76b10485197dee84f6",
+      "bytes": 15435,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/jauria-logo-horizontal-claro.png": {
+      "sha256": "91ffc29f7ea54e9abecf2e809104642f32ec75da034a67b2c6386bbdfd0b6dc0",
+      "bytes": 78791,
+      "source": "jauria-logo-horizontal-claro.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-horizontal-claro.svg": {
+      "sha256": "47ea639f7ff1c117608681a3d17e294cb044359552225ee439e868ad8650d5be",
+      "bytes": 16346,
+      "source": "jauria-logo-horizontal-claro.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-horizontal-oscuro.png": {
+      "sha256": "ddcc82ba377d3897ec4c3cdcada43fc65e4804cba66f38b2da071e3600150ee1",
+      "bytes": 78778,
+      "source": "jauria-logo-horizontal-oscuro.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-horizontal-oscuro.svg": {
+      "sha256": "4eb98397b2abaa757dc47ce87fef537727af799783e81aac220a3430b2f4925c",
+      "bytes": 16346,
+      "source": "jauria-logo-horizontal-oscuro.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-horizontal-transparente.png": {
+      "sha256": "a4e53208b065fb5a0f5e9be8e5c36f772b1a223d6429831e14188aed75889464",
+      "bytes": 77978,
+      "source": "jauria-logo-horizontal-transparente.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-horizontal-transparente.svg": {
+      "sha256": "08b5d0df4005928a9fc03ceba30af8a22cd073a7cb6a18e594f7e54dc8726c9c",
+      "bytes": 16297,
+      "source": "jauria-logo-horizontal-transparente.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-logo-oscuro.png": {
+      "sha256": "dde2b1fa62714b7aa01ba29e20a0ac677f302f8b5e32e8459da320ed7ebb0017",
+      "bytes": 131212,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/jauria-logo-oscuro.svg": {
+      "sha256": "906d21d1b594ec661869deb333a20d6e931f1fcd725d53c42ed18f98132d16d3",
+      "bytes": 15435,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/jauria-mascota-claro.png": {
+      "sha256": "c2419a528da98af0587b6bee98979fd9cff103074ad2ebb6540ea6d671187b7d",
+      "bytes": 168263,
+      "source": "jauria-mascota-claro.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-mascota-claro.svg": {
+      "sha256": "1a7693a28055fb1c2c696dba303f1c88cb7596b4611a01dc68f7b88baf790ef1",
+      "bytes": 15304,
+      "source": "jauria-mascota-claro.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-mascota-oscuro.png": {
+      "sha256": "0bd738100a01e805036bd3f95f3cc9db67e16c52599cd785a70d0133c02a5d27",
+      "bytes": 166274,
+      "source": "jauria-mascota-oscuro.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-mascota-oscuro.svg": {
+      "sha256": "b318b5ac943f0097d7f3237bda44cd5124f3352c416d22f80f677c2a6126e117",
+      "bytes": 15304,
+      "source": "jauria-mascota-oscuro.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-mascota-simbolo.png": {
+      "sha256": "7d9bd4143807414398a26c0d073f481950d54da1a601757a5eae4cdc8f6645a2",
+      "bytes": 107010,
+      "source": "jauria-mascota-simbolo.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-mascota-simbolo.svg": {
+      "sha256": "adbbac25ef201a3ff0b064304fe7a63c84f12b485050dc96174fdf65ae363164",
+      "bytes": 9057,
+      "source": "jauria-mascota-simbolo.svg",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/jauria-simbolo.png": {
+      "sha256": "6f422400622a5ec3447d9a27041e8fb33bf9145f073f43f66ae45379a71ec3c6",
+      "bytes": 62679,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/jauria-simbolo.svg": {
+      "sha256": "7e5cda5886afbf1b9385ccbda01c4a9794550b0c9bd067406340fd93eb072897",
+      "bytes": 10071,
+      "source": "jauria-logo",
+      "method": "retained legacy original; not used for current app identity"
+    },
+    "public/brand/manual/jauria-manual-de-marca.pdf": {
+      "sha256": "1ee12c946e7bf12ec7dbb536a1affd6d454c34bb41369fceee5d18756a116225",
+      "bytes": 69551,
+      "source": "jauria-manual-de-marca.pdf",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/manual/jauria-manual-de-marca.png": {
+      "sha256": "8fa9494ea201c4343c9b2e213e5b833490f88d1d3cab10f0be23741186ccaf4e",
+      "bytes": 859086,
+      "source": "jauria-manual-de-marca.png",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/tokens/jauria-colores.css": {
+      "sha256": "abeda1f2a2d409a2709d90de43289a4a4af361ca5f14103d13805f951a2d6ca2",
+      "bytes": 925,
+      "source": "jauria-colores.css",
+      "method": "byte-for-byte copy"
+    },
+    "public/brand/tokens/jauria-tokens.json": {
+      "sha256": "e26fb48b051e75ed55ba6841fc86afdae66c735904f8cc24e59382af64847119",
+      "bytes": 549,
+      "source": "jauria-tokens.json",
+      "method": "byte-for-byte copy"
+    },
+    "src-tauri/icons/128x128.png": {
+      "sha256": "fa8e830ab896545563e20a6db2f33d865d5461527ce111fe59b53202604d992a",
+      "bytes": 7449,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "src-tauri/icons/128x128@2x.png": {
+      "sha256": "20efba2769dcbf854f0e4e1f17c01e10f712453d099bf1ca3f0a5af2fa439438",
+      "bytes": 15099,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "src-tauri/icons/32x32.png": {
+      "sha256": "27ec4756695eaf6eb37c5223eb33afd2e3d4e22f8bd508920132e20a9315078b",
+      "bytes": 1767,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "src-tauri/icons/icon.icns": {
+      "sha256": "4789b45a8967e509f9f6eef18adf4b2db50b0c2a7b2a7bcfefb5e9e808a7e3fd",
+      "bytes": 122412,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "src-tauri/icons/icon.ico": {
+      "sha256": "96215a3bd60abe71e92d586c07bab8f5fb39e0d557dc5ec0a48fed9ccb8190a1",
+      "bytes": 32866,
+      "source": "jauria-icono-app-1024.png",
+      "method": "Pillow 11.3.0; RGBA; LANCZOS resize / native ICNS or ICO encoder; no redrawing"
+    },
+    "src-tauri/icons/icon.png": {
+      "sha256": "5bcb49c9d97c1955d4faa0856f912596a39f59f491792332ed09529308480d14",
+      "bytes": 68783,
+      "source": "jauria-icono-app-1024.png",
+      "method": "byte-for-byte copy"
+    }
+  },
+  "sourceProvenanceSha256": "b3511fc3b8521343fa81ea3c1153691d8d547f30114f50ffc8baea83baac391f"
+}
