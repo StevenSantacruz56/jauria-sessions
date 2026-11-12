@@ -918,7 +918,10 @@ fn command(kind: &str, id: &str, cwd: &Path) -> Result<CommandBuilder> {
         },
         "claude" => {
             let mut cmd=CommandBuilder::new(PathBuf::from(&home).join(".local/bin/claude"));
-            cmd.args(["--permission-mode","default","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--no-chrome"]);
+            // Interactive Claude uses the account's native settings and MCP
+            // discovery, including project trust/approval prompts. The empty
+            // MCP override belongs only to the isolated diagnostic probe.
+            cmd.args(["--permission-mode","default","--no-chrome"]);
             cmd
         },
         "codex_probe" => {
@@ -1061,6 +1064,19 @@ mod tests {
             let argv=format!("{:?}",cmd.get_argv());
             assert!(!argv.contains("bypass") && !argv.contains("skip-permissions"));
         }
+    }
+    #[test]
+    fn interactive_claude_discovers_native_mcp_but_probe_stays_isolated() -> Result<()> {
+        let interactive=command("claude","mcp-config-regression",Path::new("/tmp"))?;
+        let args=interactive.get_argv();
+        for flag in ["--strict-mcp-config","--mcp-config","--setting-sources","--dangerously-skip-permissions"] {
+            assert!(!args.iter().any(|arg|arg==flag),"interactive configuration suppressed: {flag}");
+        }
+        assert!(args.windows(2).any(|pair|pair[0]=="--permission-mode" && pair[1]=="default"));
+        let probe=command("claude_probe","mcp-config-probe",Path::new("/tmp"))?;
+        assert!(probe.get_argv().windows(2).any(|pair|pair[0]=="--mcp-config" && pair[1]=="{\"mcpServers\":{}}"));
+        assert!(probe.get_argv().iter().any(|arg|arg=="--strict-mcp-config"));
+        Ok(())
     }
     #[test]
     fn normal_terminal_and_diagnostic_shell_keep_distinct_fixed_commands() -> Result<()> {
