@@ -11,7 +11,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
 import { OrderedInput } from './input';
+import { InteractivePoll } from './interactive-poll';
 import { attachTerminalKeyboard } from './terminal-keyboard';
+import { preserveTerminalViewport, syncTerminalViewport } from './terminal-viewport';
 import { terminalTheme, terminalTypography } from './terminal-theme';
 import { hasTaskWorkspace, taskStateLabel, taskStartBlock, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
 import { shell, paneMarkup, icon } from './ui';
@@ -44,6 +46,7 @@ let renderedSeq = 0;
 let runner: RunnerStatus | null = null;
 let loopVersion = 0;
 let activeLoop: Promise<void> = Promise.resolve();
+const interactivePoll = new InteractivePoll();
 let lastEvidence = 0;
 const streamMetrics = {pages:0,lastPageMs:0,lastParseMs:0,lastTransferMs:0,lastYieldMs:0,maxParseMs:0,maxYieldMs:0,visibility:'unknown',pageBytes:0};
 let statusAt = 0;
@@ -310,7 +313,7 @@ function assign(pane: Pane, id: string | null) {
   if (pane.id) views.get(pane.id)?.host.remove();
   pane.id = id;
   const empty = pane.host.querySelector<HTMLElement>('.empty'); if (empty) empty.hidden = !!id;
-  if (id) { const view = views.get(id)!; pane.host.append(view.host); scheduleResize(view); }
+  if (id) { const view = views.get(id)!; pane.host.append(view.host); syncTerminalViewport(view.term); scheduleResize(view); }
 }
 function focusView(view:View|undefined|null){if(!view)return;if(view.session.transport==='app-server')view.host.querySelector<HTMLTextAreaElement>('textarea')?.focus();else view.term.focus();}
 function configureConversation(view:View){
@@ -338,7 +341,7 @@ function ensure(session: Session): View {
   // Open in a real document element, including sessions not selected in a pane.
   host.style.visibility = 'hidden'; host.style.position = 'absolute'; host.style.width = '550px'; host.style.height = '340px';
   document.body.append(host);
-  const term = new Terminal({ screenReaderMode: false, convertEol: false, scrollback: 8000, rows: session.rows || 24, cols: session.cols || 80, fontSize: 13, ...terminalTypography, cursorBlink: true, theme: terminalTheme });
+  const term = new Terminal({ allowProposedApi: true, screenReaderMode: false, convertEol: false, scrollback: 8000, rows: session.rows || 24, cols: session.cols || 80, fontSize: 13, ...terminalTypography, cursorBlink: true, theme: terminalTheme });
   const fit = new FitAddon(); term.loadAddon(fit); if(session.transport!=='app-server')term.open(host);
   const keyboard = attachTerminalKeyboard(term);
   host.remove(); host.removeAttribute('style');
@@ -351,7 +354,7 @@ function ensure(session: Session): View {
   }, e => notice(`${message(e)} Entrada suspendida; reconecta antes de continuar.`, true));
   const subscription = term.onData(data => {
     if (!replaying && connected && !stopping.has(session.id) && isLive(views.get(session.id)!.session)) {
-      try { void input.enqueue(data).catch(e => notice(message(e), true)); }
+      try { interactivePoll.activity(); void input.enqueue(data).catch(e => notice(message(e), true)); }
       catch (e) { notice(message(e), true); }
     }
   });
@@ -374,7 +377,7 @@ function scheduleResize(view: View) {
 function resizeView(view: View) {
   if (!view || replaying || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
   if (view.resizeBusy) { view.resizeAgain = true; return; }
-  view.fit.fit();
+  preserveTerminalViewport(view.term, () => view.fit.fit());
   if (!isLive(view.session) || stopping.has(view.session.id)) return;
   const size = `${view.term.cols}x${view.term.rows}`;
   if (size === view.sentSize || size === view.lastAttemptSize || !['running', 'starting'].includes(view.session.status)) return;
@@ -438,6 +441,7 @@ async function poll(version: number) {
           views.get(event.sessionId)?.chat?.applyEvent(event);
         } else if (event.kind === 'output') {
           const view = views.get(event.sessionId) ?? ensure({ id: event.sessionId, title: event.sessionId, kind: 'unknown', cwd: null, status: 'recuperando', rows: 24, cols: 80 });
+          if (!replaying) interactivePoll.activity();
           const binary = atob(event.data);
           const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
           // Queue one bounded page so xterm can coalesce parser work. Awaiting
@@ -466,8 +470,9 @@ async function poll(version: number) {
             }else if(!['running','starting'].includes(data.status)){view.session.status=data.status;}
           }
           if (view && Number.isInteger(data.cols) && Number.isInteger(data.rows) && data.cols! >= 2 && data.rows! >= 2) {
-            view.term.resize(data.cols!, data.rows!);
+            preserveTerminalViewport(view.term, () => view.term.resize(data.cols!, data.rows!));
           }
+          if (!replaying) refresh();
         }
         // Output is acknowledged only after xterm has parsed and painted its buffer.
         pageSeq = event.seq;
@@ -491,11 +496,13 @@ async function poll(version: number) {
         streamMetrics.lastPageMs=performance.now()-pageStarted;streamMetrics.maxParseMs=Math.max(streamMetrics.maxParseMs,streamMetrics.lastParseMs);
         streamMetrics.visibility=document.visibilityState;streamMetrics.pageBytes=page.events.reduce((sum,event)=>sum+event.data.length,0);
       }
-      if (!page.hasMore) for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
-      refresh();
+      if (!page.hasMore && page.events.length) for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
+      // Status/state transitions refresh the shell above. Output only changes
+      // xterm and the event counter; rebuilding chrome every 12ms adds latency.
+      if (page.events.length) text('#cursor', `Eventos procesados: ${renderedSeq}`);
       await evidence();
       const yielding=performance.now();
-      if (!page.hasMore) await new Promise(resolve => setTimeout(resolve, 150));
+      if (!page.hasMore) await interactivePoll.wait(document.visibilityState === 'visible');
       else await new Promise(resolve => setTimeout(resolve, 0));
       if(smoke){streamMetrics.lastYieldMs=performance.now()-yielding;streamMetrics.maxYieldMs=Math.max(streamMetrics.maxYieldMs,streamMetrics.lastYieldMs);}
     }

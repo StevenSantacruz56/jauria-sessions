@@ -8,6 +8,7 @@ Las licencias declaradas pertenecen a cada biblioteca; no asignan licencia al c�
 | @xterm/addon-fit | 0.10.0 | MIT | [registro](https://www.npmjs.com/package/@xterm/addon-fit/v/0.10.0) |
 | @xterm/xterm | 5.5.0 | MIT | [registro](https://www.npmjs.com/package/@xterm/xterm/v/5.5.0) |
 | @tauri-apps/cli | 2.12.4 | Apache-2.0 OR MIT | [registro](https://www.npmjs.com/package/@tauri-apps/cli/v/2.12.4) |
+| playwright | 1.65.0 | Apache-2.0 | [registro](https://www.npmjs.com/package/playwright/v/1.65.0) |
 | esbuild | 0.25.12 | MIT | [registro](https://www.npmjs.com/package/esbuild/v/0.25.12) |
 | typescript | 5.9.3 | Apache-2.0 | [registro](https://www.npmjs.com/package/typescript/v/5.9.3) |
 | vite | 6.4.1 | MIT | [registro](https://www.npmjs.com/package/vite/v/6.4.1) |
@@ -25,3 +26,5 @@ Las licencias declaradas pertenecen a cada biblioteca; no asignan licencia al c�
 | serde | 1.0.229 | MIT OR Apache-2.0 | [registro](https://crates.io/crates/serde/1.0.229) |
 
 `esbuild` se declara directamente como dependencia de desarrollo para los tests de regresión sobre la implementación instalada de xterm; su uso transitivo por Vite no sustituye esa declaración.
+
+`playwright` es una dependencia de desarrollo para regresiones DOM/rueda con xterm instalado. Sus navegadores de prueba se instalan explícitamente; no forman parte del bundle ni usan perfiles de usuario. Playwright WebKit no equivale a una prueba nativa de WKWebView.

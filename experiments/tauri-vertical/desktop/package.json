@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:terminal-browser": "node --test tests/browser/*.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4",
     "esbuild": "0.25.12",
+    "playwright": "1.65.0",
     "typescript": "5.9.3",
     "vite": "6.4.1"
   }

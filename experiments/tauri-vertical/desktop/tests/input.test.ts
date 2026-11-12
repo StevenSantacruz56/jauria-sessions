@@ -36,3 +36,28 @@ await Promise.allSettled([uncertain.enqueue('paste'), uncertain.control(async ()
 assert.equal(interrupted, false);
 await assert.rejects(uncertain.control(async () => {}));
 console.log('5 input checks passed: UTF8 framing, FIFO, suspend after uncertain delivery, native interrupt after paste, no interrupt after failed delivery');
+
+let unblock!: () => void;
+const blocked = new Promise<void>(r => unblock = r);
+const batched: string[] = [];
+const batching = new OrderedInput(async frame => { batched.push(frame); if (batched.length === 1) await blocked; }, assert.fail);
+const firstKey = batching.enqueue('a');
+const burst = Array.from({ length: 100 }, () => batching.enqueue('é🙂'));
+const barrier = batching.control(async () => { batched.push('<control>'); });
+const afterBarrier = batching.enqueue('z');
+assert.deepEqual(batched, ['a'], 'first key sends immediately without waiting for a timer');
+unblock(); await Promise.all([firstKey, ...burst, barrier, afterBarrier]);
+assert.deepEqual(batched, ['a', 'é🙂'.repeat(100), '<control>', 'z']);
+console.log('PASS backlog batching: 100 queued keys use one RPC, exact UTF8 and control ordering preserved');
+
+let failDelivery!: (error: Error) => void;
+const deliveries: string[] = [];
+const failsBatched = new OrderedInput(async frame => {
+  deliveries.push(frame);
+  if (deliveries.length === 1) await new Promise<void>((_, reject) => failDelivery = reject);
+}, () => {});
+const failures = [failsBatched.enqueue('one'), failsBatched.enqueue('two'), failsBatched.enqueue('three')];
+const failedResults = Promise.allSettled(failures);
+failDelivery(new Error('uncertain'));
+assert.ok((await failedResults).every(result => result.status === 'rejected'));
+assert.deepEqual(deliveries, ['one']);
