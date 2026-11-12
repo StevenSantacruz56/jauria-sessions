@@ -195,7 +195,12 @@ for (let i = 0; i < 2; i++) {
   });
   new ResizeObserver(() => { if (pane.id) scheduleResize(views.get(pane.id)!); }).observe(pane.host);
 }
-function notice(message: string, error = false) { text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); }
+function syncMessageRail() {
+  const notice = $('#notice');
+  $('#workbench-messages').dataset.active = !notice.hidden && notice.classList.contains('error') ? 'notice'
+    : !$('#attention-banner').hidden ? 'attention' : !notice.hidden ? 'notice' : 'idle';
+}
+function notice(message: string, error = false) { text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncMessageRail(); }
 function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
 async function request<T = unknown>(op: string, args: object): Promise<T> {
   const response = await invoke<{ ok: boolean; result: T; error?: string }>('runner_request', { op, args });
@@ -232,6 +237,7 @@ function refresh() {
   $('#session-alerts').title = alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
   $('#attention-banner').hidden = unseen === 0;
   text('#attention-summary', `${unseen} ${unseen === 1 ? 'sesión con avisos nuevos' : 'sesiones con avisos nuevos'}.${!connected || alerts.some(item => item.stale) ? ' Hay estados sin confirmar.' : ''}`);
+  syncMessageRail();
   nativeAttention.update(alerts);
   document.title = alerts.length ? `(${alerts.length}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
@@ -534,7 +540,7 @@ async function poll(version: number) {
           await flushWrites();
           replaying = false;
           refresh();
-          if ($('#notice-text').textContent?.startsWith('Conectado. Recuperando')) $('#notice').hidden = true;
+          if ($('#notice-text').textContent?.startsWith('Conectado. Recuperando')) { $('#notice').hidden = true; syncMessageRail(); }
         }
       }
       await flushWrites();
@@ -593,7 +599,7 @@ async function connect() {
       if (!matchesSession(preferred.session, filter, query)) filter = isLive(preferred.session) ? 'open' : matchesSession(preferred.session, 'attention', '') ? 'attention' : 'closed';
     }
     if (!split) assign(panes[1], null);
-    $('#notice').hidden = replayThrough === 0;
+    $('#notice').hidden = replayThrough === 0; syncMessageRail();
     for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
     if (replaying) notice('Conectado. Recuperando historial…');
     const version = loopVersion;
@@ -923,7 +929,7 @@ $('#confirm-stop').addEventListener('click', () => {
     catch (e) { notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true); }
   });
 });
-$('#dismiss-notice').addEventListener('click', () => $('#notice').hidden = true);
+$('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; syncMessageRail(); });
 $('#toggle-split').addEventListener('click', () => setSplit(!split));
 $('#toggle-inspector').addEventListener('click', () => setInspector($('#inspector').hidden));
 $('#close-inspector').addEventListener('click', () => setInspector(false));

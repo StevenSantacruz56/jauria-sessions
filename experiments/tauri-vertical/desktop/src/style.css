@@ -433,10 +433,22 @@ html[data-theme="dark"] .brand-dark { display: block; }
   .provider-picker { grid-template-columns: 1fr; }
 }
 
+/* Status changes must never resize a PTY: providers redraw on SIGWINCH. */
+.workbench-messages { position: relative; flex: 0 0 50px; height: 50px; min-height: 50px; max-height: 50px; overflow: hidden; background: var(--chrome); border-bottom: 1px solid var(--border); }
+.workbench-messages > * { position: absolute; inset: 0; margin: 0; border: 0; }
+.message-idle { display: flex; align-items: center; padding: 8px 16px; font-size: 11px; color: var(--muted); }
+.workbench-messages:not([data-active="idle"]) .message-idle,
+.workbench-messages:not([data-active="attention"]) .attention-banner,
+.workbench-messages:not([data-active="notice"]) .notice { visibility: hidden; pointer-events: none; }
+.workbench-messages .notice p { max-height: 32px; overflow-y: auto; line-height: 16px; }
+
 /* Session attention inherits the workbench palette; seen is not resolved. */
 .attention-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--notice-bg); color: var(--text); }
 .attention-banner p { flex: 1 1 240px; margin: 0; overflow-wrap: anywhere; }
 .attention-banner > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.workbench-messages .attention-banner { flex-wrap: nowrap; border-bottom: 0; }
+.workbench-messages .attention-banner p { flex: 1 1 0; min-width: 0; max-height: 32px; overflow-y: auto; font-size: 12px; line-height: 16px; }
+.workbench-messages .attention-banner > div { flex: 0 0 auto; flex-wrap: nowrap; }
 #session-alerts { color: var(--warning); font-variant-numeric: tabular-nums; }
 .session-item[data-attention="true"] { border-color: var(--control-border); }
 .session-item[data-unseen="true"] .session-item-title { font-weight: 600; }
