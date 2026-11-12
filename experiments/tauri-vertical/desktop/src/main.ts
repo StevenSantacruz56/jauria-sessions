@@ -409,7 +409,10 @@ function scheduleResize(view: View) {
 function resizeView(view: View) {
   if (!view || replaying || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
   if (view.resizeBusy) { view.resizeAgain = true; return; }
-  preserveTerminalViewport(view.term, () => view.fit.fit());
+  const dimensions = view.fit.proposeDimensions();
+  if (dimensions && (dimensions.cols !== view.term.cols || dimensions.rows !== view.term.rows)) {
+    preserveTerminalViewport(view.term, () => view.fit.fit());
+  }
   if (!isLive(view.session) || stopping.has(view.session.id)) return;
   const size = `${view.term.cols}x${view.term.rows}`;
   if (size === view.sentSize || size === view.lastAttemptSize || !['running', 'starting'].includes(view.session.status)) return;
@@ -514,7 +517,7 @@ async function poll(version: number) {
               if(!replaying)view.session.status=data.status;
             }else if(!['running','starting'].includes(data.status)){if (!replaying) attention.observeEnd(event.sessionId, view.session.status, data.status); view.session.status=data.status;}
           }
-          if (view && Number.isInteger(data.cols) && Number.isInteger(data.rows) && data.cols! >= 2 && data.rows! >= 2) {
+          if (view && Number.isInteger(data.cols) && Number.isInteger(data.rows) && data.cols! >= 2 && data.rows! >= 2 && (data.cols !== view.term.cols || data.rows !== view.term.rows)) {
             preserveTerminalViewport(view.term, () => view.term.resize(data.cols!, data.rows!));
           }
           if (!replaying) refresh();

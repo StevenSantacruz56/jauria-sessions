@@ -32,9 +32,10 @@ export function preserveTerminalViewport(term: Terminal, change: () => void) {
         offset -= columns; row++;
       }
       term.scrollToLine(row);
-    } else if (marker?.isDisposed) {
-      term.scrollToTop(); // The anchor was trimmed by the bounded scrollback.
     }
+    // Reflow can trim the logical-line start while the fragment being read is
+    // still retained. A disposed marker does not mean the reader chose row 0.
+    // Keep xterm's post-resize position instead of forcing the oldest row.
   } finally {
     marker?.dispose();
   }
