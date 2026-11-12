@@ -433,7 +433,7 @@ async fn confirm_workflow(app: tauri::AppHandle, op: String, mut args: Value, st
 #[tauri::command]
 fn quit_ui(app: tauri::AppHandle) { app.exit(0); }
 fn main() {
-    tauri::Builder::default().plugin(tauri_plugin_dialog::init()).manage(Bridge::default())
+    tauri::Builder::default().plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_dialog::init()).manage(Bridge::default())
         .invoke_handler(tauri::generate_handler![connect_runner, runner_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }

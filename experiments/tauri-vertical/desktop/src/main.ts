@@ -1,3 +1,7 @@
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import { NativeAttention } from './native-attention';
+import { attachTerminalAttention } from './terminal-attention';
+import { SessionAttention } from './attention';
 import { mountCodexConversation } from './codex-conversation';
 import './codex-conversation.css';
 import { validateSequence } from './events';
@@ -35,6 +39,9 @@ const app = document.querySelector<HTMLElement>('#app')!;
 app.innerHTML = shell;
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const views = new Map<string, View>();
+const attention = new SessionAttention();
+let attentionAt = 0;
+let attentionReading = false;
 const handoffContexts=new Map<string,string>();
 const codexDrafts=new Map<string,unknown>();
 const panes: Pane[] = [];
@@ -81,6 +88,13 @@ const newDialog = $<HTMLDialogElement>('#new-session-dialog');
 const stopDialog = $<HTMLDialogElement>('#stop-session-dialog');
 let dialogReturn: HTMLElement | null = null;
 let newDialogVersion = 0;
+const nativeAttention = new NativeAttention({
+  granted: isPermissionGranted, request: requestPermission,
+  send: () => sendNotification({ title: 'Jauría · Avisos de sesión', body: 'Hay actividad o un estado que revisar. Abre Jauría y consulta Avisos.' }),
+}, id => connected && !replaying && !isAttended(id), value => {
+  text('#native-notification-status', value);
+  text('#enable-native-notifications', nativeAttention.enabled ? 'Desactivar avisos de macOS' : 'Activar avisos de macOS…');
+});
 function activeView() { return panes[focusedPane]?.id ? views.get(panes[focusedPane].id!) : undefined; }
 function text(selector: string, value: string) { $(selector).textContent = value; }
 function closeSidebar() { $('.workspace-shell').classList.remove('sidebar-open'); $('#sidebar-scrim').hidden = true; $('#toggle-sidebar').setAttribute('aria-expanded', 'false'); }
@@ -108,6 +122,7 @@ function setSessionDirectory(directory: string) {
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
 function selectSession(id: string) {
+  attention.see(attention.list([...views.values()].map(v => v.session)).filter(item => item.id === id));
   taskScreen = 'terminal';
   const target = panes[focusedPane];
   const other = panes.find(p => p !== target && p.id === id);
@@ -138,9 +153,9 @@ for (let i = 0; i < 2; i++) {
   $('#panes').append(root);
   const pane: Pane = { root, host: root.querySelector('.terminal-host')!, select: root.querySelector('select')!, cwd: root.querySelector('.session-directory')!, state: root.querySelector('.session-state')!, size: root.querySelector('.terminal-size')!, id: null };
   panes.push(pane);
-  pane.select.addEventListener('change', () => { focusedPane = i; assign(pane, pane.select.value || null); refresh(); });
-  root.addEventListener('pointerdown', () => { if (focusedPane !== i) { focusedPane = i; refresh(); } });
-  root.addEventListener('focusin', () => { if (focusedPane !== i) { focusedPane = i; refresh(); } });
+  pane.select.addEventListener('change', () => { focusedPane = i; if (pane.select.value) selectSession(pane.select.value); else { assign(pane, null); refresh(); } });
+  root.addEventListener('pointerdown', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
+  root.addEventListener('focusin', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     button.addEventListener('click', () => action(async () => {
       const op = button.dataset.action!;
@@ -201,13 +216,26 @@ function refresh() {
   text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · cuota alcanzada':''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
   const sessions = [...views.values()].map(v => v.session);
-  const count = (f: SessionFilter) => sessions.filter(s => matchesSession(s, f, '')).length;
+  const alerts = attention.list(sessions);
+  const alertById = new Map(alerts.map(item => [item.id, item]));
+  const unseen = alerts.filter(item => item.unseen && !isAttended(item.id)).length;
+  const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
+    ? alertById.has(s.id) && matchesSession(s, 'all', q) : matchesSession(s, f, q);
+  const count = (f: SessionFilter) => sessions.filter(s => matches(s, f, '')).length;
+  $('#session-alerts').hidden = alerts.length === 0;
+  const confirmed = alerts.filter(item => !item.stale).length;
+  text('#session-alerts', `Avisos · ${confirmed}${alerts.some(item => item.stale) ? ' + ?' : ''}${unseen ? ` · ${unseen} sin ver` : ''}`);
+  $('#session-alerts').title = alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
+  $('#attention-banner').hidden = unseen === 0;
+  text('#attention-summary', `${unseen} ${unseen === 1 ? 'sesión con avisos nuevos' : 'sesiones con avisos nuevos'}.${!connected || alerts.some(item => item.stale) ? ' Hay estados sin confirmar.' : ''}`);
+  nativeAttention.update(alerts);
+  document.title = alerts.length ? `(${alerts.length}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
   const occupied=sessions.filter(s=>!['exited','stopped','failed','interrupted','released'].includes(s.status)).length;
   if (filter === 'attention' && count('attention') === 0) filter = 'open';
   text('#capacity', `${occupied} de 2 plazas ocupadas`);
   text('#open-count', String(open)); text('#closed-count', String(count('closed')));
-  text('#attention-count', `${count('attention')} requieren atención`);
+  text('#attention-count', `${count('attention')} ${count('attention') === 1 ? 'sesión con avisos' : 'sesiones con avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
   text('#session-total', `${open} abiertas · ${count('closed')} en historial${count('attention') ? ` · ${count('attention')} con avisos` : ''}`);
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter)));
@@ -281,28 +309,30 @@ function refresh() {
   $<HTMLButtonElement>('#copy-session-id').disabled = !current;
   $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= 2 || replaying;
   refreshTasks(sessions);
-  const key = JSON.stringify([sessions, filter, query, taskScreen, current?.id]);
+  const key = JSON.stringify([sessions, alerts, filter, query, taskScreen, current?.id]);
   if (sidebarKey !== key) {
     sidebarKey = key;
     const list = $('#session-list'); list.replaceChildren();
-    for (const group of groupSessions(sessions.filter(s => matchesSession(s, filter, query)))) {
+    for (const group of groupSessions(sessions.filter(s => matches(s, filter, query)))) {
       const section = document.createElement('section'); section.className = 'session-group';
       const heading = document.createElement('div'); heading.className = 'group-heading';
       heading.innerHTML = icon('folder'); const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.path ?? group.name; section.append(heading);
       for (const s of group.sessions) {
         const button = document.createElement('button'); button.className = 'session-item'; button.dataset.selected = String(taskScreen === 'terminal' && s.id === current?.id); button.setAttribute('aria-current', taskScreen === 'terminal' && s.id === current?.id ? 'true' : 'false');
         button.innerHTML = `<span class="state-dot"></span><span class="session-item-copy"><span class="session-item-title"></span><span class="session-item-meta"></span></span>`;
-        (button.querySelector('.state-dot') as HTMLElement).dataset.state = s.status;
+        const alert = alertById.get(s.id);
+        button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
+        (button.querySelector('.state-dot') as HTMLElement).dataset.state = alert ? 'attention' : s.status;
         button.querySelector('.session-item-title')!.textContent = s.title;
-        button.querySelector('.session-item-meta')!.textContent = `${providerLabel(s.kind)} · ${statusLabel(s.status)}`;
-        button.title = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}`;
+        button.querySelector('.session-item-meta')!.textContent = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : statusLabel(s.status)}`;
+        button.title = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
         button.addEventListener('click', () => selectSession(s.id)); section.append(button);
       }
       list.append(section);
     }
     if (!list.children.length) {
       const empty = document.createElement('p'); empty.className = 'list-empty';
-      empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Ninguna sesión requiere atención.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
+      empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Sin avisos observados. Las terminales no tienen seguimiento de permisos.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
     }
   }
 }
@@ -358,7 +388,9 @@ function ensure(session: Session): View {
       catch (e) { notice(message(e), true); }
     }
   });
-  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); } };
+  const signal = () => { if (!replaying && connected && inputVersion === loopVersion && !isAttended(session.id)) attention.signal(session.id, 'bell'); };
+  const terminalAttention = attachTerminalAttention(term, signal);
+  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose(); } };
   term.options.disableStdin = replaying;
   views.set(session.id, view);configureConversation(view);
   return view;
@@ -367,7 +399,7 @@ function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   if (status.workspaceNotModified && runner && runner.generation === status.generation) status = { ...status, projects:runner.projects, tasks:runner.tasks };
   runner = status;
-  for (const session of status.sessions) {ensure(session);if(!isLive(session))stopping.delete(session.id);}
+  for (const session of status.sessions) { const previous = views.get(session.id)?.session.status; if (!replaying && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session))stopping.delete(session.id);}
   refresh();
 }
 function scheduleResize(view: View) {
@@ -427,6 +459,18 @@ async function poll(version: number) {
   try {
     while (connected && version === loopVersion && !disposed) {
       if (Date.now() - statusAt > 1000) { updateStatus(await request<RunnerStatus>('status', runner?.statusVersion === 2 ? {workspaceAfter:runner.workspaceRevision} : {})); statusAt = Date.now(); }
+      if (!replaying && !attentionReading && Date.now() - attentionAt >= 3000) {
+        attentionReading = true; attentionAt = Date.now();
+        const snapshot = [...views.values()].map(v => v.session);
+        const readAttention = async (op: string, args: {id: string}) => {
+          const generation = views.get(args.id)?.session.codex?.generation;
+          const value = await request(op, args);
+          if (views.get(args.id)?.session.codex?.generation !== generation) throw new Error('Attention generation changed');
+          return value;
+        };
+        void attention.poll(snapshot, readAttention, () => connected && version === loopVersion && !disposed)
+          .finally(() => { attentionReading = false; if (version === loopVersion && !disposed) refresh(); });
+      }
       const pageStarted=performance.now();
       const page = await request<{ events: Event[]; lastSeq: number; hasMore: boolean }>('events', { after: renderedSeq, limit: 64 });
       const transferred=performance.now();
@@ -442,6 +486,7 @@ async function poll(version: number) {
         } else if (event.kind === 'output') {
           const view = views.get(event.sessionId) ?? ensure({ id: event.sessionId, title: event.sessionId, kind: 'unknown', cwd: null, status: 'recuperando', rows: 24, cols: 80 });
           if (!replaying) interactivePoll.activity();
+          if (!replaying && views.get(event.sessionId)?.session.transport !== 'app-server' && !isAttended(event.sessionId)) attention.signal(event.sessionId, 'output');
           const binary = atob(event.data);
           const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
           // Queue one bounded page so xterm can coalesce parser work. Awaiting
@@ -467,7 +512,7 @@ async function poll(version: number) {
           if(view && event.kind==='state' && typeof data.status==='string'){
             if(view.session.transport==='app-server'){
               if(!replaying)view.session.status=data.status;
-            }else if(!['running','starting'].includes(data.status)){view.session.status=data.status;}
+            }else if(!['running','starting'].includes(data.status)){if (!replaying) attention.observeEnd(event.sessionId, view.session.status, data.status); view.session.status=data.status;}
           }
           if (view && Number.isInteger(data.cols) && Number.isInteger(data.rows) && data.cols! >= 2 && data.rows! >= 2) {
             preserveTerminalViewport(view.term, () => view.term.resize(data.cols!, data.rows!));
@@ -508,13 +553,13 @@ async function poll(version: number) {
     }
   } catch (e) {
     if (version !== loopVersion) return;
-    connected = false; refresh(); notice(`Conexión interrumpida: ${message(e)} Reintenta para recuperar el historial.`, true);
+    connected = false; attention.invalidate(); refresh(); notice(`Conexión interrumpida: ${message(e)} Reintenta para recuperar el historial.`, true);
     await evidence(true).catch(() => {});
   }
 }
 async function connect() {
   if (connecting) return;
-  connecting = true; connected = false; loopVersion++; refresh();
+  connecting = true; connected = false; loopVersion++; attention.invalidate(); attentionAt = 0; refresh();
   try {
     await terminalFontsReady;
     // Drain the old poll and all xterm callbacks before replacing buffers.
@@ -882,7 +927,34 @@ $('#toggle-sidebar').addEventListener('click', () => {
 });
 $('#sidebar-scrim').addEventListener('click', closeSidebar);
 $('#session-search').addEventListener('input', () => { query = $<HTMLInputElement>('#session-search').value; refresh(); });
-document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { filter = button.dataset.filter as SessionFilter; refresh(); }));
+window.addEventListener('focus', () => { const id = activeView()?.session.id; if (id && taskScreen === 'terminal' && attention.consumeActivity(id)) refresh(); });
+function isAttended(id: string) { return document.visibilityState === 'visible' && document.hasFocus() && taskScreen === 'terminal' && activeView()?.session.id === id; }
+function showAttention() {
+  filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = '';
+  $('.workspace-shell').classList.add('sidebar-open'); $('#sidebar-scrim').hidden = false;
+  $('#toggle-sidebar').setAttribute('aria-expanded', 'true'); refresh();
+  const previousFocus = document.activeElement;
+  $('#session-list').querySelector<HTMLButtonElement>('button')?.focus();
+  // WebKit may ignore focus until the narrow-window drawer becomes visible.
+  if (window.innerWidth <= 860) setTimeout(() => {
+    if (filter === 'attention' && $('.workspace-shell').classList.contains('sidebar-open') &&
+      (document.activeElement === previousFocus || document.activeElement === document.body)) $('#session-list').querySelector<HTMLButtonElement>('button')?.focus();
+  }, 200);
+}
+$('#enable-native-notifications').addEventListener('click', async () => {
+  if (nativeAttention.enabled) {
+    nativeAttention.disable(); text('#enable-native-notifications', 'Activar avisos de macOS…'); text('#native-notification-status', 'Desactivadas. Los avisos dentro de Jauría siguen disponibles.'); return;
+  }
+  const button = $<HTMLButtonElement>('#enable-native-notifications'); button.disabled = true;
+  await nativeAttention.enableFromClick(attention.list([...views.values()].map(v => v.session))); button.disabled = false;
+});
+window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
+$('#session-alerts').addEventListener('click', showAttention);
+$('#review-attention').addEventListener('click', showAttention);
+$('#see-attention').addEventListener('click', () => {
+  attention.see(attention.list([...views.values()].map(v => v.session))); refresh(); ($('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
+});
+document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { if (button.dataset.filter === 'attention') showAttention(); else { filter = button.dataset.filter as SessionFilter; refresh(); } }));
 $('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
 const theme = $<HTMLSelectElement>('#theme-select');
 try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }

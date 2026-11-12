@@ -432,3 +432,15 @@ html[data-theme="dark"] .brand-dark { display: block; }
 @media (max-width: 440px) {
   .provider-picker { grid-template-columns: 1fr; }
 }
+
+/* Session attention inherits the workbench palette; seen is not resolved. */
+.attention-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--notice-bg); color: var(--text); }
+.attention-banner p { flex: 1 1 240px; margin: 0; overflow-wrap: anywhere; }
+.attention-banner > div { display: flex; flex-wrap: wrap; gap: 8px; }
+#session-alerts { color: var(--warning); font-variant-numeric: tabular-nums; }
+.session-item[data-attention="true"] { border-color: var(--control-border); }
+.session-item[data-unseen="true"] .session-item-title { font-weight: 600; }
+.attention-limits { font-size: 11px; line-height: 1.5; color: var(--muted); }
+@media (forced-colors: active) { .session-item[data-attention="true"] { border-color: Highlight; } }
+
+.session-item[data-attention="true"] .session-item-meta { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }

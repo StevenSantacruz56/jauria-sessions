@@ -5,6 +5,7 @@ Las licencias declaradas pertenecen a cada biblioteca; no asignan licencia al c√
 | Biblioteca | Versi√≥n | Licencia declarada (SPDX) | Fuente |
 | --- | --- | --- | --- |
 | @tauri-apps/api | 2.12.4 | Apache-2.0 OR MIT | [registro](https://www.npmjs.com/package/@tauri-apps/api/v/2.12.4) |
+| @tauri-apps/plugin-notification | 2.8.1 | Apache-2.0 OR MIT | [registro](https://www.npmjs.com/package/@tauri-apps/plugin-notification/v/2.8.1) |
 | @xterm/addon-fit | 0.10.0 | MIT | [registro](https://www.npmjs.com/package/@xterm/addon-fit/v/0.10.0) |
 | @xterm/xterm | 5.5.0 | MIT | [registro](https://www.npmjs.com/package/@xterm/xterm/v/5.5.0) |
 | @tauri-apps/cli | 2.12.4 | Apache-2.0 OR MIT | [registro](https://www.npmjs.com/package/@tauri-apps/cli/v/2.12.4) |
@@ -15,6 +16,7 @@ Las licencias declaradas pertenecen a cada biblioteca; no asignan licencia al c√
 | tauri | 2.12.5 | Apache-2.0 OR MIT | [registro](https://crates.io/crates/tauri/2.12.5) |
 | tauri-build | 2.7.4 | Apache-2.0 OR MIT | [registro](https://crates.io/crates/tauri-build/2.7.4) |
 | tauri-plugin-dialog | 2.8.4 | Apache-2.0 OR MIT | [registro](https://crates.io/crates/tauri-plugin-dialog/2.8.4) |
+| tauri-plugin-notification | 2.8.1 | Apache-2.0 OR MIT | [registro](https://crates.io/crates/tauri-plugin-notification/2.8.1) |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 | [registro](https://crates.io/crates/anyhow/1.0.104) |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | [registro](https://crates.io/crates/base64/0.23.1) |
 | libc | 0.2.191 | MIT OR Apache-2.0 | [registro](https://crates.io/crates/libc/0.2.191) |
