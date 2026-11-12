@@ -1,0 +1,7 @@
+{
+  "identifier": "dock-badge",
+  "description": "Allow only the local main window to set the numeric application Dock badge.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": ["core:window:allow-set-badge-count"]
+}

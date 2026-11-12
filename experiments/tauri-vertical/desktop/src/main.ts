@@ -2,6 +2,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import { NativeAttention } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
 import { SessionAttention } from './attention';
+import { DockBadge, dockUnreadCount } from './dock-badge';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mountCodexConversation } from './codex-conversation';
 import './codex-conversation.css';
 import { validateSequence } from './events';
@@ -40,6 +42,7 @@ app.innerHTML = shell;
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const views = new Map<string, View>();
 const attention = new SessionAttention();
+const dockBadge = new DockBadge(count => getCurrentWindow().setBadgeCount(count));
 let attentionAt = 0;
 let attentionReading = false;
 const handoffContexts=new Map<string,string>();
@@ -217,6 +220,7 @@ function refresh() {
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
   const sessions = [...views.values()].map(v => v.session);
   const alerts = attention.list(sessions);
+  dockBadge.setCount(connected && !replaying ? dockUnreadCount(alerts) : 0);
   const alertById = new Map(alerts.map(item => [item.id, item]));
   const unseen = alerts.filter(item => item.unseen && !isAttended(item.id)).length;
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
@@ -952,6 +956,7 @@ $('#enable-native-notifications').addEventListener('click', async () => {
   await nativeAttention.enableFromClick(attention.list([...views.values()].map(v => v.session))); button.disabled = false;
 });
 window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
+window.addEventListener('beforeunload', () => { void dockBadge.dispose(); }, { once: true });
 $('#session-alerts').addEventListener('click', showAttention);
 $('#review-attention').addEventListener('click', showAttention);
 $('#see-attention').addEventListener('click', () => {
