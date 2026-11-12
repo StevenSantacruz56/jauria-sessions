@@ -32,6 +32,7 @@ export function providerLabel(kind: string): string {
     case 'claude': return 'Claude Code';
     case 'fixture': return 'Fixture';
     case 'shell': return 'Shell';
+    case 'terminal': return 'Terminal';
     case 'codex_probe': return 'Prueba Codex';
     case 'claude_probe': return 'Prueba Claude Code';
     default: return kind;

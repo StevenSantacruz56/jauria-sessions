@@ -19,6 +19,13 @@ impl Instance {
     fn command(&self)->Command {
         let mut cmd=Command::new(env!("CARGO_BIN_EXE_aw-runner"));
         cmd.arg("--data-dir").arg(self.path("data")).arg("--socket").arg(self.path("sock")).arg("--token-file").arg(self.path("token"));
+        // Normal terminal fixtures isolate startup files without changing the
+        // test process environment or ever loading the real user's config.
+        if self.path("terminal-home").is_dir() {
+            cmd.env("HOME",self.path("terminal-home"));
+            cmd.env("SSH_AUTH_SOCK",self.path("terminal-home/fixture-agent.sock"));
+            cmd.env("TMPDIR",self.path("terminal-home/tmp"));
+        }
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         cmd
     }
@@ -95,6 +102,61 @@ impl Instance {
         // Remove only a stale socket belonging to this disposable instance.
         self.launch();
     }
+}
+
+#[test]
+fn normal_terminal_login_interactive_unicode_cwd_replay_exit_and_stop() {
+    let mut app=Instance {root:tempfile::Builder::new().prefix("awrt-term-").tempdir_in("/tmp").unwrap(),child:None};
+    fs::set_permissions(app.root.path(),fs::Permissions::from_mode(0o700)).unwrap();
+    let home=app.path("terminal-home");fs::create_dir(&home).unwrap();fs::create_dir(home.join("tmp")).unwrap();
+    fs::write(home.join(".zprofile"),"export JAURIA_LOGIN_FIXTURE=profile\n").unwrap();
+    fs::write(home.join(".zshrc"),"export JAURIA_INTERACTIVE_FIXTURE=rc\nPROMPT=''\n").unwrap();
+    // Print readiness only after every normal startup file has loaded. A joined
+    // marker in later commands keeps PTY input echo from satisfying assertions.
+    fs::write(home.join(".zlogin"),"print -r -- READY_NORMAL_TERMINAL\n").unwrap();
+    let cwd=home.join("carpeta acción 中文");fs::create_dir(&cwd).unwrap();
+    let cwd=fs::canonicalize(cwd).unwrap();
+    app.launch();
+    assert_eq!(app.rpc("status",json!({}))["normalTerminalVersion"],1);
+    let args=json!({"id":"normal","title":"Terminal","kind":"terminal","cwd":cwd,"rows":24,"cols":80});
+    let started=app.rpc("start",args.clone());
+    assert_eq!(started["cwd"],json!(cwd));assert!(started["workspace"].is_null());
+    app.wait_for(||app.contains("normal","READY_NORMAL_TERMINAL"));
+    app.rpc("input",json!({"id":"normal","data":"print -r -- CHECK_$options[interactive]_$options[login]_${JAURIA_LOGIN_FIXTURE}_${JAURIA_INTERACTIVE_FIXTURE}; print -r -- CWD_$PWD; print -r -- HOME_$HOME; print -r -- SHELL_$SHELL; print -r -- AGENT_$SSH_AUTH_SOCK; print -r -- TEMP_$TMPDIR; print -r -- UTF8_acción中文\n"}));
+    app.wait_for(||app.contains("normal","CHECK_on_on_profile_rc") && app.contains("normal",&format!("CWD_{}",cwd.display())) && app.contains("normal",&format!("HOME_{}",home.display())));
+    assert!(app.contains("normal","UTF8_acción中文"));
+    assert!(app.contains("normal","SHELL_/bin/zsh"));
+    assert!(app.contains("normal",&format!("AGENT_{}",home.join("fixture-agent.sock").display())));
+    assert!(app.contains("normal",&format!("TEMP_{}",home.join("tmp").display())));
+    assert_eq!(app.rpc("start",args.clone())["pid"],started["pid"]);
+    let second=json!({"id":"second","title":"Terminal","kind":"terminal","cwd":cwd});
+    app.rpc("start",second);
+    app.wait_for(||app.contains("second","READY_NORMAL_TERMINAL"));
+    app.reject("start",json!({"id":"third","title":"Terminal","kind":"terminal","cwd":cwd}));
+    app.rpc("resize",json!({"id":"normal","rows":37,"cols":101}));
+    app.rpc("input",json!({"id":"normal","data":"/bin/stty size\n"}));
+    app.wait_for(||app.contains("normal","37 101"));
+    let telemetry=app.rpc("telemetry",json!({}));
+    assert!(telemetry["resources"]["processes"].as_array().unwrap().iter().any(|row|row["pid"]==started["pid"] && row["role"]=="cli"));
+    let diagnostics=app.rpc("diagnostic_preview",json!({}));
+    assert!(diagnostics["sessions"]["byKind"].as_array().unwrap().iter().any(|row|row["kind"]=="terminal" && row["count"]==2));
+    assert_eq!(app.rpc("stop",json!({"id":"second"}))["status"],"stopped");
+    app.rpc("input",json!({"id":"normal","data":"print -r -- FINAL_$JAURIA_LOGIN_FIXTURE; exit 7\n"}));
+    app.wait_for(||app.session("normal")["status"]=="exited");
+    assert_eq!(app.session("normal")["detail"]["exitCode"],7);
+    assert!(app.contains("normal","FINAL_profile"));
+    let output=app.output("normal");
+    let cursor=app.rpc("status",json!({}))["lastSeq"].clone();
+    assert_eq!(app.rpc("start",args)["status"],"exited");
+    assert_eq!(app.rpc("status",json!({}))["lastSeq"],cursor);
+    app.kill_and_restart();
+    assert_eq!(app.session("normal")["kind"],"terminal");
+    assert_eq!(app.session("normal")["status"],"exited");
+    assert_eq!(app.output("normal"),output);
+    // Freed slots and locks permit another normal terminal after restart.
+    app.rpc("start",json!({"id":"after","title":"Terminal","kind":"terminal","cwd":cwd}));
+    app.wait_for(||app.contains("after","READY_NORMAL_TERMINAL"));
+    assert_eq!(app.rpc("stop",json!({"id":"after"}))["status"],"stopped");
 }
 
 impl Drop for Instance {

@@ -393,7 +393,7 @@ impl Runner {
             let db = self.db.lock().unwrap();
             let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
             let unchanged=args["workspaceAfter"].as_str()==Some(revision.as_str());
-            let mut result=json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"workspaceNotModified":unchanged});
+            let mut result=json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"workspaceNotModified":unchanged});
             if !unchanged {result["projects"]=json!(crate::projects::projects(&db.0)?);result["tasks"]=json!(crate::projects::tasks(&db.0)?);}
             return Ok(result);
         }
@@ -664,8 +664,8 @@ impl Runner {
         let title = args["title"].as_str().context("title required")?;
         ensure!(title.len() <= 512, "title too long");
         let kind = args["kind"].as_str().context("kind required")?;
-        ensure!(["fixture","shell","claude_probe","codex_probe","claude","codex"].contains(&kind), "unknown kind");
-        let interactive = matches!(kind, "claude" | "codex");
+        ensure!(["fixture","shell","terminal","claude_probe","codex_probe","claude","codex"].contains(&kind), "unknown kind");
+        let interactive = matches!(kind, "claude" | "codex" | "terminal");
         let selected = if interactive || args["taskId"].is_string() {
             let requested = PathBuf::from(args["cwd"].as_str().context("select a working directory first")?);
             ensure!(requested.is_absolute(), "working directory must be absolute");
@@ -681,7 +681,7 @@ impl Runner {
             crate::verification::ensure_path_available(&self.db.lock().unwrap().0,workspace.as_deref().unwrap_or(&cwd))?;
             Some((cwd,workspace))
         } else {
-            ensure!(args.get("cwd").is_none_or(Value::is_null), "cwd is only accepted for interactive providers");
+            ensure!(args.get("cwd").is_none_or(Value::is_null), "cwd is only accepted for interactive sessions");
             None
         };
         // Keep only live handles; never count historical database rows as owned children.
@@ -909,6 +909,8 @@ fn command(kind: &str, id: &str, cwd: &Path) -> Result<CommandBuilder> {
     let mut cmd = match kind {
         "fixture" => {let mut cmd=CommandBuilder::new(std::env::current_exe()?);cmd.args(["--fixture",id]);cmd},
         "shell" => {let mut cmd=CommandBuilder::new("/bin/zsh");cmd.arg("-f");cmd},
+        // Normal user terminal: zsh loads the account's login and interactive config.
+        "terminal" => {let mut cmd=CommandBuilder::new("/bin/zsh");cmd.arg("-il");cmd},
         "codex" => {
             let mut cmd=CommandBuilder::new("/opt/homebrew/bin/codex");
             cmd.args(["--no-daemon","--no-alt-screen","--sandbox","workspace-write","--ask-for-approval","on-request","-c","approvals_reviewer=\"user\""]);
@@ -935,6 +937,13 @@ fn command(kind: &str, id: &str, cwd: &Path) -> Result<CommandBuilder> {
     cmd.env("HOME", &home);
     cmd.env("USER", account);
     cmd.env("LOGNAME", account);
+    if kind=="terminal" {
+        cmd.env("SHELL","/bin/zsh");
+        // Preserve desktop shell integration without importing provider credentials.
+        for key in ["SSH_AUTH_SOCK","TMPDIR","__CF_USER_TEXT_ENCODING"] {
+            if let Some(value)=std::env::var_os(key) { cmd.env(key,value); }
+        }
+    }
     let cli_bin = PathBuf::from(&home).join(".local/bin");
     let path = std::env::join_paths([cli_bin,PathBuf::from("/opt/homebrew/bin"),PathBuf::from("/usr/local/bin"),PathBuf::from("/usr/bin"),PathBuf::from("/bin")])?;
     cmd.env("PATH",path);
@@ -997,7 +1006,7 @@ mod tests {
         }
         // Verify the real start gate against the persisted result, before any
         // provider command can be constructed or spawned.
-        for kind in ["codex", "claude"] {
+        for kind in ["codex", "claude", "terminal"] {
             let error = request("start", json!({"id":kind,"title":kind,"kind":kind,"cwd":workspace})).unwrap_err();
             assert!(error.to_string().contains("active or unverified session"), "{error:#}");
             assert!(runner.db.lock().unwrap().session(kind).unwrap().is_none());
@@ -1052,6 +1061,23 @@ mod tests {
             let argv=format!("{:?}",cmd.get_argv());
             assert!(!argv.contains("bypass") && !argv.contains("skip-permissions"));
         }
+    }
+    #[test]
+    fn normal_terminal_and_diagnostic_shell_keep_distinct_fixed_commands() -> Result<()> {
+        for (kind, flag) in [("terminal","-il"),("shell","-f")] {
+            let cmd=command(kind,"command-test",Path::new("/tmp"))?;
+            assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("/bin/zsh"),std::ffi::OsString::from(flag)]);
+            assert_eq!(cmd.get_cwd(),Some(&std::ffi::OsString::from("/tmp")));
+            assert_eq!(cmd.get_env("SHELL").and_then(|value|value.to_str()),if kind=="terminal" {Some("/bin/zsh")} else {None});
+            for key in ["SSH_AUTH_SOCK","TMPDIR","__CF_USER_TEXT_ENCODING"] {
+                let expected=if kind=="terminal" {std::env::var_os(key)} else {None};
+                assert_eq!(cmd.get_env(key),expected.as_deref(),"{kind}: {key}");
+            }
+            for key in ["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","OPENAI_API_KEY"] {
+                assert!(cmd.get_env(key).is_none(),"no ambient API credentials: {kind}/{key}");
+            }
+        }
+        Ok(())
     }
     #[test]
     fn child_environment_preserves_os_identity_without_auth_secrets() {
@@ -1121,11 +1147,11 @@ mod standalone_native_tests {
         assert_eq!(git_workspace_for(&cwd)?, None);
         assert_eq!(workspace_for(&cwd)?, cwd); // structured caller contract unchanged
         r.db.lock().unwrap().0.execute_batch("CREATE TRIGGER require_null_workspace BEFORE INSERT ON sessions WHEN NEW.workspace IS NOT NULL BEGIN SELECT RAISE(ABORT,'non-Git workspace must be null'); END;")?;
-        for kind in ["codex", "claude"] { admitted(request(&r,"first",kind,&cwd).unwrap_err()); }
+        for kind in ["codex", "claude", "terminal"] { admitted(request(&r,"first",kind,&cwd).unwrap_err()); }
         record(&r,"first",&cwd,None,"running")?;
-        for kind in ["codex", "claude"] { admitted(request(&r,"second",kind,&cwd).unwrap_err()); }
+        for kind in ["codex", "claude", "terminal"] { admitted(request(&r,"second",kind,&cwd).unwrap_err()); }
         record(&r,"second",&cwd,None,"needs_attention")?;
-        for kind in ["codex", "claude"] {
+        for kind in ["codex", "claude", "terminal"] {
             assert!(request(&r,"third",kind,&cwd).unwrap_err().to_string().contains("El límite es 2"));
         }
         let sessions = r.db.lock().unwrap().sessions()?;
@@ -1138,6 +1164,7 @@ mod standalone_native_tests {
         assert!(r.codex_jobs.lock().unwrap().is_empty());
         let status = r.request(json!({"version":1,"token":r.token,"op":"status","args":{}}))?;
         assert_eq!(status["terminalSessionVersion"], 1);
+        assert_eq!(status["normalTerminalVersion"], 1);
         Ok(())
     }
 
@@ -1152,7 +1179,7 @@ mod standalone_native_tests {
         record(&r,"writer",&nested,Some(&root),"needs_attention")?;
         for cwd in [&repo,&nested,&alias] {
             assert_eq!(git_workspace_for(&fs::canonicalize(cwd)?)?, Some(root.clone()));
-            for kind in ["codex","claude"] {
+            for kind in ["codex","claude","terminal"] {
                 assert!(request(&r,"blocked",kind,cwd).unwrap_err().to_string().contains("active or unverified session"));
             }
         }
@@ -1170,9 +1197,11 @@ mod standalone_native_tests {
         let broken = cwd.join("broken"); fs::create_dir(&broken)?;
         fs::write(broken.join(".git"),"invalid gitfile")?;
         assert!(git_workspace_for(&broken).is_err());
-        assert!(request(&r,"broken","codex",&broken).unwrap_err().to_string().contains("cannot determine Git workspace safely"));
         let managed = r.data_dir.join("worktrees"); fs::create_dir(&managed)?;
-        assert!(request(&r,"managed","codex",&managed).unwrap_err().to_string().contains("desde su tarea"));
+        for kind in ["codex", "claude", "terminal"] {
+            assert!(request(&r,"broken",kind,&broken).unwrap_err().to_string().contains("cannot determine Git workspace safely"));
+            assert!(request(&r,"managed",kind,&managed).unwrap_err().to_string().contains("desde su tarea"));
+        }
         for cwd in [Value::Null, json!("relative"), json!(42)] {
             let error = r.request(json!({"version":1,"token":r.token,"op":"start","args":{"id":"invalid","title":"invalid","kind":"codex","cwd":cwd}})).unwrap_err();
             assert!(!error.to_string().contains("fixture reached durable insert"));
@@ -1193,7 +1222,7 @@ mod standalone_native_tests {
             db.0.execute("INSERT INTO verification_runs VALUES('v','t','req','hash','needs_attention',0,?)",
                 [json!({"cwd":repo}).to_string()])?;
         }
-        for kind in ["codex","claude"] {
+        for kind in ["codex","claude","terminal"] {
             assert!(request(&r,"fenced",kind,&home).unwrap_err().to_string().contains("fenced by verification"));
             assert!(request(&r,"fenced",kind,&repo).unwrap_err().to_string().contains("fenced by verification"));
         }

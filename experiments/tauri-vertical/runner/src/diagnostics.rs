@@ -4,7 +4,7 @@ use serde_json::{Value,json};
 use crate::storage::Store;
 pub fn preview(store: &Store) -> Result<Value> {
     let sessions=store.sessions()?;
-    let kinds=["codex","claude","shell","fixture"];
+    let kinds=["codex","claude","shell","terminal","fixture"];
     let states=["starting","running","exited","stopped","failed","interrupted","needs_attention","released"];
     let counts=kinds.iter().map(|kind|json!({"kind":kind,"count":sessions.iter().filter(|s|s["kind"]==*kind).count()})).collect::<Vec<_>>();
     let states=states.iter().map(|state|json!({"state":state,"count":sessions.iter().filter(|s|s["status"]==*state).count()})).collect::<Vec<_>>();

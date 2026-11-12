@@ -6,6 +6,7 @@ pub fn validate_start_mode(
 ) -> Result<(), String> {
     if matches!(op, "start" | "start_task")
         && !matches!(args["kind"].as_str(), Some("codex" | "claude"))
+        && !(op == "start" && args["kind"] == "terminal")
         && !smoke
     {
         return Err("Herramientas de prueba deshabilitadas en esta ventana".into());
@@ -37,7 +38,7 @@ mod tests {
 
     #[test]
     fn interactive_providers_are_allowed_in_both_modes() {
-        for kind in ["codex", "claude"] {
+        for kind in ["codex", "claude", "terminal"] {
             for smoke in [false, true] {
                 assert_eq!(
                     validate_start_mode("start", &json!({"kind": kind}), smoke),
@@ -92,6 +93,7 @@ mod tests {
 mod task_tests {
     #[test]
     fn task_sessions_cannot_bypass_the_production_smoke_guard() {
+        assert!(super::validate_start_mode("start_task",&serde_json::json!({"kind":"terminal"}),false).is_err());
         for op in ["start","start_task"] {
             for kind in ["fixture","shell","unknown"] {
                 assert!(super::validate_start_mode(op,&serde_json::json!({"kind":kind}),false).is_err());

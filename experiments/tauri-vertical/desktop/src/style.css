@@ -267,11 +267,11 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 .dialog-heading h2 { font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
 .dialog-heading p { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .dialog-heading .icon-button { margin: -6px -6px 0 0; }
-.provider-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 20px; padding: 0; border: 0; }
+.provider-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 20px; padding: 0; border: 0; }
 .provider-picker legend { margin-bottom: 8px; font-size: 12px; font-weight: 600; }
 .provider-picker label { position: relative; min-width: 0; cursor: pointer; }
 .provider-picker input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
-.provider-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 5px 8px; padding: 12px; border: 1px solid var(--control-border); border-radius: 7px; }
+.provider-option { display: grid; height: 100%; align-content: start; grid-template-columns: 18px minmax(0, 1fr); gap: 5px 8px; padding: 12px; border: 1px solid var(--control-border); border-radius: 7px; }
 .provider-option .icon { grid-column: 1; align-self: center; }
 .provider-option strong { grid-column: 2; font-size: 12px; font-weight: 600; }
 .provider-option small { grid-column: 2; font-size: 10px; color: var(--muted); overflow-wrap: anywhere; }
@@ -428,3 +428,7 @@ html[data-theme="dark"] .brand-dark { display: block; }
 .closed-project-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
 .closed-project-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .closed-project-row > button { flex: none; padding: 4px 7px; font-size: 12px; }
+
+@media (max-width: 440px) {
+  .provider-picker { grid-template-columns: 1fr; }
+}

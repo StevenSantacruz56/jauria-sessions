@@ -20,7 +20,7 @@ test('etiquetas describen la sesión; abierta no significa turno en progreso', (
 });
 
 test('proveedores reales se distinguen de fixtures, shell y probes', () => {
-  for (const [kind, label] of Object.entries({ codex: 'Codex', claude: 'Claude Code', fixture: 'Fixture', shell: 'Shell', codex_probe: 'Prueba Codex', claude_probe: 'Prueba Claude Code' })) {
+  for (const [kind, label] of Object.entries({ codex: 'Codex', claude: 'Claude Code', fixture: 'Fixture', shell: 'Shell', terminal: 'Terminal', codex_probe: 'Prueba Codex', claude_probe: 'Prueba Claude Code' })) {
     assert.equal(providerLabel(kind), label);
     assert.equal(isProviderSession(session({ kind })), kind === 'codex' || kind === 'claude');
   }
@@ -122,4 +122,18 @@ test('conserva orden de primera aparición y no modifica objetos ni arrays de en
   assert.equal(JSON.stringify(items), before);
   assert.deepEqual(groupSessions(items)[0].sessions.map(s => s.id), ['b1', 'b2']);
   assert.deepEqual(groupSessions([]), []);
+});
+
+
+test('terminal normal pertenece a su carpeta y al historial, sin confundirse con diagnóstico ni IA', () => {
+  const terminal = session({ kind: 'terminal', title: 'Comandos locales', cwd: '/tmp/Mi carpeta á' });
+  const diagnostic = session({ id: 'diagnostic', kind: 'shell', cwd: '/tmp/fixture' });
+  const groups = groupSessions([terminal, diagnostic]);
+  assert.equal(groups[0].key, terminal.cwd);
+  assert.equal(groups[0].name, 'Mi carpeta á');
+  assert.deepEqual(groups[0].sessions, [terminal]);
+  assert.equal(groups[1].key, '__diagnostics__');
+  assert.equal(isProviderSession(terminal), false);
+  assert.equal(matchesSession(terminal, 'open', 'terminal'), true);
+  assert.equal(matchesSession({ ...terminal, status: 'exited' }, 'closed', 'comandos'), true);
 });

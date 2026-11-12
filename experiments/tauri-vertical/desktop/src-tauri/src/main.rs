@@ -139,8 +139,8 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         if !matches!(args["kind"].as_str(),Some("codex"|"claude"|"fixture"|"shell")) { return Err("Proveedor de tarea inválido".into()); }
     }
     if matches!(op,"start"|"start_codex") {
-        if !matches!(args["kind"].as_str(), Some("fixture" | "shell" | "claude_probe" | "codex_probe" | "claude" | "codex")) { return Err("Tipo de sesión inválido".into()); }
-        if matches!(args["kind"].as_str(), Some("claude" | "codex")) || obj.contains_key("cwd") {
+        if !matches!(args["kind"].as_str(), Some("fixture" | "shell" | "terminal" | "claude_probe" | "codex_probe" | "claude" | "codex")) { return Err("Tipo de sesión inválido".into()); }
+        if matches!(args["kind"].as_str(), Some("claude" | "codex" | "terminal")) || obj.contains_key("cwd") {
             let cwd = args["cwd"].as_str().ok_or("Selecciona una carpeta para iniciar la sesión")?;
             let path = Path::new(cwd);
             if !path.is_absolute() || !path.is_dir() { return Err("cwd debe ser un directorio absoluto existente".into()); }
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn interactive_requires_canonical_directory() {
         let cwd = fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
-        for kind in ["codex", "claude"] {
+        for kind in ["codex", "claude", "terminal"] {
             let mut args = start_args(kind);
             assert!(validate("start", &args).is_err());
             for invalid in [json!(null), json!(12), json!("relative"), json!(cwd.join("Cargo.toml")), json!(cwd.join("src/..")), json!(cwd.join("missing-directory"))] {
@@ -489,6 +489,8 @@ mod project_task_bridge_tests {
     fn task_start_accepts_ids_but_never_renderer_chosen_paths_or_process_flags() {
         let args=json!({"id":"task-123","sessionId":"session-123","kind":"codex","rows":24,"cols":80});
         assert!(validate("start_task",&args).is_ok());
+        let mut terminal=args.clone();terminal["kind"]=json!("terminal");
+        assert!(validate("start_task",&terminal).is_err());
         for field in ["cwd","workspace","taskId","command","resume","bypassPermissions"] {
             let mut extra=args.clone();extra[field]=json!("/arbitrary");
             assert!(validate("start_task",&extra).is_err(),"{field}");
