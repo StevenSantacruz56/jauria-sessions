@@ -53,3 +53,9 @@ Impeccable context ran once. Existing brand, tokens, typography and workbench co
 `src/main.ts` will conflict with the scroll worker. Preserve its bounded redraw optimization: these changes add no refresh to individual output/BEL callbacks. They only record coalesced observations, surfaced by status polling and attention collection completion. Keep the detached bounded collector and version/generation checks when integrating. No scroll-worker or audited-staging files were edited.
 
 PTY permission detection and semantic turn completion remain unavailable. Hooks are not installed or configured. Alerts while the UI is closed require future runner-side infrastructure. Native macOS delivery, Focus mode behavior and signed/installed bundle behavior need explicit user-driven runtime validation.
+
+## Terminal geometry regression
+
+Notification and connection messages share an always-present 50 px rail. Showing, consuming, dismissing or replacing a message does not change terminal rows or columns. This matters for native Codex: changing the PTY geometry sends SIGWINCH, causing a redraw that can jump away from the reading position. The native focus regression was reproduced with the old layout (31 → 34 rows) and checked after the fix (121 × 31 throughout; zero resize events; same runner and PTY process).
+
+`node --test tests/browser/notification-geometry.test.ts` checks host bounds, real xterm dimensions, every rendered frame and native resize-request counts in Chrome/WebKit at 1220 × 800 and 760 × 640. The old source at `5431021` fails all four cases. The browser suite runs files serially: simultaneous browser-heavy fixtures made the older detached-viewport baseline timing-dependent. This test evidence is separate from security-audit reproductions.
