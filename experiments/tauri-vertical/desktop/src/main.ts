@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mountCodexConversation } from './codex-conversation';
 import './codex-conversation.css';
 import { validateSequence } from './events';
+import { TerminalStreamCursor, HistoryQuotaWarnings, historyUsage, deferTerminalGap, terminalFramesPayload, terminalGapNotice, historyLabel, historyReasonLabel, type TerminalStream, type TerminalFrame, type TerminalGap, type TerminalHistory } from './terminal-stream';
 import { mountVerificationPanel } from './verification-panel';
 import { mountReviewPanel } from './review-panel';
 import { mountTelemetry, formatTelemetryCpu, formatTelemetryBytes } from './telemetry';
@@ -25,10 +26,10 @@ import { hasTaskWorkspace, taskStateLabel, taskStartBlock, validateDraft, type P
 import { shell, paneMarkup, icon } from './ui';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
-type Session = { transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type Session = { terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
+type RunnerStatus = WorkspaceData & { terminalStreamVersion?: number; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
-type View = { session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
+type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
 
 // Resolve the supplied mono font before xterm measures its cell geometry.
@@ -60,6 +61,8 @@ const interactivePoll = new InteractivePoll();
 let lastEvidence = 0;
 const streamMetrics = {pages:0,lastPageMs:0,lastParseMs:0,lastTransferMs:0,lastYieldMs:0,maxParseMs:0,maxYieldMs:0,visibility:'unknown',pageBytes:0};
 let statusAt = 0;
+let archiveUnavailable = false;
+const historyQuotaWarnings = new HistoryQuotaWarnings();
 let busyAction = false;
 let disposed = false;
 let selectedDirectory: string | null = null;
@@ -195,12 +198,26 @@ for (let i = 0; i < 2; i++) {
   });
   new ResizeObserver(() => { if (pane.id) scheduleResize(views.get(pane.id)!); }).observe(pane.host);
 }
+function streamMetadata(session: Session) { return session.terminalStream ?? session.detail?.terminalStream; }
+function streamReplaying(view?: View) { return !!view && (!!view.streamReplay || !!view.catchup || (runner?.terminalStreamVersion === 1 && view.session.terminalStream?.generation === runner.generation && !view.liveReady)); }
+function historySuffix(view: View) {
+  return view.catchup ? 'Recuperando salida guardada…' : view.stream?.desynchronized ? terminalGapNotice : historyLabel(streamMetadata(view.session)?.history);
+}
 function syncMessageRail() {
   const notice = $('#notice');
+  const view = activeView();
+  const history = view && streamMetadata(view.session)?.history;
+  const persistent = view?.catchup ? `${view.session.title}: Recuperando salida guardada…` : view?.stream?.desynchronized ? `${view.session.title}: ${terminalGapNotice}`
+    : history && ['limited','error','incomplete','unknown_tail'].includes(history.state) ? `${view!.session.title}: ${historyLabel(history)}${history.reason ? ` · ${historyReasonLabel(history.reason)}` : ''}`
+    : archiveUnavailable ? 'Historial sin confirmar; la salida en vivo continúa.' : '';
+  if (notice.hidden || notice.dataset.persistent === 'true') {
+    text('#notice-text', persistent); notice.hidden = !persistent;
+    notice.dataset.persistent = 'true'; notice.classList.toggle('error', !!persistent);
+  }
   $('#workbench-messages').dataset.active = !notice.hidden && notice.classList.contains('error') ? 'notice'
     : !$('#attention-banner').hidden ? 'attention' : !notice.hidden ? 'notice' : 'idle';
 }
-function notice(message: string, error = false) { text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncMessageRail(); }
+function notice(message: string, error = false) { $('#notice').dataset.persistent = 'false'; text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncMessageRail(); }
 function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
 async function request<T = unknown>(op: string, args: object): Promise<T> {
   const response = await invoke<{ ok: boolean; result: T; error?: string }>('runner_request', { op, args });
@@ -217,11 +234,18 @@ function refresh() {
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
   const capabilities=runner as RunnerStatus & {telemetryVersion?:number;verificationVersion?:number;recoveryVersion?:number;handoffVersion?:number;codexVersion?:number;terminalSessionVersion?:number;projectLifecycleVersion?:number};
-  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1);
+  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1);
   $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
   text('#cursor', `Eventos procesados: ${renderedSeq}`);
   const retained=runner?.retention;
-  text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · cuota alcanzada':''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
+  const usage = historyUsage(retained);
+  const level = usage >= .95 ? 95 : usage >= .8 ? 80 : 0;
+  const warning = historyQuotaWarnings.sample(usage);
+  if (warning) {
+    notice(`Historial al ${warning}% de la cuota; la grabación puede quedar limitada.`, true);
+  }
+  const historyWarnings = [...views.values()].filter(view => ['limited','error','incomplete','unknown_tail'].includes(streamMetadata(view.session)?.history.state ?? '')).length;
+  text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · cuota alcanzada':level ? ` · aviso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
   const sessions = [...views.values()].map(v => v.session);
   const alerts = attention.list(sessions);
@@ -277,7 +301,8 @@ function refresh() {
     const view = pane.id ? views.get(pane.id) : null;
     pane.root.hidden = pane === panes[1] && !split;
     pane.root.classList.toggle('is-focused', panes.indexOf(pane) === focusedPane);
-    pane.state.textContent = view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : statusLabel(view.session.status)) : 'Sin sesión';
+    pane.state.textContent = view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión';
+    pane.state.title = pane.state.textContent ?? '';
     pane.state.dataset.state = view?.session.status ?? '';
     pane.cwd.textContent = view?.session.cwd ?? 'Sin carpeta de sesión';
     pane.cwd.title = view?.session.cwd ?? '';
@@ -287,7 +312,7 @@ function refresh() {
     history.hidden = !view || isLive(view.session);
     history.textContent = view ? (['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · Solo lectura' : `${statusLabel(view.session.status)} · Entrada deshabilitada`) : '';
     (pane.root.querySelector('.fixture-controls') as HTMLElement).hidden = !smoke;
-    if (view) view.term.options.disableStdin = view.session.transport==='app-server' || replaying || !connected || !isLive(view.session) || stopping.has(view.session.id);
+    if (view) view.term.options.disableStdin = view.session.transport==='app-server' || replaying || streamReplaying(view) || !connected || !isLive(view.session) || stopping.has(view.session.id);
     pane.root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
       const kind = button.dataset.action!;
       if(view?.session.transport==='app-server' && kind==='interrupt'){button.hidden=true;return;}
@@ -376,7 +401,11 @@ function configureConversation(view:View){
 }
 function ensure(session: Session): View {
   const current = views.get(session.id);
-  if (current) { if (current.session.status !== session.status) current.lastAttemptSize = ''; current.session = session; configureConversation(current); return current; }
+  if (current?.archivedOnly) {
+    session = {...session, detail:{...session.detail, terminalStream:session.detail?.terminalStream ?? session.terminalStream ?? streamMetadata(current.session)}};
+    delete session.terminalStream;
+  }
+  if (current) { const metadata = streamMetadata(session); if (current.stream && metadata && current.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); if (current.session.status !== session.status) current.lastAttemptSize = ''; current.session = session; configureConversation(current); return current; }
   const host = document.createElement('div'); host.className = 'terminal-view';
   // Open in a real document element, including sessions not selected in a pane.
   host.style.visibility = 'hidden'; host.style.position = 'absolute'; host.style.width = '550px'; host.style.height = '340px';
@@ -389,16 +418,16 @@ function ensure(session: Session): View {
   const inputVersion = loopVersion;
   const input = new OrderedInput(async data => {
     if (stopping.has(session.id) || !isLive(views.get(session.id)!.session)) throw new Error('La sesión ya no está activa.');
-    if (!connected || inputVersion !== loopVersion) throw new Error('La conexión cambió; no se reenvía la entrada.');
+    if (!connected || replaying || streamReplaying(views.get(session.id)) || inputVersion !== loopVersion) throw new Error('La conexión cambió; no se reenvía la entrada.');
     await request('input', { id: session.id, data });
   }, e => notice(`${message(e)} Entrada suspendida; reconecta antes de continuar.`, true));
   const subscription = term.onData(data => {
-    if (!replaying && connected && !stopping.has(session.id) && isLive(views.get(session.id)!.session)) {
+    if (!replaying && !streamReplaying(views.get(session.id)) && connected && !stopping.has(session.id) && isLive(views.get(session.id)!.session)) {
       try { interactivePoll.activity(); void input.enqueue(data).catch(e => notice(message(e), true)); }
       catch (e) { notice(message(e), true); }
     }
   });
-  const signal = () => { if (!replaying && connected && inputVersion === loopVersion && !isAttended(session.id)) attention.signal(session.id, 'bell'); };
+  const signal = () => { if (!replaying && !streamReplaying(views.get(session.id)) && connected && inputVersion === loopVersion && !isAttended(session.id)) attention.signal(session.id, 'bell'); };
   const terminalAttention = attachTerminalAttention(term, signal);
   const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose(); } };
   term.options.disableStdin = replaying;
@@ -409,7 +438,7 @@ function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   if (status.workspaceNotModified && runner && runner.generation === status.generation) status = { ...status, projects:runner.projects, tasks:runner.tasks };
   runner = status;
-  for (const session of status.sessions) { const previous = views.get(session.id)?.session.status; if (!replaying && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session))stopping.delete(session.id);}
+  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session))stopping.delete(session.id);}
   refresh();
 }
 function scheduleResize(view: View) {
@@ -417,7 +446,7 @@ function scheduleResize(view: View) {
   resizeTimers.set(view.session.id, setTimeout(() => { resizeTimers.delete(view.session.id); resizeView(view); }, 80));
 }
 function resizeView(view: View) {
-  if (!view || replaying || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
+  if (!view || replaying || streamReplaying(view) || (streamMetadata(view.session) && !isLive(view.session)) || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
   if (view.resizeBusy) { view.resizeAgain = true; return; }
   const dimensions = view.fit.proposeDimensions();
   if (dimensions && (dimensions.cols !== view.term.cols || dimensions.rows !== view.term.rows)) {
@@ -428,7 +457,7 @@ function resizeView(view: View) {
   if (size === view.sentSize || size === view.lastAttemptSize || !['running', 'starting'].includes(view.session.status)) return;
   view.resizeBusy = true;
   view.lastAttemptSize = size;
-  void request<{ cols: number; rows: number }>('resize', { id: view.session.id, rows: view.term.rows, cols: view.term.cols }).then(actual => { view.sentSize = `${actual.cols}x${actual.rows}`; }).catch(e => notice(`No se pudo ajustar ${view.session.title}: ${message(e)}`, true)).finally(() => {
+  void request<{ cols: number; rows: number }>('resize', { id: view.session.id, rows: view.term.rows, cols: view.term.cols }).then(actual => { view.sentSize = `${actual.cols}x${actual.rows}`; }).catch(e => { view.lastAttemptSize = ''; notice(`No se pudo ajustar ${view.session.title}: ${message(e)}`, true); }).finally(() => {
     view.resizeBusy = false;
     refresh();
     if (view.resizeAgain) { view.resizeAgain = false; scheduleResize(view); }
@@ -468,10 +497,112 @@ async function evidence(force = false) {
   lastEvidence = Date.now();
   await invoke('record_ui_evidence', { payload: { ready: true, streamMetrics:smoke?streamMetrics:undefined, renderedSeq, connection: connected ? 'connected' : 'disconnected', runnerPid: runner?.pid, generation: runner?.generation, sessions: [...views].map(([id, view]) => ({ id, rows: view.term.rows, cols: view.term.cols, status: view.session.status, lastLines: lines(view) })) } });
 }
+type TerminalArchivedOnly = { archivedOnly: true; sessionId: string; generation: string };
+type TerminalLive = { archivedOnly?: false; generation: string; frames: TerminalFrame[]; gap: TerminalGap | null; firstFrame: number; lastFrame: number; durableFrame: number; hasMore: boolean; session: Session; history: TerminalHistory };
+async function consumeNative(view: View, generation: string, frames: TerminalFrame[], historical: boolean, gap: TerminalGap | null = null) {
+  const metadata = streamMetadata(view.session);
+  if (metadata && metadata.generation !== generation) throw new Error('Terminal generation changed');
+  view.stream ??= new TerminalStreamCursor(generation);
+  view.streamReplay = historical;
+  try {
+    await view.stream.consume(generation, frames, {
+      gap: async () => {
+        view.term.reset();
+        // Reset ANSI parser/modes as well as the visible buffer. No provider input.
+        $('#notice').hidden = true; $('#notice').dataset.persistent = 'true';
+      },
+      frame: async frame => {
+        if (frame.kind === 'output') {
+          const bytes = Uint8Array.from(atob(frame.data), c => c.charCodeAt(0));
+          await new Promise<void>(resolve => view.term.write(bytes, resolve));
+          if (!historical) interactivePoll.output();
+        } else if (frame.kind === 'resize') {
+          if (view.term.cols !== frame.data.cols || view.term.rows !== frame.data.rows) {
+            preserveTerminalViewport(view.term, () => view.term.resize(frame.data.cols, frame.data.rows));
+          }
+        } else if (!historical) {
+          attention.observeEnd(view.session.id, view.session.status, frame.data.status);
+          view.session.status = frame.data.status;
+        }
+      },
+    }, gap);
+  } finally { view.streamReplay = false; }
+  if (view.catchup && view.stream.lastFrame >= view.catchupThrough!) {
+    view.catchup = false; view.catchupThrough = undefined;
+    refresh();
+  }
+}
+async function pollNative(version: number): Promise<boolean> {
+  let more = false;
+  let changed = false;
+  for (const view of views.values()) {
+    const metadata = view.session.terminalStream;
+    // Only status-owned current runtime sessions have an in-memory live ring.
+    if (view.archivedOnly || !metadata || metadata.generation !== runner?.generation || view.session.transport === 'app-server') continue;
+    const after = view.stream?.lastFrame ?? 0;
+    const page = await request<TerminalLive | TerminalArchivedOnly>('terminal_live', { id:view.session.id, after, limit:64 });
+    if (version !== loopVersion || disposed) return false;
+    if (page.generation !== metadata.generation) throw new Error('Terminal generation changed');
+    if (page.archivedOnly === true) {
+      if (page.sessionId !== view.session.id) throw new Error('Invalid archived terminal session');
+      view.archivedOnly = true; view.liveReady = true;
+      ensure(view.session);
+      if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
+      changed = true;
+      continue;
+    }
+    if (page.session.id !== view.session.id ||
+        (page.session.terminalStream && page.session.terminalStream.generation !== page.generation)) throw new Error('Terminal generation changed');
+    if (![page.firstFrame, page.lastFrame, page.durableFrame].every(n => Number.isSafeInteger(n) && n >= 0) ||
+        page.firstFrame < 1 || page.firstFrame > page.lastFrame + 1 || page.durableFrame > page.lastFrame ||
+        typeof page.hasMore !== 'boolean' || !page.history ||
+        page.frames.some(frame => frame.index > page.lastFrame) || (page.hasMore && page.frames.length === 0)) throw new Error('Invalid terminal snapshot');
+    if (deferTerminalGap(after, page.gap, page.durableFrame, page.history, !archiveUnavailable)) {
+      if (!view.catchup) { $('#notice').hidden = true; $('#notice').dataset.persistent = 'true'; }
+      view.catchup = true;
+      view.catchupThrough = page.gap!.lastFrame;
+      ensure({...page.session, terminalStream:{generation:page.generation, history:page.history}});
+      if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
+      changed = true;
+      continue;
+    }
+    const wasReady = view.liveReady;
+    const previousStatus = view.session.status;
+    const previousHistory = JSON.stringify(metadata.history);
+    if (!view.liveReady && view.liveReplayThrough === undefined) view.liveReplayThrough = page.lastFrame;
+    const historical = !view.liveReady;
+    const replayFrames = historical ? page.frames.filter(frame => frame.index <= view.liveReplayThrough!) : [];
+    const liveFrames = historical ? page.frames.filter(frame => frame.index > view.liveReplayThrough!) : page.frames;
+    if (historical) {
+      await consumeNative(view, page.generation, replayFrames, true, page.gap);
+      if ((view.stream?.lastFrame ?? 0) >= view.liveReplayThrough!) view.liveReady = true;
+    }
+    if (liveFrames.length || !historical) await consumeNative(view, page.generation, liveFrames, false, historical ? null : page.gap);
+    if (version !== loopVersion) return false;
+    if (!historical) attention.observeEnd(view.session.id, view.session.status, page.session.status);
+    ensure({ ...page.session, terminalStream:{ generation:page.generation, history:page.history } });
+    if ((view.stream?.lastFrame ?? 0) >= (view.liveReplayThrough ?? 0)) view.liveReady = true;
+    if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
+    if (!isLive(view.session)) stopping.delete(view.session.id);
+    changed ||= wasReady !== view.liveReady || previousStatus !== view.session.status || previousHistory !== JSON.stringify(page.history) ||
+      !!page.gap || page.frames.some(frame => frame.index > after && frame.kind !== 'output');
+    if (!wasReady && view.liveReady) scheduleResize(view);
+    more ||= page.hasMore;
+  }
+  if (changed) refresh();
+  return more;
+}
 async function poll(version: number) {
   try {
     while (connected && version === loopVersion && !disposed) {
-      if (Date.now() - statusAt > 1000) { updateStatus(await request<RunnerStatus>('status', runner?.statusVersion === 2 ? {workspaceAfter:runner.workspaceRevision} : {})); statusAt = Date.now(); }
+      if (Date.now() - statusAt > 1000) {
+        let status: RunnerStatus | undefined;
+        try { status = await request<RunnerStatus>('status', runner?.statusVersion === 2 ? {workspaceAfter:runner.workspaceRevision} : {}); }
+        catch (e) { if (runner?.terminalStreamVersion !== 1) throw e; archiveUnavailable = true; }
+        if (version !== loopVersion) return;
+        if (status) updateStatus(status);
+        statusAt = Date.now();
+      }
       if (!replaying && !attentionReading && Date.now() - attentionAt >= 3000) {
         attentionReading = true; attentionAt = Date.now();
         const snapshot = [...views.values()].map(v => v.session);
@@ -484,21 +615,46 @@ async function poll(version: number) {
         void attention.poll(snapshot, readAttention, () => connected && version === loopVersion && !disposed)
           .finally(() => { attentionReading = false; if (version === loopVersion && !disposed) refresh(); });
       }
+      const polledNative = !replaying && runner?.terminalStreamVersion === 1;
+      let nativeMore = polledNative ? await pollNative(version) : false;
+      if (version !== loopVersion) return;
       const pageStarted=performance.now();
-      const page = await request<{ events: Event[]; lastSeq: number; hasMore: boolean }>('events', { after: renderedSeq, limit: 64 });
+      let page: { events: Event[]; lastSeq: number; hasMore: boolean };
+      try {
+        page = await request('events', { after:renderedSeq, limit:64 });
+        archiveUnavailable = false;
+      } catch (e) {
+        if (runner?.terminalStreamVersion !== 1) throw e;
+        archiveUnavailable = true;
+        // Keep the DB cursor: if archives recover they still deduplicate by frame.
+        // An unavailable archive must not indefinitely disable live/control.
+        replaying = false;
+        page = {events:[], lastSeq:renderedSeq, hasMore:false};
+      }
       const transferred=performance.now();
       if (version !== loopVersion) return;
       let pageSeq = renderedSeq;
       let pendingWrites: Promise<void>[] = [];
-      const flushWrites = async () => { await Promise.all(pendingWrites); pendingWrites = []; };
+      const historicalWrites = new Set<View>();
+      const flushWrites = async () => {
+        try { await Promise.all(pendingWrites); }
+        finally { for (const view of historicalWrites) view.streamReplay = false; historicalWrites.clear(); pendingWrites = []; }
+      };
       for (const event of page.events) {
         if (event.seq <= pageSeq) continue;
+        if (replaying && event.seq > replayThrough) { await flushWrites(); replaying = false; }
         validateSequence(pageSeq,event);
         if(event.kind==='provider'){
-          views.get(event.sessionId)?.chat?.applyEvent(event);
+          const payload = terminalFramesPayload(event.data, views.get(event.sessionId)?.session.transport);
+          if (payload) {
+            await flushWrites();
+            const view = views.get(event.sessionId) ?? ensure({ id:event.sessionId, title:event.sessionId, kind:'unknown', cwd:null, status:'recuperando', rows:24, cols:80 });
+            await consumeNative(view, payload.generation, payload.frames, true);
+          } else views.get(event.sessionId)?.chat?.applyEvent(event);
         } else if (event.kind === 'output') {
           const view = views.get(event.sessionId) ?? ensure({ id: event.sessionId, title: event.sessionId, kind: 'unknown', cwd: null, status: 'recuperando', rows: 24, cols: 80 });
-          if (!replaying) interactivePoll.output();
+          if (event.seq <= replayThrough) { view.streamReplay = true; historicalWrites.add(view); }
+          else if (!replaying) interactivePoll.output();
           const binary = atob(event.data);
           const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
           // Queue one bounded page so xterm can coalesce parser work. Awaiting
@@ -516,6 +672,12 @@ async function poll(version: number) {
           // Preserve the historical terminal geometry during replay without sending ioctl.
           const data = JSON.parse(event.data) as Partial<Session>;
           let view = views.get(event.sessionId);
+          const checkpoint = streamMetadata(data as Session);
+          if (view && (view.stream || streamMetadata(view.session) || checkpoint)) {
+            if (checkpoint && view.stream && checkpoint.generation !== view.stream.generation) throw new Error('Terminal generation changed');
+            if (checkpoint && !streamMetadata(view.session)) view.session.detail = {...view.session.detail, terminalStream:checkpoint};
+            pageSeq = event.seq; continue;
+          }
           if (!view && typeof data.id === 'string' && typeof data.kind === 'string') {
             view = ensure(data as Session);
           }
@@ -553,13 +715,16 @@ async function poll(version: number) {
         streamMetrics.lastPageMs=performance.now()-pageStarted;streamMetrics.maxParseMs=Math.max(streamMetrics.maxParseMs,streamMetrics.lastParseMs);
         streamMetrics.visibility=document.visibilityState;streamMetrics.pageBytes=page.events.reduce((sum,event)=>sum+event.data.length,0);
       }
+      if (replaying && pageSeq >= replayThrough) replaying = false;
+      if (!polledNative && !replaying && runner?.terminalStreamVersion === 1) nativeMore = await pollNative(version);
+      if (version !== loopVersion) return;
       if (!page.hasMore && page.events.length) for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
       // Status/state transitions refresh the shell above. Output only changes
       // xterm and the event counter; rebuilding chrome every 12ms adds latency.
       if (page.events.length) text('#cursor', `Eventos procesados: ${renderedSeq}`);
       await evidence();
       const yielding=performance.now();
-      if (!page.hasMore) await interactivePoll.wait(document.visibilityState === 'visible');
+      if (!page.hasMore && !nativeMore) await interactivePoll.wait(document.visibilityState === 'visible');
       else await new Promise(resolve => setTimeout(resolve, 0));
       if(smoke){streamMetrics.lastYieldMs=performance.now()-yielding;streamMetrics.maxYieldMs=Math.max(streamMetrics.maxYieldMs,streamMetrics.lastYieldMs);}
     }
@@ -579,7 +744,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear(); stopping.clear(); selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear(); stopping.clear(); archiveUnavailable = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;

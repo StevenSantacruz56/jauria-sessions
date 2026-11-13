@@ -581,3 +581,108 @@ fn storage_provider_nonquota_failure_does_not_poison_capacity()->Result<()>{
     assert!(db.provider_event("s",&json!({"method":"notice","params":{"text":"fixture"}})).is_err());assert_eq!(db.retention()?["outputRejected"],false);db.ensure_capacity()?;
     db.0.execute_batch("DROP TRIGGER inject_nonquota")?;db.provider_event("s",&json!({"method":"notice","params":{"text":"recovered"}}))?;Ok(())
 }
+
+
+#[test]
+fn native_admission_separates_output_quota_from_durable_metadata() -> Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    session(&mut db,"old","running")?;
+    db.set_test_limits(1,2,1)?;
+    assert!(db.ensure_capacity().is_err());
+    let row=json!({"id":"native","title":"Terminal","kind":"fixture","status":"starting","rows":24,"cols":80,"detail":{"terminalStream":{"generation":"test","history":{"state":"recording"}}}});
+    assert!(db.insert(&row).is_err());
+    assert!(db.insert_codex(&row).is_err());
+    db.insert_native(&row)?;
+    db.activate("native",123)?;
+    assert_eq!(db.session("native")?.unwrap()["detail"]["terminalStream"]["generation"],"test");
+    assert!(db.output("native","x").is_err());
+    let mut current=db.session("native")?.unwrap();
+    current["rows"]=json!(35);current["cols"]=json!(111);current["status"]=json!("stopped");
+    current["detail"]["terminalStream"]["history"]["state"]=json!("incomplete");
+    db.native_checkpoint(&current)?;
+    let stored=db.session("native")?.unwrap();
+    assert_eq!(stored["rows"],35);assert_eq!(stored["cols"],111);assert_eq!(stored["status"],"stopped");
+    assert_eq!(stored["detail"]["terminalStream"]["history"]["state"],"incomplete");
+    // Output-budget bypass never bypasses the serialized metadata reservation.
+    let oversized=json!({"id":"too-big","title":"x".repeat(storage::SESSION_METADATA_BYTES),"kind":"fixture","status":"starting","rows":24,"cols":80});
+    assert!(db.insert_native(&oversized).is_err());assert!(db.session("too-big")?.is_none());
+    Ok(())
+}
+
+#[test]
+fn native_history_classification_requires_a_real_shipped_quota_guard() -> Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;session(&mut db,"s","running")?;
+    db.set_test_limits(1,100,2)?;
+    let quota=db.provider_event("s",&json!({"method":"jauria/terminalFrames"})).unwrap_err();
+    assert_eq!(Store::history_error_reason(&quota),"quota");
+    db.set_test_limits(10000,100,2)?;
+    db.0.execute_batch("CREATE TRIGGER injected_error BEFORE INSERT ON events WHEN NEW.kind='provider' BEGIN SELECT RAISE(ABORT,'Storage fake database failure'); END;")?;
+    let error=db.provider_event("s",&json!({"method":"jauria/terminalFrames"})).unwrap_err();
+    assert_eq!(Store::history_error_reason(&error),"io");
+    db.0.execute_batch("DROP TRIGGER injected_error;PRAGMA query_only=ON;")?;
+    let error=db.provider_event("s",&json!({"method":"jauria/terminalFrames"})).unwrap_err();
+    assert_eq!(Store::history_error_reason(&error),"io");
+    Ok(())
+}
+
+
+fn native_row(id:&str,status:&str,revision:u64,state:&str,durable:u64)->serde_json::Value {
+    json!({"id":id,"title":id,"kind":"fixture","status":status,"rows":24,"cols":80,
+        "detail":{"terminalStream":{"generation":"native-generation","revision":revision,"durableFrame":durable,
+            "history":{"state":state,"lastFrame":5,"durableFrame":durable}}}})
+}
+
+#[test]
+fn native_stale_checkpoints_cannot_restore_custody_or_purged_completeness()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    let running=native_row("native","running",1,"recording",1);
+    db.insert_native(&running)?;
+    db.native_checkpoint(&running)?;
+    let mut final_row=native_row("native","needs_attention",3,"complete",5);
+    db.native_checkpoint(&final_row)?;
+    let seq=db.last_seq()?;
+    db.native_checkpoint(&running)?;
+    assert_eq!(db.last_seq()?,seq);assert_eq!(db.session("native")?.unwrap()["status"],"needs_attention");
+    final_row["status"]=json!("released");final_row["detail"]["reason"]=json!("operator acknowledgement");
+    final_row["detail"]["terminalStream"]["revision"]=json!(4);
+    db.native_checkpoint(&final_row)?;
+    db.provider_event("native",&json!({"method":"jauria/terminalFrames","params":{"generation":"native-generation","frames":[]}}))?;
+    db.purge_history(&["native".into()])?;
+    let seq=db.last_seq()?;
+    db.native_checkpoint(&final_row)?; // a pre-purge marker that completes late
+    assert_eq!(db.last_seq()?,seq);
+    let saved=db.session("native")?.unwrap();
+    assert_eq!(saved["status"],"released");
+    assert_eq!(saved["detail"]["terminalStream"]["history"]["state"],"incomplete");
+    assert_eq!(saved["detail"]["terminalStream"]["history"]["reason"],"explicit_purge");
+    assert_eq!(saved["detail"]["terminalStream"]["revision"],5);
+    assert_eq!(db.retention()?["outputEncodedBytes"],0);
+    Ok(())
+}
+
+#[test]
+fn native_same_revision_cannot_regress_durable_or_clean_end()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    let complete=native_row("s","exited",5,"complete",5);
+    db.insert_native(&complete)?;db.native_checkpoint(&complete)?;
+    let seq=db.last_seq()?;
+    db.native_checkpoint(&native_row("s","exited",5,"recording",5))?;
+    db.native_checkpoint(&native_row("s","exited",5,"recording",2))?;
+    assert_eq!(db.last_seq()?,seq);
+    assert_eq!(db.session("s")?.unwrap()["detail"]["terminalStream"]["history"]["state"],"complete");
+    Ok(())
+}
+
+#[test]
+fn native_purge_and_incomplete_marker_rollback_together()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    let row=native_row("s","exited",5,"complete",5);
+    db.insert_native(&row)?;db.native_checkpoint(&row)?;
+    db.provider_event("s",&json!({"method":"jauria/terminalFrames","params":{"generation":"native-generation","frames":[]}}))?;
+    let before=db.retention()?;let seq=db.last_seq()?;
+    db.0.execute_batch("CREATE TRIGGER fail_purge_marker BEFORE INSERT ON events WHEN NEW.kind='state' AND json_extract(NEW.data,'$.detail.terminalStream.history.reason')='explicit_purge' BEGIN SELECT RAISE(ABORT,'fixture purge marker failed'); END;")?;
+    assert!(db.purge_history(&["s".into()]).is_err());
+    assert_eq!(db.retention()?,before);assert_eq!(db.last_seq()?,seq);
+    assert_eq!(db.session("s")?.unwrap()["detail"]["terminalStream"]["history"]["state"],"complete");
+    Ok(())
+}

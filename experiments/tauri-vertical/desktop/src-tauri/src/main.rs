@@ -116,6 +116,7 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         "start" => &["id","title","kind","rows","cols","cwd"],
         "input" => &["id","data"], "resize" => &["id","rows","cols"],
         "stop" => &["id","generation"], "interrupt" => &["id"], "events" => &["after","limit"],
+        "terminal_live" => &["id","after","limit"],
         _ => return Err("Operación no permitida".into()),
     };
     if obj.keys().any(|k| !fields.contains(&k.as_str())) { return Err("Argumento no permitido".into()); }
@@ -150,7 +151,7 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         if args["title"].as_str().is_none_or(|s| s.len() > 160) { return Err("Título inválido".into()); }
     }
     if matches!(op, "start" | "start_task" | "start_codex" | "start_codex_task" | "open_handoff" | "resize") {
-        for field in ["rows", "cols"] { if args[field].as_u64().is_none_or(|n| !(2..=1000).contains(&n)) { return Err("Tamaño inválido".into()); } }
+        for field in ["rows", "cols"] { if args[field].as_u64().is_none_or(|n| !(if op=="resize" {1..=1000} else {2..=1000}).contains(&n)) { return Err("Tamaño inválido".into()); } }
     }
     if matches!(op,"start_codex"|"start_codex_task") && args["kind"]!="codex" {return Err("Proveedor estructurado inválido".into());}
     if matches!(op,"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") && args["generation"].as_i64().is_none_or(|n|n<=0) {return Err("Generación inválida".into());}
@@ -158,6 +159,7 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     if op=="codex_permission" && !matches!(args["decision"].as_str(),Some("accept"|"deny")){return Err("Decisión inválida".into());}
     if op == "input" && args["data"].as_str().is_none_or(|s| s.len() > 16 * 1024) { return Err("Entrada inválida o mayor de 16 KiB".into()); }
     if op == "events" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=1000).contains(&n))) { return Err("Cursor o límite inválido".into()); }
+    if op == "terminal_live" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=64).contains(&n))) { return Err("Cursor o límite de terminal inválido".into()); }
     Ok(())
 }
 #[tauri::command]
@@ -444,6 +446,14 @@ mod tests {
     fn start_args(kind: &str) -> Value {
         json!({"id":"session-123","title":"Prueba","kind":kind,"rows":24,"cols":80})
     }
+    #[test]
+    fn native_live_rpc_bounds_and_capabilities_are_explicit() {
+        assert!(validate("terminal_live",&json!({"id":"native","after":0,"limit":64})).is_ok());
+        for args in [json!({"id":"native","after":-1,"limit":64}),json!({"id":"native","after":0,"limit":65}),json!({"id":"native","after":0,"limit":0}),json!({"id":"native","after":0,"limit":64,"path":"/tmp"})] {
+            assert!(validate("terminal_live",&args).is_err());
+        }
+    }
+
     #[test]
     fn interactive_requires_canonical_directory() {
         let cwd = fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();

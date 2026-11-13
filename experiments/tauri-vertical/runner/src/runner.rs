@@ -83,6 +83,7 @@ struct Owned {
     exited: AtomicBool,
     reader_done: AtomicBool,
     output_lost: AtomicBool,
+    publication: Mutex<()>,
     done: Mutex<bool>,
     wake: Condvar,
 }
@@ -160,6 +161,8 @@ pub struct Runner {
     verification_jobs: Mutex<HashMap<String,VerificationJob>>,
     codex_jobs:Mutex<HashMap<String,CodexJob>>,
     resources: Mutex<crate::resources::ResourcesSampler>,
+    terminal_streams: Arc<crate::terminal_stream::TerminalStreams>,
+    status_cache: Mutex<Value>,
     // Per-instance fault injection: never change process-wide environment or inventory.
     #[cfg(test)]
     inventory: Arc<dyn Fn(u32) -> Result<Vec<u32>> + Send + Sync>,
@@ -208,12 +211,19 @@ impl Runner {
                     }
                     _ => "needs_attention",
                 };
-                db.state(session["id"].as_str().unwrap(), status, json!({"reason":"previous generation; no owned handle; never restarted", "identity":"unverified"}))?;
+                let mut detail=json!({"reason":"previous generation; no owned handle; never restarted", "identity":"unverified"});
+                if !session["detail"]["terminalStream"].is_null() {
+                    detail["terminalStream"]=session["detail"]["terminalStream"].clone();
+                    detail["terminalStream"]["history"]["state"]=json!("unknown_tail");
+                }
+                db.state(session["id"].as_str().unwrap(), status, detail)?;
             }
         }
         let mut random = [0u8;16];
         File::open("/dev/urandom")?.read_exact(&mut random)?;
-        Ok(Self {data_dir, socket, token, generation: STANDARD.encode(random), _lock:lock, db:Arc::new(Mutex::new(db)), owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
+        let generation = STANDARD.encode(random);
+        let terminal_streams = crate::terminal_stream::TerminalStreams::new(&data_dir.join("runner.sqlite"), generation.clone())?;
+        Ok(Self {data_dir, socket, token, generation, terminal_streams, status_cache:Mutex::new(Value::Null), _lock:lock, db:Arc::new(Mutex::new(db)), owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
             #[cfg(test)] inventory: Arc::new(session_survivors),
         })
     }
@@ -282,6 +292,7 @@ impl Runner {
         for job in verification_jobs.values(){job.cancel.store(true,Ordering::Release);}
         // At most two active children. Cleanup never consults persisted PIDs.
         for child in children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
+        self.terminal_streams.shutdown();
         // Verification post-capture takes the workspace gate. Release both
         // gates before joining; quitting already fences every new writer.
         drop(_guard);drop(_workspace);
@@ -344,10 +355,38 @@ impl Runner {
             "start" => &["id","title","kind","rows","cols","cwd"],
             "input" => &["id","data"], "resize" => &["id","rows","cols"],
             "stop" => &["id","generation"], "interrupt" => &["id"], "purge_history" | "compact_history" => &["id","confirmed"], "release" => &["id","confirmed","generation"], "events" => &["after","limit"],
+            "terminal_live" => &["id","after","limit"],
             _ => bail!("unknown operation"),
         };
         ensure!(args.keys().all(|k| allowed.contains(&k.as_str())), "unexpected argument");
         let args = &request["args"];
+        if op == "terminal_live" {
+            let id=args["id"].as_str().context("id required")?;validate_id(id)?;
+            let after=args["after"].as_u64().context("invalid terminal cursor")?;
+            let limit=args.get("limit").map(|v|v.as_u64().context("invalid terminal limit")).transpose()?.unwrap_or(64);
+            ensure!((1..=64).contains(&limit),"invalid terminal limit");
+            if self.terminal_streams.session(id).is_none() {
+                return Ok(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation}));
+            }
+            return match self.terminal_streams.live(id,after,limit as usize) {
+                Ok(page)=>Ok(page),
+                Err(_) if self.terminal_streams.session(id).is_none()=>Ok(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation})),
+                Err(error)=>Err(error),
+            };
+        }
+        // An owned handle is the authority for native controls. Neither a busy
+        // archive writer nor an unreadable database may disable stop or input.
+        if matches!(op,"input"|"resize"|"interrupt"|"stop") {
+            let id=args["id"].as_str().context("id required")?;validate_id(id)?;
+            let owned=self.owned.lock().unwrap().get(id).cloned();
+            if let Some(child)=owned {
+                ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
+                return self.native_control(op,id,args,&child);
+            }
+        }
+        if matches!(op,"start"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"close_project"|"prepare_task"|"revalidate_task"|"open_handoff"|"prepare_verification"|"begin_verification") {
+            self.sync_native_lifecycle()?;
+        }
         if matches!(op,"start_codex"|"start_codex_task"|"codex_state"|"codex_request"|"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") {return self.codex_request(op,args);}
         if op=="stop" {
             let id=args["id"].as_str().context("Falta sesión")?;
@@ -390,11 +429,20 @@ impl Runner {
         }
         if op == "diagnostic_preview" { return crate::diagnostics::preview(&self.db.lock().unwrap()); }
         if op == "status" {
-            let db = self.db.lock().unwrap();
-            let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
-            let unchanged=args["workspaceAfter"].as_str()==Some(revision.as_str());
-            let mut result=json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"workspaceNotModified":unchanged});
-            if !unchanged {result["projects"]=json!(crate::projects::projects(&db.0)?);result["tasks"]=json!(crate::projects::tasks(&db.0)?);}
+            let fresh = self.db.try_lock().ok().and_then(|db| (|| -> Result<Value> {
+                let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
+                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
+            })().ok());
+            if let Some(value)=fresh {*self.status_cache.lock().unwrap()=value;}
+            let mut result=self.status_cache.lock().unwrap().clone();
+            ensure!(!result.is_null(),"Storage status unavailable; terminal_live and owned controls remain available");
+            let sessions=result["sessions"].as_array_mut().context("Invalid session cache")?;
+            for live in self.terminal_streams.sessions() {
+                if let Some(row)=sessions.iter_mut().find(|row|row["id"]==live["id"]) {*row=live;} else {sessions.push(live);}
+            }
+            let unchanged=args["workspaceAfter"].as_str()==result["workspaceRevision"].as_str();
+            result["workspaceNotModified"]=json!(unchanged);
+            if unchanged {result.as_object_mut().unwrap().remove("projects");result.as_object_mut().unwrap().remove("tasks");}
             return Ok(result);
         }
         if op == "events" {
@@ -457,7 +505,7 @@ impl Runner {
                     "prepare_task" => {
                         {let db=self.db.lock().unwrap();crate::verification::ensure_available(&db.0,id)?;
                         let task=crate::projects::task(&db.0,id)?;
-                        ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta inválida")?),&db.sessions()?)?;}
+                        ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta inválida")?),&db.sessions_with_live(&self.terminal_streams.sessions())?)?;}
                         crate::projects::prepare(&self.db,&self.data_dir,id)
                     },
                     "open_handoff" => {
@@ -499,7 +547,7 @@ impl Runner {
                         // committing/rebasing. Refuse before any task-state change.
                         {
                             let db = self.db.lock().unwrap();
-                            let sessions = db.sessions()?;
+                            let sessions = db.sessions_with_live(&self.terminal_streams.sessions())?;
                             ensure!(!sessions.iter().any(|s|s["taskId"]==id && matches!(s["status"].as_str(),Some("starting"|"running"|"needs_attention"))), "La tarea ya tiene una sesión abierta o incierta");
                             let task = crate::projects::task(&db.0,id)?;
                             ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta de tarea inválida")?),&sessions)?;
@@ -534,9 +582,26 @@ impl Runner {
         validate_id(id)?;
         if matches!(op,"purge_history"|"compact_history") {
             ensure!(args["confirmed"]==true,"Confirma la eliminación del historial.");
-            return if op=="compact_history" {self.db.lock().unwrap().compact_final_history(&[id.to_owned()])}else{self.db.lock().unwrap().purge_history(&[id.to_owned()])};
+            self.terminal_streams.ensure_purgeable(id)?;
+            let result=(|| -> Result<(Value,bool)> {
+                let mut db=self.db.lock().unwrap();
+                if let Some(row)=self.terminal_streams.session(id) {db.native_checkpoint(&row)?;}
+                let result=if op=="compact_history" {db.compact_final_history(&[id.to_owned()])?}else{db.purge_history(&[id.to_owned()])?};
+                Ok((result,db.ensure_capacity().is_ok()))
+            })();
+            match result {
+                Ok((value,available))=>{
+                    self.terminal_streams.purged(id);
+                    if available {self.terminal_streams.retention_changed();}
+                    return Ok(value);
+                }
+                Err(error)=>{self.terminal_streams.cancel_purge(id);return Err(error);}
+            }
         }
-        let stored = self.db.lock().unwrap().session(id)?.context("unknown session")?;
+        let stored = match self.terminal_streams.session(id) {
+            Some(row)=>row,
+            None=>self.db.lock().unwrap().session(id)?.context("unknown session")?,
+        };
         let child = self.owned.lock().unwrap().get(id).cloned();
         if op == "release" {
             ensure!(args["confirmed"] == true, "explicit confirmation is required");
@@ -548,6 +613,12 @@ impl Runner {
             if stored["transport"]=="app-server" {
                 let db=self.db.lock().unwrap();let generation=crate::codex_store::get_session(&db.0,id)?["generation"].as_i64().context("Generación inválida")?;
                 crate::codex_store::fence_session(&db.0,id,generation)?;
+            }
+            if self.terminal_streams.session(id).is_some() {
+                self.terminal_streams.release(id);
+                let row=self.terminal_streams.session(id).context("session missing")?;
+                self.db.lock().unwrap().native_checkpoint(&row)?;
+                return Ok(row);
             }
             self.db.lock().unwrap().state(id,"released",json!({"reason":"explicit operator acknowledgement; no process was signaled; history retained"}))?;
             return self.db.lock().unwrap().session(id)?.context("session missing");
@@ -656,10 +727,10 @@ impl Runner {
         if grant.is_some(){crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;}
         if let Some(existing) = self.db.lock().unwrap().session(id)? {
             ensure!(existing["kind"] == args["kind"] && existing["title"] == args["title"] && existing["taskId"] == args["taskId"] && (args["cwd"].is_null() || existing["cwd"] == args["cwd"]), "El ID de sesión ya tiene otro contenido");
-            return Ok(existing);
+            return Ok(self.terminal_streams.session(id).unwrap_or(existing));
         }
         crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;
-        {let db=self.db.lock().unwrap();db.ensure_capacity()?;ensure!(occupied_slots(&db.sessions()?)<2,"El límite es 2; las sesiones inciertas conservan su plaza hasta liberarlas");}
+        {let db=self.db.lock().unwrap();db.ensure_native_capacity()?;ensure!(occupied_slots(&db.sessions_with_live(&self.terminal_streams.sessions())?)<2,"El límite es 2; las sesiones inciertas conservan su plaza hasta liberarlas");}
         let size = dimensions(args)?;
         let title = args["title"].as_str().context("title required")?;
         ensure!(title.len() <= 512, "title too long");
@@ -675,7 +746,7 @@ impl Runner {
             let workspace = git_workspace_for(&cwd)?;
             ensure!(workspace.is_some() || !args["taskId"].is_string(), "task working directory must be a Git worktree");
             if let Some(workspace) = &workspace {
-                ensure_workspace_available(workspace, &self.db.lock().unwrap().sessions()?)?;
+                ensure_workspace_available(workspace, &self.db.lock().unwrap().sessions_with_live(&self.terminal_streams.sessions())?)?;
             }
             // A standalone cwd may still be an ancestor of a fenced worktree.
             crate::verification::ensure_path_available(&self.db.lock().unwrap().0,workspace.as_deref().unwrap_or(&cwd))?;
@@ -706,8 +777,9 @@ impl Runner {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         ensure!(flags >= 0 && unsafe { libc::fcntl(fd,libc::F_SETFL,flags | libc::O_NONBLOCK) } >= 0, "cannot set PTY nonblocking");
         let mut session = json!({"id":id,"title":title,"kind":kind,"status":"starting","pid":null,"rows":size.rows,"cols":size.cols,
-            "cwd":cwd,"workspace":workspace,"taskId":args["taskId"]});
-        self.db.lock().unwrap().insert(&session)?;
+            "cwd":cwd,"workspace":workspace,"taskId":args["taskId"],"detail":{"terminalStream":{"generation":self.generation,"history":{"state":"recording","lastFrame":0,"durableFrame":0}}}});
+        self.terminal_streams.prepare_register(&session)?;
+        self.db.lock().unwrap().insert_native(&session)?;
         let mut child = match pair.slave.spawn_command(cmd) {
             Ok(child) => child,
             Err(e) => { self.db.lock().unwrap().state(id,"failed",json!({"reason":e.to_string()}))?; return Err(e.context("spawn PTY child")); }
@@ -732,7 +804,13 @@ impl Runner {
         }
         let owned = Arc::new(Owned { pid, master:Mutex::new(pair.master),writer:Mutex::new(writer),
             lifecycle:Mutex::new(Lifecycle {reaped:false,uncertain:false,stopping:false}),
-            exited:AtomicBool::new(false),reader_done:AtomicBool::new(false),output_lost:AtomicBool::new(false),done:Mutex::new(false),wake:Condvar::new() });
+            exited:AtomicBool::new(false),reader_done:AtomicBool::new(false),output_lost:AtomicBool::new(false),publication:Mutex::new(()),done:Mutex::new(false),wake:Condvar::new() });
+        if let Err(error)=self.terminal_streams.register(session.clone()) {
+            unsafe {libc::kill(-(pid as i32),libc::SIGKILL);}
+            let _=child.wait();
+            let _=self.db.lock().unwrap().state(id,"failed",json!({"reason":"native live admission failed; owned child stopped before publication"}));
+            return Err(error);
+        }
         self.owned.lock().unwrap().insert(id.to_owned(),owned.clone());
         self.read_output(id.to_owned(),owned.clone(),reader);
         let runner = self.clone();
@@ -780,71 +858,96 @@ impl Runner {
             drop(life);
             let until = Instant::now() + Duration::from_millis(500);
             while !owned.reader_done.load(Ordering::Acquire) && Instant::now() < until { thread::sleep(Duration::from_millis(5)); }
-            let (mut status, mut detail) = if owned.reader_done.load(Ordering::Acquire) {
+            let (status, mut detail) = if owned.reader_done.load(Ordering::Acquire) {
                 (status, detail)
             } else {
                 ("needs_attention", json!({"waitResult":detail,"outputTail":"incomplete: reader still draining after 500ms"}))
             };
             if owned.output_lost.load(Ordering::Acquire) {
-                if status!="needs_attention" {status="failed";}
                 detail["outputNotRetained"]=json!(true);
-                detail["reason"]=json!("La salida alcanzó la cuota o no pudo guardarse. Se detuvo el runner; el último tramo no está retenido.");
+                detail["outputTail"]=json!("PTY read ended with an error; history may be incomplete");
             }
-            if let Err(e) = runner.db.lock().unwrap().state(&id,status,detail) {
-                eprintln!("persist wait: {e:#}");
-                runner.quitting.store(true,Ordering::Release);
-            }
+            // Lifecycle remains the actual wait/stop result. History completeness
+            // is tracked separately and persisted asynchronously, best effort.
+            runner.terminal_streams.finish(&id,status,detail);
             *owned.done.lock().unwrap() = true;
             owned.wake.notify_all();
         });
         Ok(session)
     }
 
-    fn read_output(self: &Arc<Self>, id: String, child: Arc<Owned>, mut reader: Box<dyn Read + Send>) {
-        let runner = self.clone();
-        thread::spawn(move || {
-            let mut buffer = [0u8;12*1024];
-            let mut pending = Vec::with_capacity(36*1024);
-            let mut last_flush = Instant::now();
-            let flush = |pending: &mut Vec<u8>| -> Result<()> {
-                if !pending.is_empty() {
-                    runner.db.lock().unwrap().output(&id,&STANDARD.encode(&*pending))?;
-                    pending.clear();
-                }
-                Ok(())
-            };
-            let mut storage_failed = false;
-            loop {
-                // Require an empty read after observing exit, not one before it.
-                let was_exited = child.exited.load(Ordering::Acquire);
-                match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => pending.extend_from_slice(&buffer[..n]),
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        if was_exited { break; }
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
-                    Err(e) => { eprintln!("read PTY: {e}"); break; }
-                }
-                // Bound latency and memory while avoiding one FULL fsync for
-                // every ~1 KiB kernel read during a continuous output burst.
-                if pending.len() >= 24*1024 || last_flush.elapsed() >= Duration::from_millis(10) {
-                    if let Err(e) = flush(&mut pending) {
-                        eprintln!("persist output: {e:#}");
-                        runner.quitting.store(true,Ordering::Release);
-                        child.output_lost.store(true,Ordering::Release);
-                        storage_failed = true;
-                        break;
-                    }
-                    last_flush = Instant::now();
+    /// Flush final observed custody when a DB-backed action needs it. Older
+    /// asynchronous checkpoints cannot overwrite this revision in Store.
+    fn sync_native_lifecycle(&self)->Result<()> {
+        let live=self.terminal_streams.sessions();
+        if !live.iter().any(|row|!matches!(row["status"].as_str(),Some("running"|"starting"))) {return Ok(());}
+        let mut db=self.db.lock().unwrap();
+        let stored=db.sessions()?;
+        for row in live.iter().filter(|row|!matches!(row["status"].as_str(),Some("running"|"starting"))) {
+            if stored.iter().any(|old|old["id"]==row["id"] && old["status"]!=row["status"]) {
+                db.native_checkpoint(row)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn native_control(&self,op:&str,id:&str,args:&Value,child:&Arc<Owned>)->Result<Value> {
+        match op {
+            "input" => {
+                let data=args["data"].as_str().context("data must be UTF8 string")?;
+                ensure!(data.len()<=MAX_INPUT,"input too large");child.input(data.as_bytes())?;Ok(json!({"written":data.len()}))
+            }
+            "interrupt" => {
+                let vintr=child.master.lock().unwrap().get_termios().context("PTY termios unavailable")?.control_chars[libc::VINTR];
+                child.input(&[vintr])?;Ok(json!({"sent":true}))
+            }
+            "resize" => {
+                ensure!(!child.exited.load(Ordering::Acquire),"child already exited");
+                let size=dimensions(args)?;
+                let _publication=child.publication.lock().unwrap();
+                let master=child.master.lock().unwrap();master.resize(size)?;
+                let actual=master.get_size()?;
+                self.terminal_streams.resize(id,actual.rows,actual.cols);
+                Ok(json!({"rows":actual.rows,"cols":actual.cols}))
+            }
+            "stop" => {
+                ensure!(child.stop()?,"termination pending; no confirmed wait result");
+                match self.terminal_streams.session(id) {
+                    Some(row)=>Ok(row),
+                    None=>self.db.lock().unwrap().session(id)?.context("session missing"),
                 }
             }
-            if !storage_failed { if let Err(e) = flush(&mut pending) { eprintln!("persist final output: {e:#}"); child.output_lost.store(true,Ordering::Release); runner.quitting.store(true,Ordering::Release); } }
+            _=>bail!("unknown native control"),
+        }
+    }
+
+    fn read_output(self: &Arc<Self>, id: String, child: Arc<Owned>, mut reader: Box<dyn Read + Send>) {
+        let runner=self.clone();
+        thread::spawn(move || {
+            let mut buffer=[0u8;12*1024];
+            loop {
+                let was_exited=child.exited.load(Ordering::Acquire);
+                let result={
+                    let _publication=child.publication.lock().unwrap();
+                    let result=reader.read(&mut buffer);
+                    if let Ok(n)=result {if n>0 {runner.terminal_streams.output(&id,&buffer[..n]);}}
+                    result
+                };
+                match result {
+                    Ok(0)=>break,
+                    Ok(_)=>{},
+                    Err(e) if e.kind()==std::io::ErrorKind::Interrupted=>continue,
+                    Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>{
+                        if was_exited {break;}thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(e) if e.raw_os_error()==Some(libc::EIO)=>break,
+                    Err(e)=>{eprintln!("read PTY: {e}");child.output_lost.store(true,Ordering::Release);break;}
+                }
+            }
             child.reader_done.store(true,Ordering::Release);
         });
     }
+
 }
 
 // Uncertain custody keeps its global slot until explicit release. A finished
@@ -999,7 +1102,13 @@ mod tests {
         if stopping { assert!(child.stop().unwrap(), "stop did not confirm wait completion"); } else { child.input(b"exit\n").unwrap(); }
         assert!(child.wait_done(Duration::from_secs(5)), "wait did not finish");
         assert!(calls.load(Ordering::Relaxed) > 0, "wait bypassed the injected inventory");
-        let session = runner.db.lock().unwrap().session("inventory").unwrap().unwrap();
+        let deadline=Instant::now()+Duration::from_secs(3);
+        let session=loop {
+            let row=runner.db.lock().unwrap().session("inventory").unwrap().unwrap();
+            if row["status"]=="needs_attention" {break row;}
+            assert!(Instant::now()<deadline,"native lifecycle checkpoint did not commit");
+            thread::sleep(Duration::from_millis(5));
+        };
         assert_eq!(session["status"], "needs_attention");
         assert!(session["detail"]["waitResult"]["exitCode"].is_number());
         if found_survivor {
@@ -1262,8 +1371,8 @@ mod workspace_queue_tests {
         let request=|op:&str,args:Value|runner.request(json!({"version":1,"token":runner.token,"op":op,"args":args}));
         request("start",json!({"id":"live","title":"live","kind":"shell","rows":24,"cols":80}))?;
         let observed = |marker:&str| -> Result<bool> {
-            let events = runner.db.lock().unwrap().events(0,256)?;
-            for event in events["events"].as_array().unwrap() {
+            let page=runner.terminal_streams.live("live",0,64)?;
+            for event in page["frames"].as_array().unwrap() {
                 if event["kind"] == "output" {
                     let bytes=STANDARD.decode(event["data"].as_str().unwrap())?;
                     if String::from_utf8_lossy(&bytes).contains(marker) { return Ok(true); }
@@ -1458,4 +1567,60 @@ mod handoff_admission_tests {
         assert_eq!(request(&r,"start",json!({"id":"pty","title":"Title","kind":"shell","rows":24,"cols":80}))?,row);
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod terminal_history_recovery_tests {
+    use super::*;
+
+    fn final_checkpoint_failure(release: bool) -> Result<()> {
+        let tmp=tempfile::Builder::new().prefix("aw-history-final-").tempdir_in("/tmp")?;
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
+        let root=fs::canonicalize(tmp.path())?;
+        let mut runner=Runner::open(root.join("data"),root.join("sock"),root.join("token"))?;
+        if release {runner.inventory=Arc::new(|_|bail!("fixture inventory unavailable"));}
+        let runner=Arc::new(runner);
+        let request=|op:&str,args:Value|runner.request(json!({"version":1,"token":runner.token,"op":op,"args":args}));
+        request("start",json!({"id":"ended","kind":"shell","title":"ended","rows":24,"cols":80}))?;
+        runner.db.lock().unwrap().0.execute_batch("CREATE TRIGGER fail_terminal_final BEFORE INSERT ON events WHEN NEW.kind='state' AND json_extract(NEW.data,'$.status') IN ('exited','stopped','needs_attention') BEGIN SELECT RAISE(ABORT,'fixture final checkpoint unavailable'); END;")?;
+        let child=runner.owned.lock().unwrap()["ended"].clone();
+        child.input(b"exit\n")?;
+        assert!(child.wait_done(Duration::from_secs(5)));
+        let expected=if release {"needs_attention"}else{"exited"};
+        assert_eq!(runner.terminal_streams.session("ended").unwrap()["status"],expected);
+        let deadline=Instant::now()+Duration::from_secs(3);
+        while runner.terminal_streams.session("ended").unwrap()["history"]["reason"]!="io" {
+            assert!(Instant::now()<deadline,"fault was not exercised");thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(runner.db.lock().unwrap().session("ended")?.unwrap()["status"],"running");
+        runner.db.lock().unwrap().0.execute_batch("DROP TRIGGER fail_terminal_final")?;
+        if release {
+            let released=request("release",json!({"id":"ended","confirmed":true}))?;
+            assert_eq!(released["status"],"released");
+            assert!(released["detail"]["reason"].as_str().unwrap().contains("explicit operator"));
+            assert_eq!(runner.db.lock().unwrap().session("ended")?.unwrap()["status"],"released");
+        } else {
+            // A DB-backed new admission first reconciles the final in-memory
+            // lifecycle; the stale running row cannot keep occupying a slot.
+            request("start",json!({"id":"next","kind":"shell","title":"next","rows":24,"cols":80}))?;
+            assert_eq!(runner.db.lock().unwrap().session("ended")?.unwrap()["status"],"exited");
+            request("stop",json!({"id":"next"}))?;
+        }
+        let deadline=Instant::now()+Duration::from_secs(3);
+        loop {
+            match request("purge_history",json!({"id":"ended","confirmed":true})) {
+                Ok(_)=>break,
+                Err(error) if error.to_string().contains("draining") && Instant::now()<deadline=>thread::sleep(Duration::from_millis(5)),
+                Err(error)=>return Err(error),
+            }
+        }
+        let row=runner.db.lock().unwrap().session("ended")?.unwrap();
+        assert_eq!(row["detail"]["terminalStream"]["history"]["reason"],"explicit_purge");
+        runner.cleanup_owned();
+        Ok(())
+    }
+    #[test]
+    fn failed_final_checkpoint_does_not_block_new_admission_or_purge()->Result<()> {final_checkpoint_failure(false)}
+    #[test]
+    fn release_uses_observed_custody_even_when_database_still_says_running()->Result<()> {final_checkpoint_failure(true)}
 }

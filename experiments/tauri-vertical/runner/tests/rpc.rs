@@ -78,8 +78,17 @@ impl Instance {
             for event in events {
                 assert!(event["seq"].as_i64().unwrap()>cursor);
                 cursor=event["seq"].as_i64().unwrap();
-                if event["sessionId"]==id && event["kind"]=="output" {
-                    output.extend(STANDARD.decode(event["data"].as_str().unwrap()).unwrap());
+                if event["sessionId"]==id {
+                    if event["kind"]=="output" {
+                        output.extend(STANDARD.decode(event["data"].as_str().unwrap()).unwrap());
+                    } else if event["kind"]=="provider" {
+                        let payload:Value=serde_json::from_str(event["data"].as_str().unwrap()).unwrap();
+                        if payload["method"]=="jauria/terminalFrames" {
+                            for frame in payload["params"]["frames"].as_array().unwrap() {
+                                if frame["kind"]=="output" {output.extend(STANDARD.decode(frame["data"].as_str().unwrap()).unwrap());}
+                            }
+                        }
+                    }
                 }
             }
             assert_eq!(page["lastSeq"],cursor);
@@ -96,6 +105,9 @@ impl Instance {
         }
     }
     fn contains(&self,id:&str,text:&str)->bool {self.output(id).windows(text.len()).any(|w|w==text.as_bytes())}
+    fn closed_archive(&self,id:&str) {
+        self.wait_for(||self.session(id)["terminalStream"]["history"]["state"]=="complete");
+    }
     fn kill_and_restart(&mut self) {
         let mut old=self.child.take().unwrap();
         old.kill().unwrap();old.wait().unwrap();
@@ -144,6 +156,7 @@ fn normal_terminal_login_interactive_unicode_cwd_replay_exit_and_stop() {
     app.rpc("input",json!({"id":"normal","data":"print -r -- FINAL_$JAURIA_LOGIN_FIXTURE; exit 7\n"}));
     app.wait_for(||app.session("normal")["status"]=="exited");
     assert_eq!(app.session("normal")["detail"]["exitCode"],7);
+    app.closed_archive("normal");app.closed_archive("second");
     assert!(app.contains("normal","FINAL_profile"));
     let output=app.output("normal");
     let cursor=app.rpc("status",json!({}))["lastSeq"].clone();
@@ -229,6 +242,7 @@ fn real_two_ptys_utf8_size_flood_interrupt_and_stop() {
     app.wait_for(||app.session("interrupt-check")["status"]=="exited");
     app.rpc("input",json!({"id":"fixture-1","data":"exit\n"}));
     app.wait_for(||app.session("fixture-1")["status"]=="exited");
+    for id in ["fixture-1","fixture-2","interrupt-check"] {app.closed_archive(id);}
     let before=app.rpc("status",json!({}))["lastSeq"].clone();
     assert_eq!(app.start("fixture-1")["status"],"exited");
     assert_eq!(app.rpc("status",json!({}))["lastSeq"],before);
@@ -253,6 +267,7 @@ fn crash_recovery_preserves_history_and_never_signals_database_pid() {
     assert_ne!(app.rpc("status",json!({}))["generation"],generation);
     assert!(app.output("old").starts_with(&old_output));
     assert!(matches!(app.session("old")["status"].as_str(),Some("interrupted"|"needs_attention")));
+    assert_eq!(app.session("old")["detail"]["terminalStream"]["history"]["state"],"unknown_tail");
     assert_eq!(app.session("foreign")["status"],"needs_attention");
     assert_eq!(app.session("uncertain")["status"],"needs_attention");
     app.reject("stop",json!({"id":"foreign"}));
@@ -275,12 +290,13 @@ fn crash_recovery_preserves_history_and_never_signals_database_pid() {
 }
 
 #[test]
-fn exit_drains_final_burst_and_marker_before_terminal_state() {
+fn exit_drains_final_burst_before_archive_is_complete() {
     let app=Instance::new();
     app.start("burst-tail");
     app.wait_for(||app.contains("burst-tail","READY burst-tail"));
     app.rpc("input",json!({"id":"burst-tail","data":"burst\n"}));
     app.wait_for(||app.session("burst-tail")["status"]=="exited");
+    app.closed_archive("burst-tail");
     let output=app.output("burst-tail");
     assert_eq!(output.split(|&b|b!=b'Y').map(|run|run.len()).max(),Some(64*1024));
     assert!(output.windows(b"BURST_END burst-tail\r\n".len()).any(|w|w==b"BURST_END burst-tail\r\n"));

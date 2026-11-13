@@ -333,6 +333,31 @@ impl Store {
         Ok(())
     }
 
+    /// Native process custody requires durable metadata, not an output-history
+    /// reservation. Logical history exhaustion must not disable a terminal.
+    pub fn ensure_native_capacity(&self) -> Result<()> {
+        ensure!(Self::metadata_usage(&self.0)?.1 < SESSION_METADATA_BYTES,
+            "Serialized session metadata admission exceeds 2 MiB including lifecycle reserve");
+        Ok(())
+    }
+
+    /// Classify the database error, not arbitrary diagnostic text. Only our
+    /// shipped quota guards may turn a SQLite trigger rejection into `quota`.
+    pub fn history_error_reason(error: &anyhow::Error) -> &'static str {
+        if let Some(rusqlite::Error::SqliteFailure(code, Some(message))) = error.downcast_ref::<rusqlite::Error>() {
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER &&
+                (message.starts_with("Storage retained event quota") || message.starts_with("Storage output encoded byte quota")) {
+                return "quota";
+            }
+        }
+        "io"
+    }
+
+    pub fn history_is_busy(error: &anyhow::Error) -> bool {
+        matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code,_))
+            if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+    }
+
     /// Explicit, atomic output-only purge. State/resize, sessions and task artifacts survive.
     /// A contiguous output run becomes one `purged` event at its LAST seq, with
     /// JSON-string data {firstSeq,lastSeq,reason}. Cursors inside a removed run
@@ -353,6 +378,7 @@ impl Store {
     }
 
     fn purge_history_inner(&mut self, ids: &[String], full_history: bool) -> Result<Value> {
+        let before_metadata=Self::metadata_usage(&self.0)?.1;
         let tx = self.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // Validate the whole request before changing anything, including unknown IDs.
         for id in ids {
@@ -385,7 +411,26 @@ impl Store {
                 retained_rows_freed += count;
                 markers += 1;
             }
+            // A successful purge must never leave the latest native checkpoint
+            // claiming that deleted terminal frames are a complete archive.
+            let saved: Option<String>=tx.query_row("SELECT (SELECT data FROM events WHERE session_id=? AND kind='state' ORDER BY seq DESC LIMIT 1)",[id],|r|r.get(0))?;
+            if let Some(saved)=saved {
+                let mut state:Value=serde_json::from_str(&saved)?;
+                if state["detail"]["terminalStream"].is_object() {
+                    let stream=&mut state["detail"]["terminalStream"];
+                    stream["revision"]=json!(stream["revision"].as_u64().unwrap_or(0)+1);
+                    stream["durableFrame"]=json!(0);
+                    stream["history"]["state"]=json!("incomplete");
+                    stream["history"]["reason"]=json!("explicit_purge");
+                    stream["history"]["fromFrame"]=json!(1);
+                    stream["history"]["durableFrame"]=json!(0);
+                    state["detail"]["history"]=state["detail"]["terminalStream"]["history"].clone();
+                    let data=state.to_string();validate_event(id,"state",&data)?;
+                    tx.execute("INSERT INTO events(session_id,kind,data) VALUES(?,'state',?)",params![id,data])?;
+                }
+            }
         }
+        Self::check_metadata_update(&tx,before_metadata)?;
         if retained_rows_freed > 0 {
             tx.execute("UPDATE storage_meta SET output_rejected=0 WHERE singleton=1 AND output_encoded_bytes<max_output_encoded_bytes AND event_rows<max_event_rows-lifecycle_reserve_rows", [])?;
         }
@@ -403,6 +448,18 @@ impl Store {
     }
 
     pub fn sessions(&self) -> Result<Vec<Value>> { Self::sessions_from(&self.0) }
+
+    pub fn sessions_with_live(&self, live: &[Value]) -> Result<Vec<Value>> {
+        let mut sessions=self.sessions()?;
+        for value in live {
+            if let Some(row)=sessions.iter_mut().find(|row|row["id"]==value["id"]) {
+                for key in ["status","pid","rows","cols","detail","terminalStream","history"] {
+                    if let Some(field)=value.get(key) {row[key]=field.clone();}
+                }
+            }
+        }
+        Ok(sessions)
+    }
 
     fn sessions_from(db: &Connection) -> Result<Vec<Value>> {
         let mut stmt=db.prepare("SELECT id,title,kind,status,pid,rows,cols,cwd,workspace,task_id,
@@ -429,13 +486,14 @@ impl Store {
         Ok(self.0.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))?)
     }
 
-    pub fn insert(&mut self, session:&Value)->Result<()> {self.insert_inner(session,false).map(|_|())}
+    pub fn insert(&mut self, session:&Value)->Result<()> {self.insert_inner(session,false,false).map(|_|())}
+    pub fn insert_native(&mut self, session:&Value)->Result<()> {self.insert_inner(session,false,true).map(|_|())}
     /// Session, model generation and the first replay event commit together.
     /// Other windows must know the transport before the first provider frame.
-    pub fn insert_codex(&mut self,session:&Value)->Result<Value>{self.insert_inner(session,true)}
-    fn insert_inner(&mut self,session:&Value,structured:bool)->Result<Value>{
+    pub fn insert_codex(&mut self,session:&Value)->Result<Value>{self.insert_inner(session,true,false)}
+    fn insert_inner(&mut self,session:&Value,structured:bool,native:bool)->Result<Value>{
         let id=session["id"].as_str().context("Session id required")?;
-        self.ensure_capacity()?;
+        if native { self.ensure_native_capacity()?; } else { self.ensure_capacity()?; }
         let tx=self.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO sessions(id,title,kind,status,pid,rows,cols,cwd,workspace,task_id) VALUES(?,?,?,?,?,?,?,?,?,?)",params![id,session["title"].as_str(),session["kind"].as_str(),session["status"].as_str(),session["pid"].as_i64(),session["rows"].as_i64(),session["cols"].as_i64(),session["cwd"].as_str(),session["workspace"].as_str(),session["taskId"].as_str()])?;
         let mut event=session.clone();
@@ -461,6 +519,36 @@ impl Store {
         Ok(())
     }
 
+    /// Persist the observed native lifecycle and geometry as one exempt state
+    /// checkpoint. Applying a PTY resize never depends on this succeeding.
+    pub fn native_checkpoint(&mut self, session: &Value) -> Result<()> {
+        let id=session["id"].as_str().context("Session id required")?;
+        let data=json!({"status":session["status"],"rows":session["rows"],"cols":session["cols"],"detail":session["detail"]}).to_string();
+        validate_event(id,"state",&data)?;
+        let before=Self::metadata_usage(&self.0)?.1;
+        let tx=self.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let prior:Option<String>=tx.query_row("SELECT (SELECT data FROM events WHERE session_id=? AND kind='state' ORDER BY seq DESC LIMIT 1)",[id],|r|r.get(0))?;
+        if let Some(prior)=prior {
+            let previous:Value=serde_json::from_str(&prior)?;
+            let old=&previous["detail"]["terminalStream"];
+            let new=&session["detail"]["terminalStream"];
+            if old.is_object() && new.is_object() && old["generation"]==new["generation"] {
+                let old_revision=old["revision"].as_u64().unwrap_or(0);
+                let new_revision=new["revision"].as_u64().unwrap_or(0);
+                if new_revision<old_revision || (new_revision==old_revision &&
+                    (new["history"]["durableFrame"].as_u64().unwrap_or(0)<old["history"]["durableFrame"].as_u64().unwrap_or(0) ||
+                        (old["history"]["state"]=="complete" && new["history"]["state"]!="complete"))) {
+                    return Ok(());
+                }
+            }
+        }
+        ensure!(tx.execute("UPDATE sessions SET status=?,rows=?,cols=? WHERE id=?",params![session["status"].as_str(),session["rows"].as_i64(),session["cols"].as_i64(),id])?==1,"Unknown session");
+        tx.execute("INSERT INTO events(session_id,kind,data) VALUES(?,'state',?)",params![id,data])?;
+        Self::check_metadata_update(&tx,before)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn restarting(&mut self,id:&str)->Result<()> {
         let data=json!({"status":"starting","pid":null,"detail":{"reason":"explicit reconnect; no message resend"}}).to_string();validate_event(id,"state",&data)?;
         let before=Self::metadata_usage(&self.0)?.1;let tx=self.0.transaction()?;
@@ -469,7 +557,8 @@ impl Store {
     }
 
     pub fn activate(&mut self, id: &str, pid: u32) -> Result<()> {
-        let data=json!({"status":"running","pid":pid}).to_string();
+        let detail=self.session(id)?.context("Unknown session")?["detail"].clone();
+        let data=json!({"status":"running","pid":pid,"detail":detail}).to_string();
         validate_event(id,"state",&data)?;
         let before=Self::metadata_usage(&self.0)?.1;
         let tx = self.0.transaction()?;
@@ -495,10 +584,11 @@ impl Store {
     pub fn output(&self, id: &str, data: &str) -> Result<()> {
         validate_event(id,"output",data)?;
         if let Err(error) = self.0.execute("INSERT INTO events(session_id,kind,data) VALUES(?,'output',?)", params![id,data]) {
-            if error.to_string().contains("Storage ") {
+            let error=anyhow::Error::from(error);
+            if Self::history_error_reason(&error)=="quota" {
                 let _ = self.0.execute("UPDATE storage_meta SET output_rejected=1 WHERE singleton=1", []);
             }
-            return Err(error.into());
+            return Err(error);
         }
         Ok(())
     }
@@ -507,8 +597,9 @@ impl Store {
     pub fn provider_event(&mut self,id:&str,value:&Value)->Result<()> {
         let data=serde_json::to_string(value)?;validate_event(id,"provider",&data)?;
         if let Err(error)=self.0.execute("INSERT INTO events(session_id,kind,data) VALUES(?,'provider',?)",params![id,data]) {
-            if error.to_string().contains("Storage "){let _=self.0.execute("UPDATE storage_meta SET output_rejected=1 WHERE singleton=1",[]);}
-            return Err(error.into());
+            let error=anyhow::Error::from(error);
+            if Self::history_error_reason(&error)=="quota" {let _=self.0.execute("UPDATE storage_meta SET output_rejected=1 WHERE singleton=1",[]);}
+            return Err(error);
         }
         Ok(())
     }

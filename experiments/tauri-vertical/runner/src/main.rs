@@ -4,6 +4,7 @@ use std::{path::PathBuf, sync::Arc};
 mod fixture;
 mod runner;
 mod storage;
+mod terminal_stream;
 mod projects;
 mod git_worktree;
 
