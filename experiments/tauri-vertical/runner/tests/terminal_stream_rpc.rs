@@ -36,7 +36,9 @@ impl Instance {
         let mut instance = Self { root: tempfile::Builder::new().prefix("awts-").tempdir_in("/tmp").unwrap(), child: None };
         fs::set_permissions(instance.root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         instance.launch();
-        assert_eq!(instance.rpc("status", json!({}))["terminalStreamVersion"], 1);
+        let status=instance.rpc("status", json!({}));
+        assert_eq!(status["terminalStreamVersion"], 1);
+        assert_eq!(status["runnerVersion"], env!("CARGO_PKG_VERSION"));
         instance
     }
     fn path(&self, name: &str) -> PathBuf { self.root.path().join(name) }

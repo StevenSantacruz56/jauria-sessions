@@ -431,7 +431,7 @@ impl Runner {
         if op == "status" {
             let fresh = self.db.try_lock().ok().and_then(|db| (|| -> Result<Value> {
                 let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
-                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
+                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
             })().ok());
             if let Some(value)=fresh {*self.status_cache.lock().unwrap()=value;}
             let mut result=self.status_cache.lock().unwrap().clone();

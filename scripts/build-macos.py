@@ -12,6 +12,8 @@ env=os.environ.copy()
 # Bundle resource path expects the runner in runner/target. Avoid inherited target overrides.
 env.pop('CARGO_TARGET_DIR',None)
 def run(argv,cwd):subprocess.run(argv,cwd=cwd,env=env,check=True)
+run(['python3','scripts/version.py','--check'],ROOT)
+run(['python3','-m','unittest','discover','-s','tests','-p','test_*.py'],ROOT)
 runner=APP/'runner';desktop=APP/'desktop'
 run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],desktop)
 run(['npm','run','build'],desktop)

@@ -7,7 +7,7 @@
 
 Jauria reúne Codex, Claude Code y una terminal zsh en una aplicación de escritorio para macOS. Mantén tus sesiones organizadas por carpeta, vuelve a su historial y trabaja en dos paneles. Para tareas de programación, registra un proyecto Git y prepara un worktree separado para cada tarea.
 
-Candidato de desarrollo v0.1. La compilación y las pruebas locales no equivalen a aceptación de producto, instalación validada en otro Mac ni certificación de todos los flujos con proveedores reales.
+Candidato de desarrollo. Consulta la [versión actual](VERSION) y el [changelog](CHANGELOG.md) para ver los cambios de cada entrega. La compilación y las pruebas locales no equivalen a aceptación de producto, instalación validada en otro Mac ni certificación de todos los flujos con proveedores reales.
 
 ## Para qué sirve
 

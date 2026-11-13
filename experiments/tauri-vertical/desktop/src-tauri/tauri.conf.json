@@ -1,16 +1,46 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Jauria",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "local.agentworkspace.vertical",
-  "build": { "frontendDist": "../dist", "devUrl": "http://127.0.0.1:5173", "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build" },
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
   "app": {
-    "windows": [{ "label": "main", "title": "Jauria", "width": 1220, "height": 800, "minWidth": 760, "minHeight": 560 }],
-    "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: data:; font-src 'self' data:; object-src 'none'; base-uri 'self'" }
+    "windows": [
+      {
+        "label": "main",
+        "title": "Jauria",
+        "width": 1220,
+        "height": 800,
+        "minWidth": 760,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: data:; font-src 'self' data:; object-src 'none'; base-uri 'self'"
+    }
   },
   "bundle": {
-    "active": true, "targets": ["app"], "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "resources": { "../../runner/target/release/aw-runner": "bin/aw-runner" },
-    "macOS": { "minimumSystemVersion": "11.0" }
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../runner/target/release/aw-runner": "bin/aw-runner"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

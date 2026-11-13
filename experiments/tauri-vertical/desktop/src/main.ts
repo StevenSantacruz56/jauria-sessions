@@ -27,7 +27,7 @@ import { shell, paneMarkup, icon } from './ui';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
 type Session = { terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { terminalStreamVersion?: number; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type RunnerStatus = WorkspaceData & { terminalStreamVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
@@ -232,7 +232,7 @@ function refresh() {
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
-  text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
+  text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'}${runner.runnerVersion ? ` · v${runner.runnerVersion}` : ''} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
   const capabilities=runner as RunnerStatus & {telemetryVersion?:number;verificationVersion?:number;recoveryVersion?:number;handoffVersion?:number;codexVersion?:number;terminalSessionVersion?:number;projectLifecycleVersion?:number};
   $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1);
   $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
