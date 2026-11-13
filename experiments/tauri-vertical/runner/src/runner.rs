@@ -431,7 +431,7 @@ impl Runner {
         if op == "status" {
             let fresh = self.db.try_lock().ok().and_then(|db| (|| -> Result<Value> {
                 let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
-                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
+                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
             })().ok());
             if let Some(value)=fresh {*self.status_cache.lock().unwrap()=value;}
             let mut result=self.status_cache.lock().unwrap().clone();
@@ -1016,7 +1016,9 @@ fn command(kind: &str, id: &str, cwd: &Path) -> Result<CommandBuilder> {
         "terminal" => {let mut cmd=CommandBuilder::new("/bin/zsh");cmd.arg("-il");cmd},
         "codex" => {
             let mut cmd=CommandBuilder::new("/opt/homebrew/bin/codex");
-            cmd.args(["--no-daemon","--no-alt-screen","--sandbox","workspace-write","--ask-for-approval","on-request","-c","approvals_reviewer=\"user\""]);
+            // Let the native CLI resolve persisted approvals, sandbox and reviewer
+            // settings. Presentation flags must not reset the account policy.
+            cmd.args(["--no-daemon","--no-alt-screen"]);
             cmd
         },
         "claude" => {
@@ -1024,7 +1026,9 @@ fn command(kind: &str, id: &str, cwd: &Path) -> Result<CommandBuilder> {
             // Interactive Claude uses the account's native settings and MCP
             // discovery, including project trust/approval prompts. The empty
             // MCP override belongs only to the isolated diagnostic probe.
-            cmd.args(["--permission-mode","default","--no-chrome"]);
+            // A forced permission mode overrides permissions.defaultMode, including
+            // a mode the user already saved for future sessions.
+            cmd.arg("--no-chrome");
             cmd
         },
         "codex_probe" => {
@@ -1181,10 +1185,31 @@ mod tests {
         for flag in ["--strict-mcp-config","--mcp-config","--setting-sources","--dangerously-skip-permissions"] {
             assert!(!args.iter().any(|arg|arg==flag),"interactive configuration suppressed: {flag}");
         }
-        assert!(args.windows(2).any(|pair|pair[0]=="--permission-mode" && pair[1]=="default"));
+        assert_eq!(args, &[PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/bin/claude").into_os_string(),std::ffi::OsString::from("--no-chrome")]);
         let probe=command("claude_probe","mcp-config-probe",Path::new("/tmp"))?;
         assert!(probe.get_argv().windows(2).any(|pair|pair[0]=="--mcp-config" && pair[1]=="{\"mcpServers\":{}}"));
         assert!(probe.get_argv().iter().any(|arg|arg=="--strict-mcp-config"));
+        Ok(())
+    }
+    #[test]
+    fn native_providers_preserve_saved_policy_sources_and_probes_stay_isolated() -> Result<()> {
+        let cwd=Path::new("/tmp");
+        for kind in ["claude","codex"] {
+            let cmd=command(kind,"saved-policy-regression",cwd)?;
+            let args=cmd.get_argv();
+            for forbidden in ["--permission-mode","--allowedTools","--disallowedTools","--dangerously-skip-permissions", "--sandbox","--ask-for-approval","--approve-for-me","--dangerously-bypass-approvals-and-sandbox","--ignore-user-config","--ignore-rules","--setting-sources","--strict-mcp-config","--config","-c"] {
+                assert!(!args.iter().any(|arg|arg==forbidden),"{kind}: native policy overridden by {forbidden}");
+            }
+            assert_eq!(cmd.get_cwd(),Some(&std::ffi::OsString::from(cwd)));
+            assert_eq!(cmd.get_env("HOME"),std::env::var_os("HOME").as_deref());
+        }
+        let codex=command("codex","saved-policy-regression",cwd)?;
+        assert_eq!(codex.get_argv(),&[std::ffi::OsString::from("/opt/homebrew/bin/codex"),std::ffi::OsString::from("--no-daemon"),std::ffi::OsString::from("--no-alt-screen")]);
+        let probe=command("codex_probe","saved-policy-probe",cwd)?;
+        assert!(probe.get_argv().iter().any(|arg|arg=="--ignore-user-config"));
+        assert!(probe.get_argv().windows(2).any(|pair|pair[0]=="--sandbox" && pair[1]=="read-only"));
+        let settings:Value=serde_json::from_str(&crate::claude_quota::settings(Path::new("/tmp/runner"),Path::new("/tmp/profile"))?)?;
+        assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(),vec!["statusLine"]);
         Ok(())
     }
     #[test]

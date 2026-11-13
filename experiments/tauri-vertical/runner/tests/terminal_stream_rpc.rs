@@ -38,6 +38,7 @@ impl Instance {
         instance.launch();
         let status=instance.rpc("status", json!({}));
         assert_eq!(status["terminalStreamVersion"], 1);
+        assert_eq!(status["nativePermissionsVersion"], 1);
         assert_eq!(status["runnerVersion"], env!("CARGO_PKG_VERSION"));
         instance
     }
