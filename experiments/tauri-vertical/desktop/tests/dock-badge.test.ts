@@ -108,3 +108,30 @@ test('viewing/marking seen clears unread without approving permissions or resolv
     await poll(25); attention.invalidate(); assert.equal(dockUnreadCount(attention.list(sessions)), 0);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
+
+// Exercise the attention-to-Dock boundary, rather than assuming an empty input.
+test('raw native Codex redraw signals never increment Dock; explicit alert does and viewing clears it', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'jauria-dock-raw-'));
+  try {
+    const output = join(temporary, 'attention.mjs');
+    await build({ entryPoints: ['src/attention.ts'], bundle: true, platform: 'node', format: 'esm', outfile: output });
+    const { SessionAttention } = await import(pathToFileURL(output).href);
+    const attention = new SessionAttention();
+    const sessions = [{ id: 'codex', title: 'Codex', kind: 'codex', status: 'running', transport: 'pty' }];
+    const calls: (number | undefined)[] = [];
+    const badge = new DockBadge(async count => { calls.push(count); });
+    badge.setCount(dockUnreadCount(attention.list(sessions))); await tick();
+    for (let i = 0; i < 500; i++) {
+      attention.signal('codex', 'output');
+      badge.setCount(dockUnreadCount(attention.list(sessions)));
+    }
+    await tick(); assert.deepEqual(calls, [undefined]);
+    attention.signal('codex', 'bell');
+    badge.setCount(dockUnreadCount(attention.list(sessions))); await tick();
+    assert.deepEqual(calls, [undefined, 1]);
+    attention.consumeActivity('codex');
+    badge.setCount(dockUnreadCount(attention.list(sessions))); await tick();
+    assert.deepEqual(calls, [undefined, 1, undefined]);
+    await badge.dispose();
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});

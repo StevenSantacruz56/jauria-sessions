@@ -21,19 +21,31 @@ try {
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
     assert.equal(a.list([session('unknown', 'future')]).length, 1);
   });
-  test('PTY output and explicit signals coalesce per session; viewing consumes activity', () => {
+  test('primed running native Codex ignores repeated raw output without storing activity', () => {
+    const a = new SessionAttention();
+    const sessions = [{ ...session('codex'), kind: 'codex' }];
+    assert.deepEqual(a.list(sessions), []);
+    for (let i = 0; i < 500; i++) {
+      a.signal('codex', 'output');
+      assert.deepEqual(a.list(sessions), [], `redraw ${i} cannot become an alert`);
+    }
+    assert.equal(a.consumeActivity('codex'), false, 'ignored output leaves nothing to consume');
+  });
+  test('explicit signals coalesce per session; viewing consumes activity and allows recurrence', () => {
     const a = new SessionAttention(); const sessions = [session()]; a.list(sessions);
-    for (let i = 0; i < 500; i++) a.signal('claude', 'output');
-    a.signal('claude', 'bell');
+    for (let i = 0; i < 500; i++) {
+      a.signal('claude', 'output'); a.signal('claude', 'bell'); a.signal('claude', 'notification');
+    }
     const items = a.list(sessions); assert.equal(items.length, 1); assert.equal(items[0].keys.length, 2); assert.equal(items[0].unseen, true);
-    assert.match(items[0].reason, /Salida nueva sin ver/); assert.doesNotMatch(items[0].reason, /permiso|turno/);
+    assert.match(items[0].reason, /alerta/); assert.doesNotMatch(items[0].reason, /Salida nueva sin ver/); assert.doesNotMatch(items[0].reason, /permiso|turno/);
     a.see(items); assert.deepEqual(a.list(sessions), []);
-    a.signal('claude', 'output'); assert.equal(a.list(sessions)[0].unseen, true);
+    a.signal('claude', 'output'); assert.deepEqual(a.list(sessions), []);
+    a.signal('claude', 'notification'); assert.equal(a.list(sessions)[0].unseen, true);
   });
   test('focus consumes only activity; custody and permissions cannot be cleared by viewing output', async () => {
     const a = new SessionAttention(); const sessions = [session('s', 'needs_attention', 'app-server')]; a.list(sessions);
     await a.poll(sessions, async () => summary('s'), () => true); a.list(sessions);
-    a.signal('s', 'output'); a.signal('s', 'bell'); assert.equal(a.list(sessions)[0].keys.length, 4);
+    a.signal('s', 'output'); a.signal('s', 'bell'); a.signal('s', 'notification'); assert.equal(a.list(sessions)[0].keys.length, 4);
     assert.equal(a.consumeActivity('s'), true);
     const remaining = a.list(sessions); assert.equal(remaining.length, 1); assert.equal(remaining[0].keys.length, 2);
     assert.match(remaining[0].reason, /custodia/); assert.match(remaining[0].reason, /permiso pendiente/);

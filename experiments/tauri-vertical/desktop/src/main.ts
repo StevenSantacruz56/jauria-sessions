@@ -227,19 +227,19 @@ function refresh() {
   const alerts = attention.list(sessions);
   dockBadge.setCount(connected && !replaying ? dockUnreadCount(alerts) : 0);
   const alertById = new Map(alerts.map(item => [item.id, item]));
-  const unseen = alerts.filter(item => item.unseen && !isAttended(item.id)).length;
+  const unseen = alerts.filter(item => item.unseen && !item.stale && !isAttended(item.id)).length;
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
     ? alertById.has(s.id) && matchesSession(s, 'all', q) : matchesSession(s, f, q);
   const count = (f: SessionFilter) => sessions.filter(s => matches(s, f, '')).length;
   $('#session-alerts').hidden = alerts.length === 0;
   const confirmed = alerts.filter(item => !item.stale).length;
-  text('#session-alerts', `Avisos · ${confirmed}${alerts.some(item => item.stale) ? ' + ?' : ''}${unseen ? ` · ${unseen} sin ver` : ''}`);
+  text('#session-alerts', `${unseen ? `Avisos nuevos · ${unseen}` : `Pendientes · ${confirmed}`}${alerts.some(item => item.stale) ? ' + ?' : ''}`);
   $('#session-alerts').title = alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
   $('#attention-banner').hidden = unseen === 0;
   text('#attention-summary', `${unseen} ${unseen === 1 ? 'sesión con avisos nuevos' : 'sesiones con avisos nuevos'}.${!connected || alerts.some(item => item.stale) ? ' Hay estados sin confirmar.' : ''}`);
   syncMessageRail();
   nativeAttention.update(alerts);
-  document.title = alerts.length ? `(${alerts.length}) Avisos · Jauría` : 'Jauría';
+  document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
   const occupied=sessions.filter(s=>!['exited','stopped','failed','interrupted','released'].includes(s.status)).length;
   if (filter === 'attention' && count('attention') === 0) filter = 'open';
@@ -499,7 +499,6 @@ async function poll(version: number) {
         } else if (event.kind === 'output') {
           const view = views.get(event.sessionId) ?? ensure({ id: event.sessionId, title: event.sessionId, kind: 'unknown', cwd: null, status: 'recuperando', rows: 24, cols: 80 });
           if (!replaying) interactivePoll.output();
-          if (!replaying && views.get(event.sessionId)?.session.transport !== 'app-server' && !isAttended(event.sessionId)) attention.signal(event.sessionId, 'output');
           const binary = atob(event.data);
           const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
           // Queue one bounded page so xterm can coalesce parser work. Awaiting

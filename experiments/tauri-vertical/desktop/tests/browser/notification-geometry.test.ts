@@ -30,6 +30,7 @@ async function installMock(page: Page) {
       transport: 'pty', status: 'running', cwd: '/synthetic/notification-geometry', rows: 24, cols: 80 };
     const events: any[] = [];
     const resizes: any[] = [];
+    const badges: any[] = [];
     const unexpected: string[] = [];
     let focused = true, holdReplay = false, interruptError = '', evidence: any;
     const status = () => structuredClone({ pid: 123, generation: 'synthetic-geometry',
@@ -38,18 +39,19 @@ async function installMock(page: Page) {
     const output = (data: string) => events.push({ seq: events.length + 1,
       sessionId: session.id, kind: 'output', data: btoa(data) });
     w.geometryFixture = {
-      resizes, unexpected, output,
+      resizes, badges, unexpected, output,
       focus(value: boolean) { focused = value; },
       failInterrupt(value: string) { interruptError = value; },
       holdReplay(value: boolean) { holdReplay = value; },
       snapshot() { return { resizes: structuredClone(resizes), evidence: structuredClone(evidence) }; },
     };
     w.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: 'main' } },
       async invoke(cmd: string, args: any) {
         if (cmd === 'connect_runner') return { dataDir: '/synthetic', socket: '/synthetic.sock', status: status(), smoke: true };
         if (cmd === 'probe_tools') return [];
         if (cmd === 'record_ui_evidence') { evidence = args.payload; return; }
-        if (cmd === 'plugin:window|set_badge_count') return;
+        if (cmd === 'plugin:window|set_badge_count') { badges.push(args); return; }
         if (cmd === 'runner_request') {
           if (args.op === 'telemetry') return { ok: true, result: {} };
           if (args.op === 'status') return { ok: true, result: status() };
@@ -138,6 +140,40 @@ try {
                 assert.ok(frames.length > 0, `${label}: observed rendered frames`);
                 for (const frame of frames) assert.deepEqual(frame, before.bounds, `${label}: transient host bounds`);
               };
+              // Running native Codex has already been listed and fitted. Ordinary
+              // output (including OSC's BEL terminator) must stay quiet while away.
+              await page.evaluate(() => (window as any).geometryFixture.focus(false));
+              for (const data of [
+                'ordinary native Codex output\r\n',
+                '\r| working\x1b[K', '\r/ working\x1b[2K\x1b[1G',
+                '\x1b]9;4;1;75\x07', '\x1b]9;4;0;0\x1b\\',
+              ]) {
+                const seq = await page.evaluate(data => {
+                  const f = (window as any).geometryFixture; f.output(data.repeat(20));
+                  return Number(document.querySelector('#cursor')?.textContent?.split(':').at(-1)) + 1;
+                }, data);
+                await page.waitForFunction(seq => Number(document.querySelector('#cursor')?.textContent?.split(':').at(-1)) >= seq, seq);
+                await check('raw redraw/progress remains quiet');
+                assert.equal(await page.locator('#attention-banner').isVisible(), false);
+                assert.equal(await page.locator('#session-alerts').isVisible(), false);
+                assert.equal(await page.locator('#attention-filter').isVisible(), false);
+                assert.equal(await page.locator('#workbench-messages').getAttribute('data-active'), 'idle');
+                assert.deepEqual(await page.evaluate(() => (window as any).geometryFixture.badges.filter((args: any) => args.value > 0)), [], 'no positive Dock writes');
+              }
+              // Each explicit protocol must still alert, recur after consumption,
+              // and leave the fixed rail and PTY geometry unchanged.
+              for (const data of ['\x07', '\x1b]9;explicit Codex notice\x07', '\x1b]777;notify;Codex;review needed\x1b\\']) {
+                await page.evaluate(data => (window as any).geometryFixture.output(data), data);
+                await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
+                assert.equal(await page.locator('#session-alerts').isVisible(), true);
+                await page.waitForFunction(() => (window as any).geometryFixture.badges.some((args: any) => args.value === 1));
+                await check('explicit notification shown');
+                await page.evaluate(() => { (window as any).geometryFixture.focus(true); window.dispatchEvent(new Event('focus')); });
+                await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
+                assert.equal(await page.locator('#session-alerts').isVisible(), false, 'view consumes explicit activity');
+                await check('explicit notification consumed by viewing');
+                await page.evaluate(() => (window as any).geometryFixture.focus(false));
+              }
               const attention = async () => {
                 await page.evaluate(() => { const f = (window as any).geometryFixture;
                   f.focus(false); f.output('foreground output while window unfocused\r\n\x07'); });

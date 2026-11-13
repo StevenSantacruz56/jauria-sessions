@@ -14,6 +14,9 @@ export class SessionAttention {
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
   signal(id: string, kind: 'output' | 'bell' | 'notification' | 'ended') {
+    // A PTY emits spinner redraws, cursor moves and progress while working.
+    // Raw output is not evidence that a person needs to attend the session.
+    if (kind === 'output') return;
     const values = this.signals.get(id) ?? new Set<string>();
     values.add(kind); this.signals.set(id, values);
   }
@@ -31,7 +34,7 @@ export class SessionAttention {
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');
       if (p?.count) add(`permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`, `${p.count} ${p.count === 1 ? 'permiso pendiente' : 'permisos pendientes'}${p.generation !== s.codex?.generation ? ' · generación anterior, caducado' : stale ? ' · sin confirmar' : ''}`);
-      for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'output' ? 'Salida nueva sin ver' : kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
+      for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
       for (const key of keys) next.add(key);
       // Initial lifecycle snapshot is quiet, but remains available in the list.
       if (!this.initialized.has(s.id)) { for (const key of keys) this.seen.add(key); this.initialized.add(s.id); }
