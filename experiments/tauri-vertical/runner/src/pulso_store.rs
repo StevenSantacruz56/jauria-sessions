@@ -1,0 +1,831 @@
+//! Pulso's independent, transactional document store. Never opens the core database.
+use anyhow::{Context, Result, bail, ensure};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+pub(super) struct Store(pub Connection);
+#[derive(Clone)]
+pub(super) struct Principal {
+    pub id: String,
+    pub session: Option<String>,
+    pub projects: HashSet<String>,
+    pub create: bool,
+}
+impl Principal {
+    pub fn ui() -> Self {
+        Self {
+            id: "ui".into(),
+            session: None,
+            projects: HashSet::new(),
+            create: true,
+        }
+    }
+    pub fn sees(&self, p: &str) -> bool {
+        self.session.is_none() || self.projects.contains(p)
+    }
+}
+pub(super) fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+pub(super) fn fields(a: &Value, allowed: &[&str]) -> Result<()> {
+    let o = a.as_object().context("args must be an object")?;
+    ensure!(
+        o.keys().all(|k| allowed.contains(&k.as_str())),
+        "unknown field"
+    );
+    Ok(())
+}
+pub(super) fn string<'a>(a: &'a Value, k: &str, max: usize, required: bool) -> Result<&'a str> {
+    let s = match a.get(k) {
+        Some(v) => v.as_str().context("expected string")?,
+        None if !required => "",
+        None => bail!("missing field {k}"),
+    };
+    ensure!(
+        s.chars().count() <= max && (!required || !s.trim().is_empty()),
+        "invalid {k} length"
+    );
+    Ok(s)
+}
+pub(super) fn id(a: &Value, k: &str) -> Result<String> {
+    let s = string(a, k, 80, true)?;
+    ensure!(
+        s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
+            && s != "."
+            && s != "..",
+        "invalid identifier"
+    );
+    Ok(s.into())
+}
+fn boolean(a: &Value, k: &str) -> Result<()> {
+    if let Some(v) = a.get(k) {
+        ensure!(v.is_boolean(), "invalid boolean");
+    }
+    Ok(())
+}
+impl Store {
+    pub fn open(path: &Path) -> Result<Self> {
+        let c = Connection::open(path)?;
+        c.busy_timeout(std::time::Duration::from_secs(1))?;
+        let app: i64 = c.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        ensure!(
+            app == 0x50554c53 || (app == 0 && version == 0),
+            "foreign database"
+        );
+        ensure!(version <= 1, "future Pulso schema");
+        let check: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+        ensure!(check == "ok", "corrupt Pulso database");
+        if version == 0 {
+            let count: i64 = c.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )?;
+            ensure!(count == 0, "unrecognized database");
+            c.execute_batch(
+                "BEGIN IMMEDIATE;
+                 PRAGMA application_id=1347767379;
+                 CREATE TABLE docs(kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(kind,id));
+                 CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('revision','0');
+                 CREATE TABLE receipts(principal TEXT NOT NULL,request TEXT NOT NULL,body TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(principal,request));
+                 CREATE TABLE events(seq INTEGER PRIMARY KEY,body TEXT NOT NULL);
+                 CREATE TABLE principals(session TEXT PRIMARY KEY,id TEXT NOT NULL);
+                 CREATE TABLE policies(key TEXT PRIMARY KEY,body TEXT NOT NULL);
+                 PRAGMA user_version=1;
+                 COMMIT;",
+            )?;
+        }
+        ensure!(
+            c.query_row("PRAGMA application_id", [], |r| r.get::<_, i64>(0))? == 0x50554c53,
+            "invalid application id"
+        );
+        c.prepare("SELECT principal,request,body,result FROM receipts LIMIT 0")?;
+        c.prepare("SELECT kind,id,body FROM docs LIMIT 0")?;
+        c.prepare("SELECT session,id FROM principals LIMIT 0")?;
+        c.prepare("SELECT key,body FROM policies LIMIT 0")?;
+        c.prepare("SELECT seq,body FROM events LIMIT 0")?;
+        for sql in [
+            "SELECT count(*) FROM docs WHERE NOT json_valid(body)",
+            "SELECT count(*) FROM receipts WHERE NOT json_valid(body) OR NOT json_valid(result)",
+            "SELECT count(*) FROM events WHERE NOT json_valid(body)",
+            "SELECT count(*) FROM policies WHERE NOT json_valid(body)",
+        ] {
+            ensure!(
+                c.query_row(sql, [], |r| r.get::<_, i64>(0))? == 0,
+                "corrupt Pulso documents"
+            );
+        }
+        configure_budget(&c)?;
+        let store = Self(c);
+        ensure!(
+            store.revision()? < i64::MAX as u64,
+            "invalid Pulso revision"
+        );
+        Ok(store)
+    }
+    pub fn revision(&self) -> Result<u64> {
+        Ok(self
+            .0
+            .query_row("SELECT value FROM meta WHERE key='revision'", [], |r| {
+                r.get::<_, String>(0)
+            })?
+            .parse()?)
+    }
+    pub fn get(&self, kind: &str, id: &str) -> Result<Value> {
+        let s: Option<String> = self
+            .0
+            .query_row(
+                "SELECT body FROM docs WHERE kind=? AND id=?",
+                params![kind, id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        serde_json::from_str(&s.context("not found or not authorized")?).map_err(Into::into)
+    }
+    fn exists(&self, kind: &str, id: &str) -> Result<bool> {
+        Ok(self.0.query_row(
+            "SELECT EXISTS(SELECT 1 FROM docs WHERE kind=? AND id=?)",
+            params![kind, id],
+            |r| r.get(0),
+        )?)
+    }
+    fn insert(&self, kind: &str, v: &Value) -> Result<()> {
+        self.0.execute(
+            "INSERT INTO docs(kind,id,body) VALUES(?,?,?)",
+            params![kind, v["id"].as_str().context("missing id")?, v.to_string()],
+        )?;
+        Ok(())
+    }
+    fn related(&self,kind:&str,path:&str,id:&str,limit:usize,cursor:u64)->Result<Vec<Value>> {
+        ensure!(matches!(path,"$.itemId"|"$.projectId"),"invalid relationship path");
+        let mut q=self.0.prepare(&format!("SELECT body FROM docs WHERE kind=? AND json_extract(body,'{path}')=? ORDER BY rowid DESC LIMIT ? OFFSET ?"))?;
+        let rows=q.query_map(params![kind,id,limit as i64,i64::try_from(cursor)?],|r|r.get::<_,String>(0))?;
+        rows.map(|r|Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    fn put(&self, kind: &str, v: &Value) -> Result<()> {
+        self.0.execute(
+            "INSERT INTO docs VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+            params![kind, v["id"].as_str().context("missing id")?, v.to_string()],
+        )?;
+        Ok(())
+    }
+    pub fn authorized(&self, p: &Principal, kind: &str, id: &str) -> Result<Value> {
+        let v = self.get(kind, id)?;
+        let project = if kind == "project" {
+            v["id"].as_str()
+        } else {
+            v["projectId"].as_str()
+        };
+        ensure!(
+            p.session.is_none() || project.is_some_and(|x| p.sees(x)),
+            "not found or not authorized"
+        );
+        Ok(v)
+    }
+    pub fn read(&self, p: &Principal, op: &str, a: &Value) -> Result<Value> {
+        match op {
+            "revision" => {
+                fields(a, &[])?;
+                // Ignore activity outside the grant, including link-only changes.
+                let revision = if p.session.is_none() {
+                    self.revision()?
+                } else {
+                    // Each grant performs one indexed lookup; unrelated history is never scanned.
+                    self.0.query_row(
+                        "SELECT COALESCE(max((SELECT max(seq) FROM events
+                         WHERE json_extract(body,'$.projectId')=grant.value)),0)
+                         FROM json_each(?) AS grant",
+                        [serde_json::to_string(&p.projects)?],
+                        |r| r.get::<_, i64>(0),
+                    )? as u64
+                };
+                Ok(json!({"revision":revision}))
+            }
+            "project" => {
+                fields(a, &["id"])?;
+                Ok(json!({"project":self.authorized(p,"project",&id(a,"id")?)?}))
+            }
+            "item" => {
+                fields(a, &["id"])?;
+                let i = id(a, "id")?;
+                let item = self.authorized(p, "item", &i)?;
+                let links=self.related("link","$.itemId",&i,101,0)?;
+                let links_more=links.len()>100;let links:Vec<_>=links.into_iter().take(100).collect();
+                let checkpoints=self.related("checkpoint","$.itemId",&i,11,0)?;
+                let checkpoints_more=checkpoints.len()>10;let checkpoints:Vec<_>=checkpoints.into_iter().take(10).rev().collect();
+                Ok(json!({"item":item,"links":links,"checkpoints":checkpoints,"linksHasMore":links_more,"checkpointsHasMore":checkpoints_more,"checkpointCursor":10}))
+            }
+            "checkpoint_history"=>{
+                fields(a,&["itemId","cursor","limit"])?;let item=id(a,"itemId")?;self.authorized(p,"item",&item)?;
+                let size=limit(a,10)?;ensure!(size<=10,"checkpoint pages admit at most 10 records");
+                let cursor=a.get("cursor").map(|v|v.as_u64().context("invalid cursor")).transpose()?.unwrap_or(0);
+                let records=self.related("checkpoint","$.itemId",&item,size+1,cursor)?;
+                let more=records.len()>size;let records:Vec<_>=records.into_iter().take(size).collect();
+                Ok(json!({"checkpoints":records,"hasMore":more,"nextCursor":if more{Some(cursor+size as u64)}else{None}}))
+            }
+
+            "projects" | "items" => {
+                fields(
+                    a,
+                    if op == "projects" {
+                        &["cursor", "limit", "archived"]
+                    } else {
+                        &["projectId", "cursor", "limit", "archived"]
+                    },
+                )?;
+                boolean(a, "archived")?;
+                let limit = limit(a, 50)?;
+                let cursor = match a.get("cursor") {
+                    None => 0,
+                    Some(v) => v.as_u64().context("invalid cursor")? as usize,
+                };
+                if let Some(v) = a.get("projectId") {
+                    ensure!(v.is_null() || v.is_string(), "invalid projectId");
+                    if !v.is_null() {
+                        let i = id(a, "projectId")?;
+                        self.authorized(p, "project", &i)?;
+                    }
+                }
+                let scope=serde_json::to_string(&p.projects)?;
+                let kind=if op=="projects"{"project"}else{"item"};
+                use rusqlite::types::Value as SqlValue;
+                let filtered=op=="items"&&a.get("projectId").is_some();
+                let filter=if filtered{"AND json_extract(body,'$.projectId') IS ?"}else{""};
+                let sql=format!("SELECT CASE WHEN kind='project' THEN json_set(body,'$.plan','') ELSE body END FROM docs
+                    WHERE kind=? AND (? OR CASE WHEN kind='project' THEN id ELSE json_extract(body,'$.projectId') END IN (SELECT value FROM json_each(?)))
+                    AND COALESCE(json_extract(body,'$.archived'),0)=? {filter}
+                    ORDER BY CASE WHEN kind='item' THEN CAST(json_extract(body,'$.position') AS REAL) ELSE 0 END,CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ? OFFSET ?");
+                let mut parameters=vec![SqlValue::Text(kind.into()),SqlValue::Integer(i64::from(p.session.is_none())),SqlValue::Text(scope),SqlValue::Integer(i64::from(a["archived"].as_bool().unwrap_or(false)))];
+                if filtered{parameters.push(a["projectId"].as_str().map(|id|SqlValue::Text(id.into())).unwrap_or(SqlValue::Null));}
+                parameters.push(SqlValue::Integer((limit+1) as i64));parameters.push(SqlValue::Integer(i64::try_from(cursor)?));
+                let mut query=self.0.prepare(&sql)?;
+                let rows=query.query_map(rusqlite::params_from_iter(parameters),|r|r.get::<_,String>(0))?;
+                let mut values:Vec<Value>=rows.map(|r|Ok(serde_json::from_str(&r?)?)).collect::<Result<_>>()?;
+                let more=values.len()>limit;values.truncate(limit);
+                let rev = self.read(p, "revision", &json!({}))?["revision"].clone();
+                Ok(
+                    json!({if op=="projects"{"projects"}else{"items"}:values,"revision":rev,"hasMore":more,"nextCursor":if more{Some(cursor+limit)}else{None}}),
+                )
+            }
+            "links" => {
+                fields(a, &["projectId"])?;
+                let i = id(a, "projectId")?;
+                self.authorized(p, "project", &i)?;
+                let mut links=self.related("link","$.projectId",&i,101,0)?;let more=links.len()>100;links.truncate(100);
+                Ok(json!({"links":links,"hasMore":more}))
+            }
+            "activity" => {
+                fields(a, &["projectId", "itemId", "limit"])?;
+                let limit = limit(a, 50)?;
+                if let Some(project) = a.get("projectId") {
+                    if project.is_null() {
+                        ensure!(p.session.is_none(), "not found or not authorized");
+                    } else {
+                        self.authorized(p, "project", &id(a, "projectId")?)?;
+                    }
+                }
+                if a.get("itemId").is_some() {
+                    self.authorized(p, "item", &id(a, "itemId")?)?;
+                }
+                use rusqlite::types::Value as SqlValue;
+                let mut predicates = Vec::new();
+                let mut parameters = Vec::new();
+                if p.session.is_some() {
+                    predicates.push("json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?))");
+                    parameters.push(SqlValue::Text(serde_json::to_string(&p.projects)?));
+                }
+                for (field, predicate) in [
+                    ("projectId", "json_extract(body,'$.projectId') IS ?"),
+                    ("itemId", "json_extract(body,'$.itemId') = ?"),
+                ] {
+                    if let Some(value) = a.get(field) {
+                        predicates.push(predicate);
+                        parameters.push(value.as_str().map(|s| SqlValue::Text(s.into())).unwrap_or(SqlValue::Null));
+                    }
+                }
+                let filter = if predicates.is_empty() {
+                    String::new()
+                } else {
+                    format!("WHERE {}", predicates.join(" AND "))
+                };
+                parameters.push(SqlValue::Integer(limit as i64));
+                let mut q = self.0.prepare(&format!(
+                    "SELECT body FROM events {filter} ORDER BY seq DESC LIMIT ?"
+                ))?;
+                let rows = q.query_map(rusqlite::params_from_iter(parameters), |r| r.get::<_, String>(0))?;
+                let events: Vec<Value> = rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect::<Result<_>>()?;
+                Ok(json!({"events":events}))
+            }
+            _ => bail!("unknown operation"),
+        }
+    }
+    pub fn write(&mut self, p: &mut Principal, op: &str, a: &Value) -> Result<Value> {
+        let req = id(a, "requestId")?;
+        let body = json!({"op":op,"args":a}).to_string();
+        self.0.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<Value> {
+            let receipt: Option<(String, String)> = self
+                .0
+                .query_row(
+                    "SELECT body,result FROM receipts WHERE principal=? AND request=?",
+                    params![p.id, req],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            if let Some((b, r)) = receipt {
+                ensure!(b == body, "requestId reused with different body");
+                let result: Value = serde_json::from_str(&r)?;
+                // Receipts retain identity across refresh, but never restore a removed grant scope.
+                if p.session.is_some() {
+                    match op {
+                        "project_create" | "project_update" => {
+                            self.authorized(p, "project", &id(a, "id")?)?;
+                        }
+                        "item_create" | "item_update" => {
+                            self.authorized(p, "item", &id(a, "id")?)?;
+                        }
+                        "checkpoint_create" => {
+                            self.authorized(p, "item", &id(a, "itemId")?)?;
+                        }
+                        "link" => {
+                            if a.get("projectId").is_some() {
+                                self.authorized(p, "project", &id(a, "projectId")?)?;
+                            } else {
+                                self.authorized(p, "item", &id(a, "itemId")?)?;
+                            }
+                        }
+                        _ => bail!("unknown operation"),
+                    }
+                }
+                return Ok(result);
+            }
+            let rev = self
+                .revision()?
+                .checked_add(1)
+                .context("revision exhausted")?;
+            let t = now();
+            let mut event = json!({"op":op,"actor":p.id,"sessionId":p.session,"createdAt":t,"revision":rev});
+            let result = match op {
+                "project_create" | "item_create" => {
+                    let project = op == "project_create";
+                    fields(
+                        a,
+                        if project {
+                            &["id", "requestId", "title", "plan", "mainSessionId"]
+                        } else {
+                            &["id", "requestId", "projectId", "title", "note", "status"]
+                        },
+                    )?;
+                    let i = id(a, "id")?;
+                    ensure!(
+                        !self.exists(if project { "project" } else { "item" }, &i)?,
+                        "id already exists"
+                    );
+                    let title = string(a, "title", 240, true)?;
+                    let v = if project {
+                        ensure!(p.create, "project creation not authorized");
+                        if p.session.is_some() {
+                            ensure!(
+                                a.get("mainSessionId").is_none_or(
+                                    |v| v.is_null() || v.as_str() == p.session.as_deref()
+                                ),
+                                "cannot set another main session"
+                            );
+                        }
+                        if a.get("mainSessionId").is_some_and(|v| !v.is_null()) {
+                            id(a, "mainSessionId")?;
+                        }
+                        json!({"id":i,"title":title,"plan":string(a,"plan",32000,false)?,"mainSessionId":a.get("mainSessionId").cloned().unwrap_or_else(||p.session.as_ref().map_or(Value::Null,|s|json!(s))),"revision":rev,"archived":false,"createdAt":t,"updatedAt":t})
+                    } else {
+                        let proj = a.get("projectId").cloned().unwrap_or(Value::Null);
+                        if !proj.is_null() {
+                            self.authorized(p, "project", &id(a, "projectId")?)?;
+                        } else {
+                            ensure!(p.session.is_none(), "standalone items not authorized");
+                        }
+                        let status = a.get("status").and_then(Value::as_str).unwrap_or("todo");
+                        if a.get("status").is_some() {
+                            string(a, "status", 20, true)?;
+                        }
+                        status_ok(status)?;
+                        json!({"id":i,"projectId":proj,"title":title,"note":string(a,"note",1000,false)?,"status":status,"position":rev,"updatedBy":p.id,"updatedSessionId":p.session,"revision":rev,"archived":false,"createdAt":t,"updatedAt":t})
+                    };
+                    let kind = if project { "project" } else { "item" };
+                    self.insert(kind, &v)?;
+                    event["projectId"] = if project {
+                        json!(i)
+                    } else {
+                        v["projectId"].clone()
+                    };
+                    if !project {
+                        event["itemId"] = json!(i);
+                    }
+                    json!({kind:v})
+                }
+                "project_update" | "item_update" => {
+                    let project = op == "project_update";
+                    fields(
+                        a,
+                        if project {
+                            &[
+                                "id",
+                                "requestId",
+                                "expectedRevision",
+                                "title",
+                                "plan",
+                                "mainSessionId",
+                                "archived",
+                            ]
+                        } else {
+                            &[
+                                "id",
+                                "requestId",
+                                "expectedRevision",
+                                "title",
+                                "note",
+                                "status",
+                                "position",
+                                "archived",
+                            ]
+                        },
+                    )?;
+                    if p.session.is_some() {
+                        ensure!(
+                            a.get("archived").is_none() && a.get("mainSessionId").is_none(),
+                            "field not authorized"
+                        );
+                    }
+                    let i = id(a, "id")?;
+                    let kind = if project { "project" } else { "item" };
+                    let mut v = self.authorized(p, kind, &i)?;
+                    expected(a, &v)?;
+                    boolean(a, "archived")?;
+                    for (k, max, required) in [
+                        ("title", 240, true),
+                        ("plan", 32000, false),
+                        ("note", 1000, false),
+                        ("status", 20, true),
+                    ] {
+                        if a.get(k).is_some() {
+                            let s = string(a, k, max, required)?;
+                            if k == "status" {
+                                status_ok(s)?;
+                            }
+                            v[k] = json!(s);
+                        }
+                    }
+                    if let Some(pos) = a.get("position") {
+                        ensure!(pos.as_f64().is_some_and(f64::is_finite), "invalid position");
+                        v["position"] = pos.clone();
+                    }
+                    if let Some(x) = a.get("archived") {
+                        v["archived"] = x.clone();
+                    }
+                    if let Some(x) = a.get("mainSessionId") {
+                        if !x.is_null() {
+                            id(a, "mainSessionId")?;
+                        }
+                        v["mainSessionId"] = x.clone();
+                    }
+                    v["revision"] = json!(rev);
+                    v["updatedAt"] = json!(t);
+                    if !project { v["updatedBy"] = json!(p.id); v["updatedSessionId"] = json!(p.session); }
+                    self.put(kind, &v)?;
+                    event["projectId"] = if project {
+                        json!(i)
+                    } else {
+                        v["projectId"].clone()
+                    };
+                    if !project {
+                        event["itemId"] = json!(i);
+                    }
+                    json!({kind:v})
+                }
+                "link" => {
+                    fields(a, &["requestId", "projectId", "itemId", "sessionId"])?;
+                    ensure!(
+                        a.get("projectId").is_some() != a.get("itemId").is_some(),
+                        "exactly one link target required"
+                    );
+                    let session = id(a, "sessionId")?;
+                    ensure!(
+                        p.session.as_ref().is_none_or(|s| s == &session),
+                        "session not authorized"
+                    );
+                    let mut v =
+                        json!({"id":format!("link-{rev}"),"sessionId":session,"createdAt":t});
+                    if a.get("itemId").is_some() {
+                        let i = id(a, "itemId")?;
+                        let item = self.authorized(p, "item", &i)?;
+                        v["itemId"] = json!(i);
+                        event["itemId"] = json!(i);
+                        event["projectId"] = item["projectId"].clone();
+                    } else {
+                        let i = id(a, "projectId")?;
+                        self.authorized(p, "project", &i)?;
+                        v["projectId"] = json!(i);
+                        event["projectId"] = json!(i);
+                    }
+                    self.insert("link", &v)?;
+                    json!({"link":v})
+                }
+                "checkpoint_create" => {
+                    fields(
+                        a,
+                        &[
+                            "id",
+                            "requestId",
+                            "itemId",
+                            "expectedRevision",
+                            "brief",
+                            "nextAction",
+                            "sessionId",
+                        ],
+                    )?;
+                    ensure!(
+                        a.get("brief").is_some() && a.get("nextAction").is_some(),
+                        "missing checkpoint field"
+                    );
+                    let i = id(a, "id")?;
+                    ensure!(!self.exists("checkpoint", &i)?, "id already exists");
+                    let item_id = id(a, "itemId")?;
+                    let mut item = self.authorized(p, "item", &item_id)?;
+                    expected(a, &item)?;
+                    let mut v = json!({"id":i,"itemId":item_id,"brief":string(a,"brief",4000,false)?,"nextAction":string(a,"nextAction",1000,false)?,"createdAt":t,"revision":rev,"actor":p.id});
+                    if a.get("sessionId").is_some() {
+                        let s = id(a, "sessionId")?;
+                        ensure!(
+                            p.session.as_ref().is_none_or(|x| x == &s),
+                            "session not authorized"
+                        );
+                        v["sessionId"] = json!(s);
+                    } else if let Some(s) = &p.session {
+                        v["sessionId"] = json!(s);
+                    }
+                    item["revision"] = json!(rev);
+                    item["updatedAt"] = json!(t);
+                    self.put("item", &item)?;
+                    self.insert("checkpoint", &v)?;
+                    event["projectId"] = item["projectId"].clone();
+                    event["itemId"] = json!(item_id);
+                    json!({"checkpoint":v,"item":item})
+                }
+                _ => bail!("unknown operation"),
+            };
+            event["result"] = result.clone();
+            self.0.execute(
+                "INSERT INTO events(seq,body) VALUES(?,?)",
+                params![i64::try_from(rev)?, event.to_string()],
+            )?;
+            self.0.execute(
+                "UPDATE meta SET value=? WHERE key='revision'",
+                [rev.to_string()],
+            )?;
+            self.0.execute(
+                "INSERT INTO receipts VALUES(?,?,?,?)",
+                params![p.id, req, body, result.to_string()],
+            )?;
+            Ok(result)
+        })();
+        match result {
+            Ok(v) => {
+                if let Err(e) = self.0.execute_batch("COMMIT") {
+                    let _ = self.0.execute_batch("ROLLBACK");
+                    return Err(e.into());
+                }
+                if op == "project_create" && p.session.is_some() {
+                    if let Some(i) = v["project"]["id"].as_str() {
+                        p.projects.insert(i.into());
+                    }
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.0.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+}
+fn expected(a: &Value, v: &Value) -> Result<()> {
+    ensure!(
+        a["expectedRevision"].as_u64().is_some() && a["expectedRevision"] == v["revision"],
+        "revision conflict"
+    );
+    Ok(())
+}
+fn status_ok(s: &str) -> Result<()> {
+    ensure!(
+        ["todo", "doing", "waiting", "done"].contains(&s),
+        "invalid status"
+    );
+    Ok(())
+}
+fn limit(a: &Value, default: usize) -> Result<usize> {
+    let n = match a.get("limit") {
+        None => default,
+        Some(v) => v.as_u64().context("invalid limit")? as usize,
+    };
+    ensure!((1..=100).contains(&n), "limit must be 1..100");
+    Ok(n)
+}
+
+// Logical growth is O(1) per mutation. The counter includes immutable receipts
+// and activity, so a busy agent cannot fill the disk by repeatedly updating one
+// small item. Reading/replaying an existing receipt remains available at budget.
+const BUDGET_BYTES:i64=64*1024*1024;
+const BUDGET_ROWS:i64=100_000;
+const CONTROL_RESERVE_BYTES:i64=1024*1024;
+const CONTROL_RESERVE_ROWS:i64=2_000;
+fn configure_budget(c:&Connection)->Result<()> {
+    let page:i64=c.query_row("PRAGMA page_size",[],|r|r.get(0))?;
+    ensure!(page>0,"invalid page size");
+    c.execute_batch(&format!("PRAGMA max_page_count={}",128*1024*1024/page))?;
+    c.execute_batch("BEGIN IMMEDIATE")?;
+    let result=(||->Result<()>{
+        c.execute_batch("CREATE TABLE IF NOT EXISTS pulso_budget(id INTEGER PRIMARY KEY CHECK(id=1),bytes INTEGER NOT NULL,rows INTEGER NOT NULL)")?;
+        let tables:[(&str,&[&str]);5]=[("docs",&["kind","id","body"]),("receipts",&["principal","request","body","result"]),("events",&["body"]),("principals",&["session","id"]),("policies",&["key","body"])];
+        {
+            // Recount on open to migrate counters from older trigger definitions.
+            let(mut bytes,mut rows)=(0i64,0i64);
+            for(table,columns)in &tables {
+                let size=columns.iter().map(|col|format!("COALESCE(length(CAST({col} AS BLOB)),0)")).collect::<Vec<_>>().join("+");
+                let(b,n):(i64,i64)=c.query_row(&format!("SELECT COALESCE(sum({size}),0),count(*) FROM {table}"),[],|r|Ok((r.get(0)?,r.get(1)?)))?;bytes+=b;rows+=n;
+            }
+            c.execute("INSERT INTO pulso_budget VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET bytes=excluded.bytes,rows=excluded.rows",params![bytes,rows])?;
+        }
+        for(table,columns)in &tables {
+            let size=|prefix:&str|columns.iter().map(|col|format!("COALESCE(length(CAST({prefix}.{col} AS BLOB)),0)")).collect::<Vec<_>>().join("+");
+            for(op,delta,count)in [("INSERT",size("NEW"),1),("UPDATE",format!("({})-({})",size("NEW"),size("OLD")),0),("DELETE",format!("-({})",size("OLD")),-1)] {
+                let control = matches!(*table, "principals" | "policies");
+                let byte_limit = BUDGET_BYTES + if control { CONTROL_RESERVE_BYTES } else { 0 };
+                let row_limit = BUDGET_ROWS + if control { CONTROL_RESERVE_ROWS } else { 0 };
+                // Deletions and non-growing updates must remain available above either cap.
+                let check = if op == "DELETE" {
+                    String::new()
+                } else {
+                    format!("SELECT CASE WHEN ({count}>0 OR ({delta})>0) AND (SELECT bytes>{byte_limit} OR rows>{row_limit} FROM pulso_budget WHERE id=1) THEN RAISE(ABORT,'Pulso local storage budget reached') END;")
+                };
+                c.execute_batch(&format!("DROP TRIGGER IF EXISTS pulso_budget_{table}_{op}; CREATE TRIGGER pulso_budget_{table}_{op} AFTER {op} ON {table} BEGIN UPDATE pulso_budget SET bytes=bytes+({delta}),rows=rows+({count}) WHERE id=1; {check} END;"))?;
+            }
+        }
+        c.execute_batch("CREATE INDEX IF NOT EXISTS pulso_docs_item ON docs(kind,json_extract(body,'$.itemId')); CREATE INDEX IF NOT EXISTS pulso_docs_project ON docs(kind,json_extract(body,'$.projectId'),json_extract(body,'$.archived'));
+            CREATE INDEX IF NOT EXISTS pulso_events_project ON events(json_extract(body,'$.projectId'),seq);
+            CREATE INDEX IF NOT EXISTS pulso_events_item ON events(json_extract(body,'$.itemId'),seq);")?;
+        Ok(())
+    })();
+    match result{Ok(())=>{c.execute_batch("COMMIT")?;Ok(())},Err(e)=>{let _=c.execute_batch("ROLLBACK");Err(e)}}
+}
+
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    fn budget(c: &Connection) -> (i64, i64) {
+        c.query_row("SELECT bytes,rows FROM pulso_budget WHERE id=1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        }).unwrap()
+    }
+
+    #[test]
+    fn budget_counts_all_tables_and_preserves_control_reserve() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let c = &store.0;
+        for sql in [
+            "INSERT INTO docs VALUES('item','i','{}')",
+            "INSERT INTO receipts VALUES('p','r','{}','{}')",
+            "INSERT INTO events VALUES(1,'{}')",
+            "INSERT INTO principals VALUES('s','p')",
+            "INSERT INTO policies VALUES('k','{}')",
+        ] {
+            c.execute_batch(sql).unwrap();
+        }
+        assert_eq!(budget(c), (20, 5));
+        c.execute("UPDATE pulso_budget SET bytes=?,rows=?", params![BUDGET_BYTES, BUDGET_ROWS]).unwrap();
+        assert!(c.execute("INSERT INTO events VALUES(2,'{}')", []).is_err());
+        c.execute("INSERT INTO principals VALUES('s2','p2')", []).unwrap();
+        c.execute("INSERT INTO policies VALUES('k2','{}')", []).unwrap();
+        assert_eq!(budget(c), (BUDGET_BYTES + 8, BUDGET_ROWS + 2));
+        // Control-plane usage still counts against ordinary writes.
+        assert!(c.execute(r#"UPDATE docs SET body='{"x":1}'"#, []).is_err());
+        for (bytes, rows) in [
+            (BUDGET_BYTES + CONTROL_RESERVE_BYTES, 5),
+            (20, BUDGET_ROWS + CONTROL_RESERVE_ROWS),
+        ] {
+            c.execute("UPDATE pulso_budget SET bytes=?,rows=?", params![bytes, rows]).unwrap();
+            assert!(c.execute("INSERT INTO principals VALUES('blocked','p')", []).is_err());
+            assert!(c.execute("INSERT INTO policies VALUES('blocked','{}')", []).is_err());
+            assert_eq!(budget(c), (bytes, rows));
+        }
+    }
+
+    #[test]
+    fn budget_allows_shrinking_updates_and_deletes_above_both_caps() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let c = &store.0;
+        c.execute_batch("INSERT INTO docs VALUES('item','i','{\"long\":true}');
+            INSERT INTO receipts VALUES('p','r','{}','{\"long\":true}');
+            INSERT INTO events VALUES(1,'{\"long\":true}');
+            INSERT INTO principals VALUES('s','principal');
+            INSERT INTO policies VALUES('k','{\"long\":true}');").unwrap();
+        c.execute("UPDATE pulso_budget SET bytes=?,rows=?", params![BUDGET_BYTES + CONTROL_RESERVE_BYTES + 100, BUDGET_ROWS + CONTROL_RESERVE_ROWS + 10]).unwrap();
+        let before = budget(c);
+        for sql in [
+            "UPDATE docs SET body='{}'",
+            "UPDATE receipts SET result='{}'",
+            "UPDATE events SET body='{}'",
+            "UPDATE principals SET id='p'",
+            "UPDATE policies SET body='{}'",
+        ] {
+            let old = budget(c);
+            c.execute_batch(sql).unwrap();
+            assert!(budget(c).0 < old.0);
+            assert_eq!(budget(c).1, old.1);
+        }
+        for table in ["docs", "receipts", "events", "principals", "policies"] {
+            c.execute_batch(&format!("DELETE FROM {table}")).unwrap();
+        }
+        assert!(budget(c).0 < before.0);
+        assert_eq!(budget(c).1, before.1 - 5);
+    }
+
+    #[test]
+    fn reopening_migrates_old_triggers_and_recounts_control_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pulso.sqlite");
+        {
+            let store = Store::open(&path).unwrap();
+            store.0.execute_batch("DROP TRIGGER pulso_budget_principals_INSERT;
+                DROP TRIGGER pulso_budget_policies_INSERT;
+                INSERT INTO principals VALUES('s','p');
+                INSERT INTO policies VALUES('k','{}');
+                DROP TRIGGER pulso_budget_policies_DELETE;
+                CREATE TRIGGER pulso_budget_policies_DELETE AFTER DELETE ON policies
+                BEGIN SELECT RAISE(ABORT,'old trigger'); END;").unwrap();
+            assert_eq!(budget(&store.0), (0, 0));
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(budget(&store.0), (5, 2));
+        store.0.execute("UPDATE pulso_budget SET bytes=?,rows=?", params![BUDGET_BYTES, BUDGET_ROWS]).unwrap();
+        store.0.execute("INSERT INTO principals VALUES('s2','p2')", []).unwrap();
+        store.0.execute("DELETE FROM policies", []).unwrap();
+        assert_eq!(budget(&store.0), (BUDGET_BYTES + 1, BUDGET_ROWS));
+    }
+
+    #[test]
+    fn event_queries_scope_before_limit_and_use_expression_indexes() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        for project in ["p", "q"] {
+            store.write(&mut ui, "project_create", &json!({"id":project,"requestId":project,"title":project})).unwrap();
+        }
+        for (item, project) in [("i", json!("p")), ("j", json!("q")), ("solo", Value::Null)] {
+            store.write(&mut ui, "item_create", &json!({"id":item,"requestId":item,"projectId":project,"title":item})).unwrap();
+        }
+        store.0.execute("DELETE FROM events", []).unwrap();
+        for (seq, body) in [
+            (1, json!({"projectId":"p","itemId":"i"})),
+            (2, json!({"projectId":"p","itemId":"other"})),
+            (3, json!({"projectId":null,"itemId":"solo"})),
+            (4, json!({"projectId":"q","itemId":"j"})),
+            (5, json!({"projectId":"prefix-p","itemId":"i-suffix"})),
+        ] {
+            store.0.execute("INSERT INTO events VALUES(?,?)", params![seq, body.to_string()]).unwrap();
+        }
+        let mut agent = Principal { id:"a".into(), session:Some("s".into()), projects:HashSet::from(["p".into()]), create:false };
+        assert_eq!(store.read(&agent, "revision", &json!({})).unwrap()["revision"], 2);
+        let activity = store.read(&agent, "activity", &json!({"limit":1})).unwrap();
+        assert_eq!(activity["events"], json!([{"projectId":"p","itemId":"other"}]));
+        assert_eq!(store.read(&agent, "activity", &json!({"itemId":"i","limit":1})).unwrap()["events"], json!([{"projectId":"p","itemId":"i"}]));
+        assert_eq!(store.read(&ui, "activity", &json!({"projectId":"q","itemId":"i"})).unwrap()["events"], json!([]));
+        assert_eq!(store.read(&ui, "activity", &json!({"projectId":null})).unwrap()["events"], json!([{"projectId":null,"itemId":"solo"}]));
+        assert!(store.read(&agent, "activity", &json!({"projectId":null})).is_err());
+        agent.projects.insert("q".into());
+        assert_eq!(store.read(&agent, "revision", &json!({})).unwrap()["revision"], 4);
+        agent.projects.clear();
+        assert_eq!(store.read(&agent, "revision", &json!({})).unwrap()["revision"], 0);
+        assert_eq!(store.read(&agent, "activity", &json!({})).unwrap()["events"], json!([]));
+        for (sql, index) in [
+            ("SELECT COALESCE(max((SELECT max(seq) FROM events WHERE json_extract(body,'$.projectId')=grant.value)),0) FROM json_each('[\"p\"]') AS grant", "pulso_events_project"),
+            ("SELECT body FROM events WHERE json_extract(body,'$.projectId') IN (SELECT value FROM json_each('[\"p\"]')) ORDER BY seq DESC LIMIT 1", "pulso_events_project"),
+            ("SELECT body FROM events WHERE json_extract(body,'$.itemId')='i' ORDER BY seq DESC LIMIT 1", "pulso_events_item"),
+        ] {
+            let mut q = store.0.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let plan = q.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap().join("; ");
+            assert!(plan.contains(index), "{plan}");
+            assert!(!plan.contains("SCAN events"), "{plan}");
+        }
+    }
+}

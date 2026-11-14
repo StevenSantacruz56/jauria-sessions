@@ -50,6 +50,8 @@ async function installMock(page: Page) {
       async invoke(cmd: string, args: any) {
         if (cmd === 'connect_runner') return { dataDir: '/synthetic', socket: '/synthetic.sock', status: status(), smoke: true };
         if (cmd === 'probe_tools') return [];
+        if (cmd === 'plugin:event|listen') return 1;
+        if (cmd === 'plugin:event|unlisten') return;
         if (cmd === 'record_ui_evidence') { evidence = args.payload; return; }
         if (cmd === 'plugin:window|set_badge_count') { badges.push(args); return; }
         if (cmd === 'runner_request') {
@@ -164,6 +166,11 @@ try {
               // and leave the fixed rail and PTY geometry unchanged.
               for (const data of ['\x07', '\x1b]9;explicit Codex notice\x07', '\x1b]777;notify;Codex;review needed\x1b\\']) {
                 await page.evaluate(data => (window as any).geometryFixture.output(data), data);
+                await page.waitForFunction(() => !(document.querySelector('#session-alerts') as HTMLElement).hidden);
+                // The bell is the primary alert. The contextual rail opens only
+                // when the user selects its attention filter (since 1.0.1).
+                await page.evaluate(() => (document.querySelector('#session-alerts') as HTMLButtonElement).click());
+                if (await page.locator('#sidebar-scrim').isVisible()) await page.locator('#sidebar-scrim').click();
                 await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
                 assert.equal(await page.locator('#session-alerts').isVisible(), true);
                 await page.waitForFunction(() => (window as any).geometryFixture.badges.some((args: any) => args.value === 1));
@@ -177,6 +184,9 @@ try {
               const attention = async () => {
                 await page.evaluate(() => { const f = (window as any).geometryFixture;
                   f.focus(false); f.output('foreground output while window unfocused\r\n\x07'); });
+                await page.waitForFunction(() => !(document.querySelector('#session-alerts') as HTMLElement).hidden);
+                await page.evaluate(() => (document.querySelector('#session-alerts') as HTMLButtonElement).click());
+                if (await page.locator('#sidebar-scrim').isVisible()) await page.locator('#sidebar-scrim').click();
                 await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
               };
               await attention();
@@ -237,7 +247,7 @@ try {
               assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'long error does not widen page');
               assert.deepEqual(await page.evaluate(() => (window as any).geometryFixture.unexpected), []);
               assert.deepEqual(errors, []);
-            } catch (error) { console.error(error); throw error; }
+            } catch (error) { console.error(error); console.error(await page.evaluate(()=>({cursor:document.querySelector("#cursor")?.textContent,connection:document.querySelector("#connection-state")?.textContent,notice:document.querySelector("#notice-text")?.textContent,unexpected:(window as any).geometryFixture?.unexpected})),errors); throw error; }
             finally { await page.close(); }
           });
         }

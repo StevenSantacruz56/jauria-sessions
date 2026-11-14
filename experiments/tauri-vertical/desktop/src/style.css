@@ -458,3 +458,9 @@ html[data-theme="dark"] .brand-dark { display: block; }
 @media (forced-colors: active) { .session-item[data-attention="true"] { border-color: Highlight; } }
 
 .session-item[data-attention="true"] .session-item-meta { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+
+/* Planning occupies the existing stage without remounting terminal hosts. */
+.pulso-panel-host { flex: 1; min-height: 0; overflow: hidden; background: var(--surface); }
+#open-pulso { justify-content: flex-start; margin: 4px 10px 8px; }
+
+.workspace-nav-label { padding: 3px 14px 6px; font: 600 11px/1.4 Inter, sans-serif; color: var(--muted); }

@@ -1,0 +1,65 @@
+/* Pulso extends Jauría's workbench tokens; all rules stay inside its stage view. */
+.pulso-panel { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); color: var(--text); font: inherit; }
+.pulso-panel [hidden] { display: none !important; }
+.pulso-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
+.pulso-header h1 { font-family: 'Bricolage Grotesque', 'Inter', sans-serif; font-size: 24px; font-weight: 700; line-height: 1.2; }
+.pulso-header p { margin-top: 5px; }
+.pulso-muted, .pulso-empty { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pulso-feedback:empty, .pulso-undo:empty { display: none; }
+.pulso-feedback, .pulso-error, .pulso-undo { padding: 10px 24px; font-size: 12px; }
+.pulso-feedback { color: var(--muted); }
+.pulso-error { background: var(--error-bg); color: var(--error); max-height: 35%; overflow: auto; }
+.pulso-error button { margin: 8px 8px 0 0; }
+.pulso-undo { display: flex; align-items: center; gap: 12px; background: var(--notice-bg); }
+.pulso-layout { display: grid; grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.pulso-outline, .pulso-detail { overflow: auto; min-width: 0; min-height: 0; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--control-border) transparent; }
+.pulso-outline { padding: 18px 12px 24px; background: var(--chrome); border-right: 1px solid var(--border); }
+.pulso-outline h2 { padding: 0 8px; margin: 26px 0 8px; font-size: 12px; font-weight: 600; }
+.pulso-capture { display: flex; flex-direction: column; gap: 8px; padding: 0 8px; }
+.pulso-capture .primary { align-self: flex-start; }
+.pulso-empty { padding: 10px 8px; }
+.pulso-row { width: 100%; min-width: 0; justify-content: flex-start; border-color: transparent; background: transparent; padding: 9px 8px; text-align: left; overflow-wrap: anywhere; }
+.pulso-row[aria-current="true"] { background: var(--selected); color: var(--selected-text); }
+.pulso-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; font-weight: 400; }
+.pulso-phases { margin: 3px 0 8px 14px; padding-left: 18px; font-size: 12px; }
+.pulso-phases li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pulso-state { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.pulso-state[data-state="doing"] { color: var(--working-text); }
+.pulso-state[data-state="waiting"] { color: var(--warning); }
+.pulso-state[data-state="done"] { color: var(--success); }
+.pulso-detail { padding: 24px; }
+.pulso-detail > h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; overflow-wrap: anywhere; }
+.pulso-detail h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.pulso-detail h4 { font-size: 12px; font-weight: 600; margin: 14px 0 4px; }
+.pulso-form, .pulso-section { max-width: 74ch; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.pulso-detail > .pulso-form:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+.pulso-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-width: 0; font-size: 12px; font-weight: 500; }
+.pulso-field input, .pulso-field select, .pulso-field textarea { width: 100%; min-width: 0; font-weight: 400; }
+.pulso-field textarea { min-height: 110px; resize: vertical; padding: 9px 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; line-height: 1.6; caret-color: var(--accent); }
+.pulso-panel textarea::placeholder { color: var(--muted); opacity: 1; }
+.pulso-panel :where(button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pulso-panel ::selection { background: var(--selected); color: var(--selected-text); }
+.pulso-panel button { max-width: 100%; white-space: normal; }
+.pulso-panel button:disabled, .pulso-panel textarea:disabled { opacity: .48; cursor: default; }
+.pulso-form > button, .pulso-section button { margin: 4px 8px 4px 0; }
+.pulso-panel details { margin: 14px 0; }
+.pulso-panel summary { cursor: pointer; color: var(--text); padding: 8px 0; font-size: 12px; }
+.pulso-panel summary:hover { color: var(--accent); background: transparent; }
+.pulso-prose { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.65; max-width: 74ch; }
+.pulso-session { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 0; overflow-wrap: anywhere; }
+.pulso-session > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.pulso-check { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; max-width: 65ch; font-size: 12px; line-height: 1.6; cursor: pointer; }
+.pulso-check input { flex: 0 0 auto; width: 15px; height: 15px; padding: 0; margin: 2px 0 0; accent-color: var(--accent); }
+.pulso-policy { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.pulso-history { list-style: none; padding: 0; margin: 0; }
+.pulso-history li { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.pulso-history .pulso-muted { margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.pulso-breadcrumb { padding-left: 0; margin-bottom: 8px; color: var(--muted); }
+@media (max-width: 680px) {
+  .pulso-layout { display: flex; flex-direction: column; overflow: auto; }
+  .pulso-outline, .pulso-detail { overflow: visible; flex-shrink: 0; }
+  .pulso-outline { border-right: 0; border-bottom: 1px solid var(--border); }
+  .pulso-detail { padding: 20px 16px; }
+  .pulso-header { padding: 16px; align-items: flex-start; }
+  .pulso-feedback, .pulso-error, .pulso-undo { padding: 10px 16px; }
+}

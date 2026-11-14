@@ -7,7 +7,7 @@ python3 scripts/build-macos.py --check-only
 python3 scripts/build-macos.py
 ```
 
-El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc` y el benchmark opt-in `listener_latency` (ignorado por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
+El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc`, `pulso_rpc`, `native_resume_rpc` y los benchmarks opt-in `listener_latency`/`pulso_latency` (ignorados por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
 
 El fixture `runner/tests/fixtures/protocol.synthetic.jsonl` contiene exclusivamente mensajes construidos para pruebas: dos solicitudes de aprobación, 24 fragmentos de mensaje y tres terminaciones de turno. La prueba `replay_synthetic_protocol_offline` conserva las aserciones del replay: dos denegaciones, tres terminaciones y más de veinte eventos normalizados. No es una transcripción nativa ni demuestra comportamiento real del proveedor.
 
@@ -97,3 +97,23 @@ El código propio usa GPL-3.0-only en LICENSE y en los metadatos npm/Cargo. Las 
 El bundle copia LICENSE y NOTICE a `Contents/Resources/licenses`. El empaquetador DMG exige LICENSE y agrega `SOURCE_REFERENCE.txt` con la versión exacta. Verifica tanto los avisos como la disponibilidad efectiva del código correspondiente antes de redistribuir un binario.
 
 La revisión de exposición usa Gitleaks con redacción completa sobre historial, commits y etiquetas. No registra valores secretos ni pretende sustituir una auditoría completa. El alcance y las comprobaciones de GitHub Actions/assets se documentan en [PUBLICATION_READINESS.md](PUBLICATION_READINESS.md).
+
+## Pulso: planificación y continuidad
+
+Desde `experiments/tauri-vertical/desktop`, con Chrome y Playwright WebKit instalados:
+
+```sh
+PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/pulso-panel.test.ts
+node --test tests/browser/pulso-workbench.test.ts
+```
+
+Los fixtures simulan solo la frontera nativa, sin datos personales ni proveedor. Cubren borradores, conflictos, reintentos, permisos, paginación y recuperación. La shell completa conserva xterm y posición de lectura. Para evitar recargas de Vite durante una regresión de terminal, no edites fuentes ni ejecutes varios servidores de estas suites sobre la misma caché al mismo tiempo.
+
+Desde `experiments/tauri-vertical/runner`:
+
+```sh
+cargo test --locked --test pulso_rpc --test native_resume_rpc
+cargo test --release --locked --test pulso_latency -- --ignored --nocapture
+```
+
+El segundo comando mide 2/8 PTY, 500 fases y clientes lentos de Pulso en perfiles temporales. No contacta proveedores ni mide pintura de pantalla. La CLI `--pulso-client` acepta `-` para leer JSON por stdin y evitar poner el texto del plan en argumentos del shell. Consulta [el contrato de uso](PULSO.md) y [los resultados locales de 1.1.0](PULSO_VALIDATION_1.1.0.md).

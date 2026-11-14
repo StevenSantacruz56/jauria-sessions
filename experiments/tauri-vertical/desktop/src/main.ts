@@ -27,10 +27,11 @@ import { preserveTerminalViewport, syncTerminalViewport } from './terminal-viewp
 import { terminalTheme, terminalTypography } from './terminal-theme';
 import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
 import { shell, paneMarkup, icon } from './ui';
+import { mountPulsoPanel } from './pulso-panel';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
 type Session = { terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
@@ -71,7 +72,10 @@ let busyAction = false;
 let disposed = false;
 let selectedDirectory: string | null = null;
 let selectedTaskId: string | null = null;
-let taskScreen: 'terminal' | 'draft' | 'detail' = 'terminal';
+let taskScreen: 'terminal' | 'draft' | 'detail' | 'pulso' = 'terminal';
+let pulsoPanel: ReturnType<typeof mountPulsoPanel> | null = null;
+let pulsoShown = false;
+const resumeAttempts = new Map<string,string>();
 let workspaceBusy = false;
 const preparingTasks = new Set<string>();
 const taskErrors = new Map<string, string>();
@@ -239,6 +243,13 @@ function isLive(session: Session) { return ['running', 'starting'].includes(sess
 function refresh() {
   const handoffContext=handoffContexts.get(activeView()?.session.id??'');
   $('#handoff-context').hidden=taskScreen!=='terminal' || !handoffContext;
+  const planning = taskScreen === 'pulso';
+  $('#pulso-panel-host').hidden = !planning;
+  $('#open-pulso').setAttribute('aria-pressed', String(planning));
+  $<HTMLButtonElement>('#open-pulso').disabled = !connected || runner?.pulsoVersion !== 1 || !runner?.pulsoAvailable;
+  $('#open-pulso').title = runner?.pulsoVersion !== 1 ? 'Pulso necesita un runner con proyectos y fases' : runner?.pulsoAvailable ? 'Planes y pendientes en este Mac' : 'Pulso no disponible; sus datos se conservan';
+  if (planning !== pulsoShown) { pulsoShown = planning; if (planning) pulsoPanel?.show(); else pulsoPanel?.hide(); }
+
   if(handoffContext && $<HTMLTextAreaElement>('#handoff-context-text').value!==handoffContext){$<HTMLTextAreaElement>('#handoff-context-text').value=handoffContext;text('#handoff-context-status','');}
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
@@ -358,7 +369,7 @@ function refresh() {
   $('#panes').hidden = !hasVisibleSession || taskScreen !== 'terminal';
   $('#panes').dataset.split = String(split);
   $('#toggle-split').setAttribute('aria-pressed', String(split));
-  $<HTMLButtonElement>('#toggle-split').disabled = sessions.length < 2;
+  $<HTMLButtonElement>('#toggle-split').disabled = sessions.length < 2 || planning;
   const current = activeView()?.session;
   text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
   text('#workspace-breadcrumb', current?.cwd?.split('/').filter(Boolean).pop() ?? (current ? providerLabel(current.kind) : 'Sesiones locales'));
@@ -479,7 +490,7 @@ function scheduleResize(view: View) {
   resizeTimers.set(view.session.id, setTimeout(() => { resizeTimers.delete(view.session.id); resizeView(view); }, 80));
 }
 function resizeView(view: View) {
-  if (!view || replaying || streamReplaying(view) || (streamMetadata(view.session) && !isLive(view.session)) || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
+  if (!view || taskScreen !== 'terminal' || replaying || streamReplaying(view) || (streamMetadata(view.session) && !isLive(view.session)) || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
   if (view.resizeBusy) { view.resizeAgain = true; return; }
   const dimensions = view.fit.proposeDimensions();
   if (dimensions && (dimensions.cols !== view.term.cols || dimensions.rows !== view.term.rows)) {
@@ -858,7 +869,7 @@ function refreshTasks(sessions: Session[]) {
   const openProjects = projects.filter(project => !project.closed);
   const closedProjects = projects.filter(project => project.closed);
   const lifecycleSupported = runner?.projectLifecycleVersion === 1;
-  if (projects.find(project => project.id === selectedTask()?.projectId)?.closed) { selectedTaskId = null; taskScreen = 'terminal'; }
+  if (taskScreen !== 'pulso' && projects.find(project => project.id === selectedTask()?.projectId)?.closed) { selectedTaskId = null; taskScreen = 'terminal'; }
   const available = supported && connected && !connecting && !replaying;
   $('#workspace-upgrade').hidden = supported || !runner;
   text('#workspace-upgrade', 'Proyectos y tareas requieren un runner actualizado (workspace v1). Las sesiones siguen disponibles.');
@@ -913,7 +924,7 @@ function refreshTasks(sessions: Session[]) {
       nav.append(group);
     }
     $('#closed-projects').hidden = closedProjects.length === 0;
-    text('#closed-projects-summary', `Proyectos cerrados (${closedProjects.length})`);
+    text('#closed-projects-summary', `Repositorios cerrados (${closedProjects.length})`);
     const closedList = $('#closed-project-list'); closedList.replaceChildren();
     for (const project of closedProjects) {
       const row = document.createElement('div'); row.className = 'closed-project-row';
@@ -923,14 +934,14 @@ function refreshTasks(sessions: Session[]) {
       reopen.addEventListener('click', () => { void setProjectClosed(project.id, false); }); row.append(name, reopen); closedList.append(row);
     }
   }
-  $('#task-panel').hidden = taskScreen === 'terminal';
+  $('#task-panel').hidden = taskScreen !== 'draft' && taskScreen !== 'detail';
   $('#task-form').hidden = taskScreen !== 'draft';
   const task = selectedTask();
   $('#task-detail').hidden = taskScreen !== 'detail' || !task;
   $('#show-task').hidden = !task || taskScreen !== 'terminal';
   $('#workspace-breadcrumb').hidden = taskScreen !== 'terminal';
   if (taskScreen !== 'terminal') {
-    text('#workspace-title', taskScreen === 'draft' ? 'Nueva tarea' : task?.title ?? 'Tarea no disponible');
+    text('#workspace-title', taskScreen === 'pulso' ? 'Pulso' : taskScreen === 'draft' ? 'Nueva tarea Git' : task?.title ?? 'Tarea no disponible');
   }
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('#task-form input, #task-form textarea, #task-form select').forEach(field => field.disabled = workspaceBusy || !!savedDraftId || !supported);
   $<HTMLButtonElement>('#save-task').disabled = !available || workspaceBusy || openProjects.length === 0;
@@ -1312,7 +1323,7 @@ function handleAppShortcut(event: KeyboardEvent): boolean {
     void getComputedStyle($('#sidebar')).visibility;
     search.focus();
     setTimeout(() => {
-      if (!document.querySelector('dialog[open]') && taskScreen !== 'draft' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
+      if (!document.querySelector('dialog[open]') && taskScreen === 'terminal' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
     }, 200);
   }
   if (key === 'i') setInspector($('#inspector').hidden);
@@ -1346,7 +1357,32 @@ async function probeTools(explicit = false) {
 }
 $('#probe').addEventListener('click', () => void probeTools(true));
 void probeTools();
-window.addEventListener('beforeunload', () => { disposed = true; loopVersion++; });
+pulsoPanel = mountPulsoPanel({
+  host: $('#pulso-panel-host'),
+  request: async (op, args) => {
+    if (!connected || runner?.pulsoVersion !== 1 || !runner.pulsoAvailable) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
+    const generation = runner.generation;
+    const response = await invoke<{ok:boolean;result:unknown;error?:string}>('pulso_request', {op,args});
+    if (!runner || runner.generation !== generation || disposed) throw new Error('La conexión cambió. Consulta el estado antes de continuar.');
+    if (!response.ok) throw new Error(response.error ?? 'Pulso no confirmó la operación.');
+    return response.result;
+  },
+  sessions: () => [...views.values()].map(view => view.session),
+  currentSession: () => activeView()?.session ?? null,
+  openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
+  newSession: cwd => openNew(cwd ?? null),
+  notice: text => notice(text),
+  binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
+  resumeSession: async sourceId => {
+    if (runner?.nativeResumeVersion !== 1 || !connected) throw new Error('Este runner no permite reanudar conversaciones nativas.');
+    if(!resumeAttempts.has(sourceId)) requireSessionCapacity();
+    const id=resumeAttempts.get(sourceId) ?? `claude-${crypto.randomUUID()}`; resumeAttempts.set(sourceId,id);
+    const session=await request<Session>('resume_native',{id,sourceId,rows:24,cols:80});
+    ensure(session); resumeAttempts.delete(sourceId); selectSession(session.id); return session.id;
+  },
+});
+$('#open-pulso').addEventListener('click', () => { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); });
+window.addEventListener('beforeunload', () => { disposed = true; loopVersion++; pulsoPanel?.dispose(); });
 refresh();
 // Connect is safe at launch: replay only. All start operations require visible controls.
 void connect();

@@ -11,7 +11,7 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
 
-**Versión actual: 1.0.1 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.0.1](docs/RELEASE_1.0.1.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
+**Versión actual: 1.1.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.1.0](docs/RELEASE_1.1.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
@@ -48,12 +48,30 @@ En **Configuración…** puedes elegir la apariencia y el máximo de sesiones. E
 
 Actualizar el código o reemplazar la app no actualiza un runner que ya está ejecutándose. Si Información → Diagnóstico indica un runner anterior, termina primero el trabajo activo y usa **Reiniciar runner…**. Las nuevas opciones de capacidad, renombrado y lanzamiento se habilitan con el runner actualizado; las preferencias nativas de permisos se aplican a sesiones nuevas.
 
-## Sesiones, proyectos e historial
+## Planes, fases y sesiones en una app
+
+**Pulso · Proyectos y fases** reúne pendientes y planes dentro de Jauria. Un proyecto de trabajo o de negocio representa tu plan completo y conserva una sesión principal; sus fases pueden vincular otras sesiones y guardar puntos de continuidad. Solo necesitas un título para empezar, sin registrar un repositorio. Jira puede conservar el detalle del trabajo.
+
+Al crear un proyecto, la casilla de sesión principal viene marcada y captura la sesión actual si está disponible; puedes desmarcarla o cambiarla después. **Repositorios** mantiene aparte las carpetas y tareas Git.
+
+Al seleccionar una fase puedes enfocar su sesión viva, ver el historial o preparar contexto editable con el último checkpoint y la siguiente acción. Puedes copiarlo y abrir una sesión nueva vacía; no se envía al agente. El detalle muestra los últimos 10 checkpoints y **Ver puntos anteriores** carga otros 10. Las conversaciones Claude cuya identidad reservó Jauria permiten intentar reanudar por su ID exacto, sin garantizar historial del proveedor. Si existe una continuación viva, puedes volver a ella; la reanudación conserva metadatos de origen y añade el vínculo al plan. Codex conserva terminal, historial y contexto; la captura de su ID para reanudación nativa no está disponible.
+
+Puedes conceder a una sesión acceso explícito para registrar planes y mover fases mediante la CLI local de Pulso. La casilla de recordar empieza desmarcada; puedes gestionar y revocar las políticas guardadas. El acceso no comparte toda tu agenda ni reemplaza los permisos nativos. La integración usa CLI; MCP queda pendiente. No hay importación automática del Site ni sincronización en la nube.
+
+Las consultas se paginan en SQL. Pulso tiene un presupuesto de 64 MiB lógicos/100.000 filas, más un margen de 1 MiB/2.000 filas solo para identidades de permisos y políticas, y un límite físico de 128 MiB para su propia base. Las lecturas continúan al alcanzar el presupuesto; no hay borrado automático ni exportación desde la interfaz. Consulta [la guía de Pulso y respaldo consistente de SQLite](docs/PULSO.md).
+
+La activación de la app instalada y las pruebas con el perfil real no se han realizado para 1.1.0. Los recuentos finales de pruebas y métricas quedan pendientes del cierre de validación.
+
+![Pulso · Jauria 1.1.0](docs/screenshots/pulso-1.1.0.png)
+
+Pulso: un proyecto representa el plan completo, con fases y puntos para continuar. Captura sintética de la interfaz; no contiene datos de sesiones reales.
+
+## Sesiones, repositorios e historial
 
 - **Sesión:** una ejecución en una carpeta. **Interrumpir (Ctrl-C)** interrumpe el trabajo actual, sin garantizar que termine la sesión. **Terminar** detiene la sesión administrada y conserva archivos e historial; no revierte cambios.
 - **Ventana:** cerrarla o salir de la interfaz deja las sesiones en ejecución en el runner local. Si el runner termina, las sesiones no se reanudan automáticamente. Vuelve a abrir con el mismo perfil de datos para consultar su estado e historial.
 - **Historial:** la salida guardada de sesiones terminadas se consulta en solo lectura; seleccionarla no reinicia el proceso. En Información puedes eliminar salida o compactar eventos de sesiones finalizadas.
-- **Proyecto:** registra un repositorio para organizar tareas. Usa **Registrar proyecto…**, **Nueva tarea** y **Preparar worktree** antes de iniciar el proveedor desde la tarea. Cerrar una sesión no completa la tarea. **Cerrar proyecto** lo oculta conservando tareas, archivos e historial; puede bloquearse mientras haya trabajo pendiente. Puedes volver desde **Proyectos cerrados → Reabrir**.
+- **Repositorio Git:** registra una carpeta Git para organizar tareas técnicas, independiente de los proyectos de plan de Pulso. Usa **Registrar repositorio…**, **Nueva tarea Git** y **Preparar worktree** antes de iniciar el proveedor desde la tarea. Cerrar una sesión no completa la tarea. **Cerrar proyecto** lo oculta conservando tareas, archivos e historial; puede bloquearse mientras haya trabajo pendiente. Puedes volver desde **Repositorios cerrados → Reabrir**.
 
 Jauria admite un solo escritor administrado por worktree Git: no abras dos sesiones que editen la misma copia. Usa un worktree por tarea paralela. Terminal comparte estas restricciones y los bloqueos de recuperación y verificación. Estas protecciones no controlan procesos que abras por fuera de Jauria ni los cambios de carpeta que hagas dentro de una shell.
 
@@ -69,7 +87,7 @@ Abre una sesión por herramienta y carpeta desde Nueva sesión. Configuración p
 
 ### ¿Necesito crear un proyecto para cada sesión?
 
-Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los proyectos y tareas sirven para organizar trabajo Git con carpetas aisladas.
+Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los repositorios y tareas Git sirven para trabajo con carpetas aisladas; los proyectos de Pulso organizan planes y fases sin exigir Git.
 
 ### ¿Jauria incluye el acceso a los modelos o aumenta sus cuotas?
 

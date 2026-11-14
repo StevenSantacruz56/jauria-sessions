@@ -164,6 +164,7 @@ pub struct Runner {
     terminal_streams: Arc<crate::terminal_stream::TerminalStreams>,
     status_cache: Mutex<Value>,
     settings: crate::app_settings::AppSettings,
+    pulso: Option<Arc<crate::pulso::Service>>,
     // Per-instance fault injection: never change process-wide environment or inventory.
     #[cfg(test)]
     inventory: Arc<dyn Fn(u32) -> Result<Vec<u32>> + Send + Sync>,
@@ -226,7 +227,17 @@ impl Runner {
         File::open("/dev/urandom")?.read_exact(&mut random)?;
         let generation = STANDARD.encode(random);
         let terminal_streams = crate::terminal_stream::TerminalStreams::new(&data_dir.join("runner.sqlite"), generation.clone())?;
-        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, status_cache:Mutex::new(Value::Null), _lock:lock, db:Arc::new(Mutex::new(db)), owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
+        let db = Arc::new(Mutex::new(db));
+        let pulso_db = db.clone();
+        let pulso_streams = terminal_streams.clone();
+        let lookup: crate::pulso::SessionLookup = Arc::new(move |id| {
+            pulso_streams.session(id).or_else(|| pulso_db.try_lock().ok().and_then(|db| db.session(id).ok().flatten()))
+        });
+        let pulso = match crate::pulso::Service::start(&data_dir, socket.parent().context("socket parent")?, lookup) {
+            Ok(service) => Some(service),
+            Err(_) => { eprintln!("Pulso no disponible; las terminales siguen operativas. Conserva sus datos y revisa el módulo."); None },
+        };
+        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
             #[cfg(test)] inventory: Arc::new(session_survivors),
         })
     }
@@ -303,6 +314,7 @@ impl Runner {
         self.quitting.store(true, Ordering::Release);
         let _workspace = self.workspace_mutations.lock().unwrap_or_else(|error|error.into_inner());
         let _guard = self.mutations.lock().unwrap_or_else(|error|error.into_inner());
+        if let Some(pulso)=&self.pulso { pulso.shutdown(); }
         let codex_jobs=std::mem::take(&mut *self.codex_jobs.lock().unwrap());
         for job in codex_jobs.values(){job.control.stop.store(true,Ordering::Release);}
         let children: Vec<_> = self.owned.lock().unwrap().values().cloned().collect();
@@ -350,6 +362,8 @@ impl Runner {
             "get_settings" => &[],
             "set_settings" => &["maxConcurrentSessions"],
             "rename_session" => &["id","title"],
+            "native_binding" => &["id"],
+            "resume_native" => &["id","sourceId","rows","cols"],
             "shutdown" | "diagnostic_preview" | "telemetry" | "refresh_quotas" => &[],
             "register_project" => &["id","path"],
             "close_project" | "reopen_project" => &["id"],
@@ -389,6 +403,20 @@ impl Runner {
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
             return self.settings.set_limit(limit as usize);
         }
+        if op == "native_binding" {
+            let id=args["id"].as_str().context("Falta sesión")?; validate_id(id)?;
+            let binding=crate::native_sessions::load(&self.data_dir,id)?;
+            let mut active=None;
+            if let Some(binding)=&binding {
+                for session in self.terminal_streams.sessions() {
+                    if session["kind"]!=binding.provider || !matches!(session["status"].as_str(),Some("running"|"starting")) {continue;}
+                    if let Some(key)=session["id"].as_str() {
+                        if crate::native_sessions::load(&self.data_dir,key)?.is_some_and(|other|other.provider==binding.provider && other.conversation_id.eq_ignore_ascii_case(&binding.conversation_id)) {active=Some(key.to_owned());break;}
+                    }
+                }
+            }
+            return Ok(json!({"binding":binding.map(|b|json!({"provider":b.provider,"conversationId":b.conversation_id,"source":b.source,"resumedFrom":b.resumed_from})),"activeSessionId":active}));
+        }
         if op == "terminal_live" {
             let id=args["id"].as_str().context("id required")?;validate_id(id)?;
             let after=args["after"].as_u64().context("invalid terminal cursor")?;
@@ -402,6 +430,9 @@ impl Runner {
                 Err(_) if self.terminal_streams.session(id).is_none()=>Ok(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation})),
                 Err(error)=>Err(error),
             };
+        }
+        if op == "stop" {
+            if let (Some(pulso), Some(id)) = (&self.pulso, args["id"].as_str()) { validate_id(id)?; let _ = pulso.revoke_session(id); }
         }
         // An owned handle is the authority for native controls. Neither a busy
         // archive writer nor an unreadable database may disable stop or input.
@@ -461,7 +492,7 @@ impl Runner {
             self.db.try_lock().ok().and_then(|db| {
                 let value=(|| -> Result<Value> {
                 let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
-                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
+                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"pulsoVersion":1,"pulsoAvailable":self.pulso.as_ref().is_some_and(|p|p.available()),"nativeResumeVersion":1,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
                 })().ok()?;
                 // Publish while holding DB -> cache, the same order as rename.
                 // A pre-rename snapshot cannot overwrite the renamed fallback.
@@ -471,6 +502,7 @@ impl Runner {
             let mut result=self.status_cache.lock().unwrap().clone();
             ensure!(!result.is_null(),"Storage status unavailable; terminal_live and owned controls remain available");
             // Settings remain current even when SQLite uses the cached fallback.
+            result["pulsoAvailable"]=json!(self.pulso.as_ref().is_some_and(|p|p.available()));
             result["settings"]=self.settings.snapshot();
             result["settingsVersion"]=json!(1);
             result["sessionRenameVersion"]=json!(1);
@@ -601,6 +633,29 @@ impl Runner {
                     _ => unreachable!(),
                 }
             });
+        }
+        if op=="resume_native" {
+            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay una operación de proyecto en curso; consulta su estado antes de reintentar"))?;
+            let _guard=self.mutations.lock().unwrap();
+            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
+            let id=args["id"].as_str().context("Falta nueva sesión")?;validate_id(id)?;
+            let source=args["sourceId"].as_str().context("Falta sesión de origen")?;validate_id(source)?;
+            ensure!(id!=source,"Usa una sesión nueva para la reanudación");
+            if let Some(existing)=self.db.lock().unwrap().session(id)? {
+                let binding=crate::native_sessions::load(&self.data_dir,id)?.context("El ID pertenece a otra sesión")?;
+                ensure!(existing["kind"]=="claude" && existing["transport"]!="app-server" && binding.provider=="claude" && binding.resumed_from.as_deref()==Some(source),"El ID pertenece a otra reanudación");
+                return Ok(self.terminal_streams.session(id).unwrap_or(existing));
+            }
+            let old=self.db.lock().unwrap().session(source)?.context("Sesión de origen desconocida")?;
+            ensure!(old["kind"]=="claude" && old["transport"]!="app-server","Solo se reanudan conversaciones nativas con identidad registrada");
+            ensure!(old["pid"].as_u64().is_some(),"La conversación no llegó a iniciarse; usa un punto de continuidad");
+            crate::native_sessions::load(&self.data_dir,source)?.context("No se registró la identidad nativa; usa el historial o un punto de continuidad")?;
+            if let Some(task)=old["taskId"].as_str() {
+                crate::projects::ensure_task_open(&self.db.lock().unwrap().0,task)?;
+                ensure!(!crate::workflow::archived(&self.db.lock().unwrap().0,task)?,"La tarea Git está archivada; reábrela antes de reanudar");
+                crate::projects::ready(&self.db,task)?;
+            }
+            return self.start(id,&json!({"id":id,"kind":old["kind"],"title":old["title"],"cwd":old["cwd"],"taskId":old["taskId"],"rows":args["rows"],"cols":args["cols"],"resumeFrom":source}));
         }
         if op=="start" {
             let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay una operación de proyecto en curso; consulta su estado antes de reintentar"))?;
@@ -783,6 +838,10 @@ impl Runner {
         if grant.is_some(){crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;}
         if let Some(existing) = self.db.lock().unwrap().session(id)? {
             ensure!(existing["kind"] == args["kind"] && existing["title"] == args["title"] && existing["taskId"] == args["taskId"] && (args["cwd"].is_null() || existing["cwd"] == args["cwd"]), "El ID de sesión ya tiene otro contenido");
+            if let Some(source)=args["resumeFrom"].as_str() {
+                let binding=crate::native_sessions::load(&self.data_dir,id)?.context("El ID ya pertenece a otra sesión")?;
+                ensure!(binding.resumed_from.as_deref()==Some(source),"El ID ya pertenece a otra reanudación");
+            }
             return Ok(self.terminal_streams.session(id).unwrap_or(existing));
         }
         crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;
@@ -822,7 +881,29 @@ impl Runner {
             Some((cwd,workspace)) => (cwd,workspace),
             None => { let cwd=work_root.join(id);private_dir(&cwd)?;(cwd,None) },
         };
+        let binding = if kind=="claude" {
+            let previous=args["resumeFrom"].as_str().map(|source|crate::native_sessions::load(&self.data_dir,source)?.context("Identidad nativa no disponible")).transpose()?;
+            let conversation=match &previous {Some(binding)=>binding.conversation_id.clone(),None=>match crate::native_sessions::load(&self.data_dir,id)? {Some(binding)=>{ensure!(binding.provider=="claude" && binding.resumed_from.is_none(),"El ID ya pertenece a otra conversación");binding.conversation_id},None=>crate::native_sessions::new_uuid()?}};
+            // Fence exact provider identity even when cwd is not a Git repository.
+            for other in self.db.lock().unwrap().sessions_with_live(&self.terminal_streams.sessions())? {
+                if other["id"]==id || other["kind"]!="claude" || matches!(other["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released")) {continue;}
+                if let Some(key)=other["id"].as_str() {
+                    if let Some(existing)=crate::native_sessions::load(&self.data_dir,key)? {
+                        ensure!(!existing.conversation_id.eq_ignore_ascii_case(&conversation),"Esta conversación ya tiene una sesión activa o incierta. Vuelve a ella antes de reanudar.");
+                    }
+                }
+            }
+            Some(crate::native_sessions::reserve(&self.data_dir,id,kind,&conversation,args["resumeFrom"].as_str())?)
+        } else {None};
         let mut cmd = command(kind, id, &cwd)?;
+        if let Some(binding)=binding {
+            cmd.arg(if args["resumeFrom"].is_string() {"--resume"} else {"--session-id"});
+            cmd.arg(&binding.conversation_id);
+        }
+        if matches!(kind,"claude"|"codex") {
+            cmd.env("JAURIA_PULSO_HANDLE", self.data_dir.join("pulso-grants").join(format!("{id}.json")));
+            cmd.env("JAURIA_PULSO_CLIENT", std::env::current_exe()?);
+        }
         if kind=="claude" {
             cmd.arg("--settings");cmd.arg(crate::claude_quota::settings(&std::env::current_exe()?,&self.data_dir)?);
         }
@@ -926,9 +1007,18 @@ impl Runner {
             // Lifecycle remains the actual wait/stop result. History completeness
             // is tracked separately and persisted asynchronously, best effort.
             runner.terminal_streams.finish(&id,status,detail);
+            if let Some(pulso)=&runner.pulso { let _=pulso.revoke_session(&id); }
             *owned.done.lock().unwrap() = true;
             owned.wake.notify_all();
         });
+        // Policy lookup may touch Pulso SQLite. Neither PTY draining nor child
+        // reaping nor the caller's admission gates may wait for it.
+        if let Some(pulso)=self.pulso.clone() {
+            let session=session.clone();
+            let _=thread::Builder::new().name("pulso-session-policy".into()).spawn(move || {
+                let _=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||pulso.auto_grant(&session)));
+            });
+        }
         Ok(session)
     }
 

@@ -93,6 +93,8 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         "telemetry" | "refresh_quotas" | "get_settings" => &[],
         "set_settings" => &["maxConcurrentSessions"],
         "rename_session" => &["id","title"],
+        "native_binding" => &["id"],
+        "resume_native" => &["id","sourceId","rows","cols"],
         "register_project" => &["id","path"],
         "close_project" | "reopen_project" => &["id"],
         "create_task" => &["id","projectId","title","objective","acceptanceCriteria"],
@@ -222,7 +224,7 @@ async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>
         if let Some(rows)=discovery["pids"].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));}
         let mut sample=sampler.lock().map_err(error)?.sample(&pids);sample["discovery"]=discovery;Some(sample)
     }else{None};
-        if matches!(op.as_str(),"workflow_artifact"|"workflow"|"snapshot_task"|"handoff_task"|"reopen_task"|"register_project"|"close_project"|"reopen_project"|"create_task"|"prepare_task"|"revalidate_task"|"open_handoff"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
+        if matches!(op.as_str(),"workflow_artifact"|"workflow"|"snapshot_task"|"handoff_task"|"reopen_task"|"register_project"|"close_project"|"reopen_project"|"create_task"|"prepare_task"|"revalidate_task"|"open_handoff"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
         else {
             let mut response=rpc(&layout,&op,args)?;
             if let Some(mut metrics)=app_metrics {
@@ -232,6 +234,66 @@ async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>
             }
             Ok(response)
         }
+    }).await.map_err(error)?
+}
+
+fn validate_pulso(op: &str, args: &Value) -> Result<()> {
+    let fields: &[&str] = match op {
+        "revision" => &[],
+        "projects" => &["cursor","limit","archived"],
+        "project" | "item" => &["id"],
+        "items" => &["projectId","cursor","limit","archived"],
+        "links" => &["projectId"],
+        "checkpoint_history" => &["itemId","cursor","limit"],
+        "activity" => &["projectId","itemId","limit"],
+        "project_create" => &["id","requestId","title","plan","mainSessionId"],
+        "project_update" => &["id","requestId","expectedRevision","title","plan","mainSessionId","archived"],
+        "item_create" => &["id","requestId","projectId","title","note","status"],
+        "item_update" => &["id","requestId","expectedRevision","title","note","status","position","archived"],
+        "link" => &["requestId","projectId","itemId","sessionId"],
+        "checkpoint_create" => &["id","requestId","itemId","expectedRevision","brief","nextAction","sessionId"],
+        "grant" => &["sessionId","projectId","canCreateProjects","remember"],
+        "revoke" => &["sessionId"],
+        "policies" => &[],
+        "revoke_policy" => &["id"],
+        _ => return Err("Operación de Pulso no permitida".into()),
+    };
+    let object=args.as_object().ok_or("args debe ser objeto")?;
+    if object.keys().any(|key|!fields.contains(&key.as_str())) { return Err("Argumento de Pulso no permitido".into()); }
+    if serde_json::to_vec(args).map_err(error)?.len()>120*1024 { return Err("Petición de Pulso demasiado grande".into()); }
+    Ok(())
+}
+
+// Separate connection, credential and worker: planning never enters PTY polling.
+#[tauri::command]
+async fn pulso_request(op:String,args:Value,state:tauri::State<'_,Bridge>)->Result<Value> {
+    validate_pulso(&op,&args)?;
+    let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero al runner")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let parent=layout.socket.parent().ok_or("Endpoint de Pulso no disponible")?;
+        let file=parent.join("pulso.token");
+        let mut token_file=OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK).open(file)
+            .map_err(|_|"Pulso no está disponible en este runner")?;
+        let meta=token_file.metadata().map_err(error)?;
+        if !meta.is_file() || meta.uid()!=unsafe {libc::geteuid()} || meta.mode()&0o077!=0 || meta.nlink()!=1 || meta.len()>4096 {
+            return Err("Credencial local de Pulso inválida".into());
+        }
+        let mut token=String::new(); (&mut token_file).take(4097).read_to_string(&mut token).map_err(error)?;
+        let token=token.trim();
+        if token.len()<32 || token.len()>4096 || token.chars().any(char::is_whitespace) { return Err("Credencial local de Pulso inválida".into()); }
+        let mut stream=UnixStream::connect(parent.join("pulso.sock")).map_err(|_|"Pulso no responde; vuelve a conectar")?;
+        stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(error)?;
+        stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(error)?;
+        let mut request=serde_json::to_vec(&json!({"version":1,"token":token,"op":op,"args":args})).map_err(error)?;
+        request.push(b'\n');
+        if request.len()>128*1024 { return Err("Petición de Pulso demasiado grande".into()); }
+        stream.write_all(&request).map_err(|_|"No se confirmó el envío a Pulso; conserva el mismo requestId al reintentar")?;
+        use std::io::BufRead;
+        let mut line=Vec::new();
+        std::io::BufReader::new(stream).take(512*1024+1).read_until(b'\n',&mut line)
+            .map_err(|_|"Pulso no confirmó el resultado; consulta o reintenta con el mismo requestId")?;
+        if line.len()>512*1024 || line.last()!=Some(&b'\n') { return Err("Respuesta incompleta de Pulso".into()); }
+        serde_json::from_slice(&line).map_err(|_|"Respuesta inválida de Pulso".into())
     }).await.map_err(error)?
 }
 // Keep the renderer limited to selecting a single directory. No generic file API.
@@ -474,7 +536,7 @@ fn main() {
                 let _ = app.emit("open-settings", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
+        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }
 
