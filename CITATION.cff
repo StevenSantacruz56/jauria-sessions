@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you reference Jauria, cite this repository and the release you used."
+type: software
+title: "Jauria: Claude Code and Codex session manager for macOS"
+authors:
+  - name: "Jauria contributors"
+repository-code: "https://github.com/StevenSantacruz56/jauria-sessions"
+url: "https://github.com/StevenSantacruz56/jauria-sessions"
+license: GPL-3.0-only
+abstract: >-
+  A Tauri and Rust desktop app for managing Claude Code, OpenAI Codex and
+  zsh terminal sessions on macOS Apple Silicon, with separate Git worktrees
+  for parallel tasks, local history, configurable concurrency, and two visible panes.
+keywords:
+  - claude-code
+  - openai-codex
+  - macos
+  - tauri
+  - rust
+  - session-manager
+  - git-worktree

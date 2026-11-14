@@ -15,6 +15,7 @@ import tempfile
 from xml.parsers.expat import ExpatError
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_REPOSITORY = 'https://github.com/StevenSantacruz56/jauria-sessions'
 DEVELOPER_ID = 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
 
 
@@ -129,6 +130,25 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def source_reference(version):
+    return (
+        'Referencia al código fuente de Jauria {}\n'
+        'Licencia del código original: GPL-3.0-only (véase LICENSE).\n\n'
+        'Versión: {}/tree/v{}\n'
+        'Archivo de la etiqueta: {}/archive/refs/tags/v{}.tar.gz\n\n'
+        'Este archivo es una referencia, no una oferta escrita vinculante de '\
+        'suministro de código ni una entrega automática del código fuente. '\
+        'No certifica el cumplimiento de GPLv3.\n'
+        'Antes de redistribuir un binario, debes hacer disponible el código '\
+        'fuente correspondiente (Corresponding Source), incluidos los materiales '\
+        'de compilación necesarios, en las condiciones de GPLv3.\n'
+        'Verifica que la etiqueta corresponde al binario y que sus destinatarios '\
+        'pueden acceder a la fuente. Un repositorio privado inaccesible para el '\
+        'destinatario no basta; el enlace a un archivo no garantiza por sí solo '\
+        'que contenga todo el Corresponding Source.\n'
+    ).format(version, SOURCE_REPOSITORY, version, SOURCE_REPOSITORY, version)
+
+
 def package(app, output=None, require_notarized=False, root=ROOT):
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         raise PackageError('Esta distribución requiere macOS Darwin/arm64')
@@ -138,6 +158,12 @@ def package(app, output=None, require_notarized=False, root=ROOT):
     installation = root / 'docs/INSTALLATION.md'
     if not installation.is_file() or installation.is_symlink():
         raise PackageError('Falta docs/INSTALLATION.md')
+    license_path = root / 'LICENSE'
+    if license_path.is_symlink() or not license_path.is_file():
+        raise PackageError('LICENSE es obligatorio y debe ser un archivo regular sin symlink')
+    license_bytes = license_path.read_bytes()
+    if not license_bytes:
+        raise PackageError('LICENSE no puede estar vacío')
     status = signature_status(app)
     if require_notarized and not status['notarized']:
         raise PackageError('Se requiere Developer ID válido, evaluación Gatekeeper y ticket stapled válido')
@@ -163,10 +189,14 @@ def package(app, output=None, require_notarized=False, root=ROOT):
                 raise PackageError('El estado de firma cambió al copiar el bundle')
             (payload / 'Applications').symlink_to('/Applications')
             shutil.copyfile(installation, payload / 'INSTALAR.txt')
+            (payload / 'LICENSE').write_bytes(license_bytes)
+            (payload / 'SOURCE_REFERENCE.txt').write_text(source_reference(version), encoding='utf-8')
             for relative in ('NOTICE.md', 'THIRD_PARTY_NOTICES.txt', 'THIRD_PARTY_NOTICES.md', 'docs/DEPENDENCIES.md'):
                 notice = root / relative
                 if notice.is_file() and not notice.is_symlink():
-                    shutil.copyfile(notice, payload / notice.name)
+                    destination = payload / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(notice, destination)
             dmg = temporary / filename
             command(['hdiutil', 'create', '-volname', 'Jauria', '-srcfolder', payload,
                      '-format', 'UDZO', dmg])

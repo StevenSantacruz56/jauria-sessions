@@ -1,8 +1,9 @@
 [package]
 name = "aw-runner"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 publish = false
+license = "GPL-3.0-only"
 
 [dependencies]
 anyhow = "=1.0.104"

@@ -24,6 +24,10 @@ class PackageTests(unittest.TestCase):
         (self.root / 'docs').mkdir()
         (self.root / 'docs/INSTALLATION.md').write_text('Instalar Jauria')
         (self.root / 'NOTICE.md').write_text('Avisos de terceros')
+        self.license_bytes = (ROOT / 'LICENSE').read_bytes()
+        (self.root / 'LICENSE').write_bytes(self.license_bytes)
+        (self.root / 'THIRD_PARTY_NOTICES.txt').write_text('Otros avisos')
+        (self.root / 'docs/DEPENDENCIES.md').write_text('Dependencias')
         self.app = self.root / 'Jauria.app'
         self.info = {'CFBundleName': 'Jauria', 'CFBundleShortVersionString': '1.0.0',
                      'CFBundleVersion': '1.0.0', 'CFBundleExecutable': 'Jauria'}
@@ -71,8 +75,27 @@ class PackageTests(unittest.TestCase):
             self.assertEqual((payload / 'Applications').readlink(), Path('/Applications'))
             self.assertEqual((payload / 'INSTALAR.txt').read_text(), 'Instalar Jauria')
             self.assertEqual((payload / 'NOTICE.md').read_text(), 'Avisos de terceros')
-            self.assertEqual(sorted(p.name for p in payload.iterdir()),
-                             ['Applications', 'INSTALAR.txt', 'Jauria.app', 'NOTICE.md'])
+            self.assertEqual((payload / 'LICENSE').read_bytes(), self.license_bytes)
+            self.assertEqual((payload / 'THIRD_PARTY_NOTICES.txt').read_text(), 'Otros avisos')
+            self.assertEqual((payload / 'docs/DEPENDENCIES.md').is_file(),
+                             (self.root / 'docs/DEPENDENCIES.md').is_file())
+            if (self.root / 'docs/DEPENDENCIES.md').is_file():
+                self.assertEqual((payload / 'docs/DEPENDENCIES.md').read_text(), 'Dependencias')
+            self.assertFalse((payload / 'DEPENDENCIES.md').exists())
+            reference = (payload / 'SOURCE_REFERENCE.txt').read_text(encoding='utf-8')
+            version = self.info['CFBundleShortVersionString']
+            repository = 'https://github.com/StevenSantacruz56/jauria-sessions'
+            self.assertIn(repository + '/tree/v' + version + '\n', reference)
+            self.assertIn(repository + '/archive/refs/tags/v' + version + '.tar.gz\n', reference)
+            for required in ('GPL-3.0-only', 'no una oferta escrita vinculante',
+                             'ni una entrega automática', 'No certifica el cumplimiento',
+                             'Antes de redistribuir', 'Corresponding Source'):
+                self.assertIn(required, reference)
+            expected = ['Applications', 'INSTALAR.txt', 'Jauria.app', 'LICENSE', 'NOTICE.md',
+                        'SOURCE_REFERENCE.txt', 'THIRD_PARTY_NOTICES.txt']
+            if (self.root / 'docs/DEPENDENCIES.md').is_file():
+                expected.append('docs')
+            self.assertEqual(sorted(p.name for p in payload.iterdir()), expected)
             self.assertEqual(argv[argv.index('-format') + 1], 'UDZO')
             Path(argv[-1]).write_bytes(b'simulated image, not an actual DMG')
         if self.fail == (tool, argv[1]):
@@ -197,6 +220,41 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(args.require_notarized)
         with patch('sys.stderr'), self.assertRaises(SystemExit):
             packaging.parser().parse_args([])
+
+    def test_optional_dependencies_notice_can_be_absent(self):
+        (self.root / 'docs/DEPENDENCIES.md').unlink()
+        self.assertTrue(self.package().is_file())
+
+    def test_missing_invalid_or_symlink_license_fails_before_image_creation(self):
+        license_path = self.root / 'LICENSE'
+        license_path.unlink()
+        for kind in ('missing', 'directory', 'empty', 'symlink', 'dangling-symlink'):
+            with self.subTest(kind=kind):
+                if kind == 'directory':
+                    license_path.mkdir()
+                elif kind == 'empty':
+                    license_path.write_bytes(b'')
+                elif kind == 'symlink':
+                    license_path.symlink_to(ROOT / 'LICENSE')
+                elif kind == 'dangling-symlink':
+                    license_path.symlink_to(self.root / 'missing-license')
+                with self.assertRaisesRegex(packaging.PackageError, 'LICENSE'):
+                    self.package()
+                self.assertFalse(self.output.exists())
+                self.assertFalse(any(call[0] == 'hdiutil' for call in self.calls))
+                if kind == 'directory':
+                    license_path.rmdir()
+                elif kind != 'missing':
+                    license_path.unlink()
+
+    def test_version_bump_updates_artifact_receipt_and_source_urls(self):
+        (self.root / 'VERSION').write_text('1.0.1\n')
+        self.info['CFBundleVersion'] = self.info['CFBundleShortVersionString'] = '1.0.1'
+        self.write_info()
+        artifact = self.package()  # mock checks both URLs in the actual image payload
+        self.assertEqual(artifact.name, 'Jauria_1.0.1_aarch64_unsigned.dmg')
+        receipt = json.loads((self.output / (artifact.name + '.receipt.json')).read_text())
+        self.assertEqual(receipt['version'], '1.0.1')
 
 
 if __name__ == '__main__':

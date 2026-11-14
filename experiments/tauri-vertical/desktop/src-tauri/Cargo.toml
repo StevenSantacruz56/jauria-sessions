@@ -1,8 +1,9 @@
 [package]
 name = "aw-vertical-desktop"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 publish = false
+license = "GPL-3.0-only"
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }

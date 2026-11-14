@@ -1,13 +1,19 @@
-# Jauria
+# Jauria — sesiones de Claude Code y Codex en macOS
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="experiments/tauri-vertical/desktop/public/brand/jauria-logo-horizontal-oscuro.svg">
   <img src="experiments/tauri-vertical/desktop/public/brand/jauria-logo-horizontal-transparente.svg" alt="Jauría" width="240">
 </picture>
 
-Jauria reúne Codex, Claude Code y una terminal zsh en una aplicación de escritorio para macOS. Mantén tus sesiones organizadas por carpeta, vuelve a su historial y trabaja en dos paneles. Para tareas de programación, registra un proyecto Git y prepara un worktree separado para cada tarea.
+[Español](README.md) · [English](README.en.md)
 
-Jauria 1.0 es la primera versión oficial para macOS Apple Silicon. Consulta la [versión actual](VERSION) y el [changelog](CHANGELOG.md). El bundle local se distribuye sin firma de distribución ni notarización; las pruebas y las limitaciones de esta entrega están en [las notas de 1.0.0](docs/RELEASE_1.0.0.md).
+**Jauria is a macOS desktop session manager for Claude Code, OpenAI Codex and terminals, built with Tauri and Rust.**
+
+Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
+
+**Versión actual: 1.0.1 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.0.1](docs/RELEASE_1.0.1.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
+
+Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
 ## Para qué sirve
 
@@ -55,6 +61,28 @@ Jauria admite un solo escritor administrado por worktree Git: no abras dos sesio
 
 Los avisos nuevos se concentran en la campana de la barra superior. Su contador y el Dock muestran los avisos sin ver; al abrir la vista puedes consultarlos y marcar los avisos como vistos. Ver un aviso no resuelve un fallo ni concede permisos.
 
+## Preguntas frecuentes
+
+### ¿Cómo gestionar sesiones de Claude Code y Codex en paralelo en Mac?
+
+Abre una sesión por herramienta y carpeta desde Nueva sesión. Configuración permite un máximo combinado de 1 a 8 sesiones, con dos paneles de vista. Usa worktrees diferentes para dos tareas que escriban sobre el mismo repositorio Git.
+
+### ¿Necesito crear un proyecto para cada sesión?
+
+Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los proyectos y tareas sirven para organizar trabajo Git con carpetas aisladas.
+
+### ¿Jauria incluye el acceso a los modelos o aumenta sus cuotas?
+
+Codex y Claude Code usan sus propias CLI, cuentas y límites. Jauria conserva la configuración nativa del proveedor; las cuotas de Claude o Codex son independientes del máximo de sesiones y del historial local.
+
+### ¿Funciona en Windows, Linux o Mac Intel?
+
+La distribución validada actualmente es macOS Apple Silicon. Esta entrega no ofrece soporte para Windows, Linux ni Intel.
+
+### ¿Se puede citar o reutilizar este proyecto?
+
+El código propio está bajo GPL-3.0-only, con condiciones separadas para terceros y marca. [CITATION.cff](CITATION.cff) proporciona la referencia del software; para citar una versión concreta, enlaza también su release. La [guía de descubrimiento](docs/DISCOVERABILITY.md) describe cómo preparar el contenido para búsqueda pública sin prometer indexación o recomendaciones de asistentes.
+
 ## Capturas
 
 Las dos primeras capturas muestran la aplicación en macOS con sesiones temporales de demostración. Las vistas de Configuración y pestañas de 1.0.0 usan los componentes reales de la interfaz con datos sintéticos, sin perfiles de usuario.
@@ -93,7 +121,7 @@ Para sesiones reales, instala y autentica las CLI por separado. El backend actua
 
 La instalación para otros usuarios se prepara como un archivo **`.dmg` para Apple Silicon**: abre la imagen y arrastra **Jauria** a **Aplicaciones**. Jauria no requiere instalar Rust ni Node para abrir la app; las CLI de los proveedores y su acceso se preparan por separado. Consulta [la guía de instalación](docs/INSTALLATION.md).
 
-La entrega 1.0.0 en GitHub contiene **código y documentación**; el DMG se conserva como **instalador local**, sin adjuntarlo a la release. Su nombre es `Jauria_1.0.0_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. El repositorio sigue siendo privado. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
+Las releases actuales de GitHub contienen **código y documentación**; el DMG se conserva como **instalador local**, sin adjuntarlo a la release. Cada paquete usa su versión en el nombre: `Jauria_<versión>_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. No hay un DMG descargable desde GitHub en esta entrega. Si el repositorio es privado, necesitas acceso de GitHub para consultar sus releases. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
 
 ## Compilar y abrir
 
@@ -120,6 +148,10 @@ Consulta [desarrollo](docs/DEVELOPMENT.md), [privacidad y seguridad](SECURITY.md
 
 ## Licencias y marca
 
-**No se ha seleccionado una licencia de código abierto para el código propio de Jauria.** Este repositorio privado no concede una licencia OSS por publicarse en GitHub. La decisión queda pendiente del titular. Los componentes de terceros conservan sus propios términos, independientes de esa decisión; consulta [NOTICE](NOTICE.md) y [las dependencias directas](docs/DEPENDENCIES.md).
+El **código propio de Jauria está bajo GPLv3, versión 3 únicamente** (`GPL-3.0-only`): consulta [LICENSE](LICENSE). Al redistribuir binarios o modificaciones, cumple las condiciones de esa licencia y proporciona el código fuente correspondiente. La licencia no equivale a firma o notarización de macOS.
+
+Los derechos sobre el nombre, logotipos y demás identidad de marca se mantienen separados. Las fuentes y bibliotecas conservan sus licencias originales. Consulta [NOTICE](NOTICE.md) y [las dependencias](docs/DEPENDENCIES.md).
+
+La [revisión de exposición y dependencias](docs/PUBLICATION_READINESS.md) describe lo comprobado antes de hacer público el repositorio y los pendientes.
 
 Las fuentes Bricolage Grotesque, Inter y JetBrains Mono incluyen sus textos OFL en `experiments/tauri-vertical/desktop/public/brand/fuentes/`. Los activos de marca mantienen sus bytes originales y metadatos de procedencia; los permisos sobre la marca son independientes de las licencias de fuentes y dependencias.

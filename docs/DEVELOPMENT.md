@@ -74,7 +74,7 @@ TERMINAL_STREAM_BROWSER=1 TERMINAL_STREAM_ENGINE=webkit node --test tests/termin
 
 Configuración usa Chrome y WebKit en una misma ejecución; las otras suites seleccionan un motor por ejecución. Comprueban apertura y cierre de diálogos, guardado explícito, compatibilidad con un runner anterior, renombrado desde el menú real, separación de abiertas e historial, avisos detrás de un diálogo y coherencia del Dock. La suite de streams incluye backfill durante escritura sin duplicar salida ni enviar respuestas de terminal históricas.
 
-`JAURIA_TEST_RUNNER=/ruta/absoluta/Jauria.app/Contents/Resources/bin/aw-runner` permite ejecutar `session_preferences_rpc` y `terminal_stream_rpc` contra el runner empaquetado, desde la carpeta del runner. Estas pruebas siguen creando perfiles desechables. Consulta [la validación de 1.0.0](RELEASE_1.0.0.md).
+`JAURIA_TEST_RUNNER=/ruta/absoluta/Jauria.app/Contents/Resources/bin/aw-runner` permite ejecutar `session_preferences_rpc` y `terminal_stream_rpc` contra el runner empaquetado, desde la carpeta del runner. Estas pruebas siguen creando perfiles desechables. Consulta [la validación de 1.0.1](RELEASE_1.0.1.md) y [la entrega original 1.0.0](RELEASE_1.0.0.md).
 
 ## Preferencias y nombres de sesión
 
@@ -89,3 +89,11 @@ El listener del runner espera legibilidad del socket con `poll`, en vez de agreg
 El benchmark opt-in `runner/tests/listener_latency.rs` usa dos PTYs desechables y exige la respuesta del proceso hijo, distinguiéndola del eco de comandos del kernel. Ejecuta `cargo test --locked --test listener_latency -- --ignored --nocapture` en el runner; `LISTENER_BASELINE_RUNNER` permite comparar con un ejecutable anterior de ruta absoluta. No utiliza perfiles reales ni impone umbrales de tiempo frágiles en CI. Las mediciones del runner no equivalen a latencia de renderizado WKWebView.
 
 La compilación de escritorio usa ahora `release` de forma predeterminada. `--debug` conserva una compilación de desarrollo y debe pasarse también al launcher. El DMG se empaqueta aparte con `scripts/package-macos.py` para distinguir la distribución verificada de un artefacto local sin firma.
+
+## Licencias y revisión antes de publicación
+
+El código propio usa GPL-3.0-only en LICENSE y en los metadatos npm/Cargo. Las licencias de fuentes, bibliotecas y los derechos de marca se conservan por separado en NOTICE. No asignes GPL a archivos originales de terceros ni modifiques sus avisos para normalizar metadatos.
+
+El bundle copia LICENSE y NOTICE a `Contents/Resources/licenses`. El empaquetador DMG exige LICENSE y agrega `SOURCE_REFERENCE.txt` con la versión exacta. Verifica tanto los avisos como la disponibilidad efectiva del código correspondiente antes de redistribuir un binario.
+
+La revisión de exposición usa Gitleaks con redacción completa sobre historial, commits y etiquetas. No registra valores secretos ni pretende sustituir una auditoría completa. El alcance y las comprobaciones de GitHub Actions/assets se documentan en [PUBLICATION_READINESS.md](PUBLICATION_READINESS.md).

@@ -1,6 +1,6 @@
 {
   "name": "aw-vertical-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "esbuild": "0.25.12",
     "playwright": "1.65.0",
     "typescript": "5.9.3",
-    "vite": "6.4.1"
-  }
+    "vite": "6.4.6"
+  },
+  "license": "GPL-3.0-only"
 }

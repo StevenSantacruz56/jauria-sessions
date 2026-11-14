@@ -1,12 +1,12 @@
-# Instalar Jauria 1.0.0 en macOS
+# Instalar Jauria en macOS
 
 La distribución actual es para Mac con Apple Silicon (arm64/aarch64). La configuración de la app declara macOS 11.0 como mínimo; la compatibilidad solo se ha validado en el Mac actual de pruebas, no en todas las versiones desde macOS 11. No hay paquete Intel ni Windows en esta distribución.
 
 ## Instalar el paquete local
 
-La release 1.0.0 de GitHub contiene código y documentación. El DMG se preparó para uso local y **no se adjunta a GitHub Releases** en esta entrega. La disponibilidad del código no implica que exista un instalador descargable.
+Las releases actuales de GitHub contienen código y documentación. El DMG se preparó para uso local y **no se adjunta a GitHub Releases** en esta entrega. La disponibilidad del código no implica que exista un instalador descargable.
 
-1. Abre la carpeta donde recibiste o generaste `Jauria_1.0.0_aarch64_unsigned.dmg`. Conserva junto a él `SHA256SUMS` y el archivo `.receipt.json`; describen la misma imagen y sus verificaciones.
+1. Abre la carpeta donde recibiste o generaste `Jauria_<versión>_aarch64_unsigned.dmg`. Conserva junto a él `SHA256SUMS` y el archivo `.receipt.json`; describen la misma imagen y sus verificaciones.
 2. Para comprobar el archivo, ejecuta desde esa carpeta:
 
    ```sh
@@ -23,7 +23,7 @@ Si en una entrega futura se publican instaladores, descárgalos con su checksum 
 
 ## Estado de firma de esta distribución
 
-`Jauria_1.0.0_aarch64_unsigned.dmg` identifica una app sin firma Developer ID validada para distribución. Puede tener firma Apple Development o ad-hoc; eso no equivale a Developer ID ni a notarización. Esta entrega **no es una distribución pública sin fricción**: macOS puede bloquear una app descargada que no tiene las verificaciones necesarias. No desactives Gatekeeper ni elimines la cuarentena para instalarla. Si macOS la bloquea, solicita una release Developer ID notarizada al responsable de la distribución.
+`Jauria_<versión>_aarch64_unsigned.dmg` identifica una app sin firma Developer ID validada para distribución. Puede tener firma Apple Development o ad-hoc; eso no equivale a Developer ID ni a notarización. Esta entrega **no es una distribución pública sin fricción**: macOS puede bloquear una app descargada que no tiene las verificaciones necesarias. No desactives Gatekeeper ni elimines la cuarentena para instalarla. Si macOS la bloquea, solicita una release Developer ID notarizada al responsable de la distribución.
 
 La firma Developer ID, la notarización y el stapling para distribución están pendientes de las credenciales y certificados correspondientes. Una identidad Apple Development no los sustituye. El empaquetador no firma, no busca identidades en el llavero y no solicita ni carga secretos.
 
@@ -35,7 +35,9 @@ Guarda tu trabajo y termina de forma controlada las sesiones y procesos de traba
 
 Las funciones nuevas del backend requieren un runner actualizado. Si aparece el aviso de runner anterior en Información → Diagnóstico, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
 
-El paquete incluye exclusivamente el bundle proporcionado, esta guía y los avisos de terceros disponibles. No se copian perfiles de usuario, tokens del runner, credenciales ni configuraciones de proveedores desde el equipo que empaqueta. La actualización conserva los datos externos de tu perfil; no los añadas manualmente al bundle ni al DMG.
+Desde 1.0.1, el código propio se licencia bajo GPL-3.0-only. El bundle incorpora LICENSE y NOTICE; el DMG añade ambos textos y `SOURCE_REFERENCE.txt`, con enlaces a la etiqueta y al archivo de fuente de su misma versión. Esa referencia no entrega automáticamente el código ni certifica cumplimiento de GPL. Si redistribuyes binarios, proporciona la fuente correspondiente y los materiales de compilación conforme a [LICENSE](../LICENSE); el destinatario debe poder acceder al código. Un repositorio privado inaccesible para él no basta.
+
+El paquete incluye el bundle proporcionado, esta guía, la licencia, la referencia a la fuente y los avisos de terceros disponibles. No se copian perfiles de usuario, tokens del runner, credenciales ni configuraciones de proveedores desde el equipo que empaqueta. La actualización conserva los datos externos de tu perfil; no los añadas manualmente al bundle ni al DMG.
 
 ## Crear el paquete desde un bundle existente
 
