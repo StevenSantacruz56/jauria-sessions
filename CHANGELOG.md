@@ -6,12 +6,41 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 Sin cambios pendientes registrados.
 
-## [0.1.2] - 2026-11-13
+## [1.0.0] - 2026-11-13
+
+Primera versión oficial de Jauria. Incorpora las correcciones que se prepararon localmente como 0.1.2, sin una publicación intermedia.
+
+### Añadido
+
+- Empaquetado DMG con acceso a Aplicaciones, instrucciones y verificación SHA-256; verificación estricta opcional de firma y notarización mediante `--require-notarized`.
+- Compilación de escritorio optimizada en modo release por defecto, con debug opcional.
+- Pestañas Abiertas e Historial con apariencia de navegador: pestaña activa elevada, esquinas superiores redondeadas, base común y contadores separados.
+- Selector de sesiones con grupos separados para abiertas e historial y etiquetas sin repetir el proveedor.
+- Un solo acceso a Información; Configuración y Diagnóstico tienen funciones separadas.
+- Renombrar sesiones activas y del historial desde el menú de acciones, con nombres persistentes y sin alterar el proceso ni la conversación del proveedor.
+- Campana con contador de avisos nuevos como indicador global; el resumen de avisos se concentra en su vista.
+- Configuración accesible desde la navegación y con `⌘,`, con apariencia y límite de sesiones simultáneas entre 1 y 8.
+- Preferencias de capacidad guardadas por perfil de forma atómica. Reducir el límite conserva las sesiones abiertas; las protecciones por worktree siguen vigentes.
 
 ### Corregido
 
+- El listener del runner responde a nuevas conexiones sin la espera fija de 10 ms por RPC. La lectura de terminales prioriza la sesión activa y reduce las consultas al archivo durante escritura nativa.
+- El límite del historial local se explica como información de guardado; se distingue de la cuota del proveedor y de un fallo de ejecución.
+- El contador del Dock y el encabezado usan la misma selección de avisos nuevos; finalizar una terminal ya atendida no deja un aviso transitorio sin ver.
+
 - Las sesiones nativas de Claude Code respetan el modo de permisos ya guardado, en lugar de forzar `default` al iniciar.
 - Las sesiones nativas de Codex respetan la configuración guardada de aprobaciones y sandbox, sin reemplazarla con flags del lanzador. Los permisos temporales siguen limitados al alcance que define cada proveedor. Si la configuración guardada es más permisiva, ahora se respeta en lugar de aplicar las restricciones propias del lanzador.
+
+### Validación
+
+- Compilación optimizada release, pruebas de frontend, runner, almacenamiento y puente nativo; integración Chrome/WebKit con fixtures y comprobación nativa de Configuración y renombrado.
+- Benchmark de 40 muestras con dos PTYs: entrada → eco del proceso de 25,256 a 1,766 ms de mediana tras cambiar el listener. No mide la respuesta del proveedor ni el renderizado completo.
+- DMG local verificado y montado en solo lectura; hashes del ejecutable y runner contrastados con el bundle. Pruebas y límites en [las notas de 1.0.0](docs/RELEASE_1.0.0.md).
+
+### Distribución
+
+- Código y documentación publicados en GitHub; instalador mantenido localmente, sin adjuntos binarios.
+- Paquete Apple Silicon sin firma Developer ID ni notarización. La actualización no reinicia runners o sesiones que ya estén en ejecución.
 
 ## [0.1.1] - 2026-11-13
 
@@ -52,6 +81,8 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.0.0...HEAD
 [0.1.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v0.1.1
 [0.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/a32f414
+
+[1.0.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.0.0

@@ -3,11 +3,14 @@ import { InteractivePoll } from '../src/interactive-poll.ts';
 let now = 0;
 const poll = new InteractivePoll(() => now);
 assert.equal(poll.delay(true), 150);
+assert.equal(poll.isTyping(true), false);
 const sleeping = poll.wait(true);
 poll.activity();
 await sleeping; // Input wakes the existing awaited sleep, not another poll.
 assert.equal(poll.delay(true), 12);
 assert.equal(poll.delay(false), 150);
+assert.equal(poll.isTyping(true), true);
+assert.equal(poll.isTyping(false), false);
 now = 1199;
 assert.equal(poll.delay(true), 12);
 poll.activity();

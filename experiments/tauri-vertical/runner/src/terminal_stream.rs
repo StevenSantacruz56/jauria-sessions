@@ -23,6 +23,14 @@ const RELEASE_REASON: &str = "explicit operator acknowledgement; no process was 
 const DRAIN: Duration = Duration::from_millis(500);
 const METADATA: usize = 2 * 1024 * 1024;
 const SESSION_METADATA: usize = 64 * 1024;
+// 120 Unicode scalars can each need six JSON bytes, plus the string quotes.
+// Every row reserves this title envelope so a committed rename cannot fail for
+// lack of cache space, including when finished caches fill the global budget.
+const TITLE_METADATA: usize = 120 * 6 + 2;
+
+fn metadata_row_bytes(row: &Value) -> usize {
+    row.to_string().len() + TITLE_METADATA.saturating_sub(row["title"].to_string().len())
+}
 
 #[derive(Clone)]
 struct Config {
@@ -189,6 +197,27 @@ impl TerminalStreams {
         self.shared.wake.notify_one();
     }
 
+    /// Merge only a validated title into the latest cache. Lifecycle/output can
+    /// advance during Store I/O; replacing the observed row would erase them.
+    /// Title space is reserved at registration/finish, so accounting stays fixed
+    /// even across repeated renames. Older writer markers are revision-fenced.
+    pub fn rename(&self, id: &str, title: &str) -> Result<Option<Value>> {
+        ensure!(!title.chars().any(char::is_control),"Session title must not contain control characters");
+        let title=title.trim();
+        ensure!(!title.is_empty() && title.chars().count()<=120 && title.len()<=480,
+            "Invalid session title");
+        let mut m=self.shared.lock();
+        let Some(s)=m.sessions.get_mut(id) else {return Ok(None)};
+        s.row["title"]=json!(title);
+        debug_assert!(metadata_row_bytes(&s.row)+id.len()+512<=s.metadata_bytes,
+            "rename title must fit the preallocated metadata envelope");
+        s.revision+=1;
+        s.marker_dirty=true;
+        let row=decorated(&self.shared,s);
+        self.shared.wake.notify_one();
+        Ok(Some(row))
+    }
+
     pub fn finish(&self, id: &str, status: &str, detail: Value) {
         let mut m = self.shared.lock();
         let Some(s) = m.sessions.get(id) else { return };
@@ -205,13 +234,13 @@ impl TerminalStreams {
         if let Some(fields) = detail.as_object() { merged.extend(fields.clone()); }
         else { merged.insert("originalDetail".into(), detail); }
         row["detail"] = Value::Object(merged);
-        let new_bytes = row.to_string().len() + id.len() + 512 + 256;
+        let new_bytes = metadata_row_bytes(&row) + id.len() + 512 + 256;
         // Admission reserves 32 KiB per mutable session below (see accounting).
         // If the shared budget is full, preserve lifecycle with bounded detail.
         if m.metadata_bytes - old_bytes + new_bytes > METADATA || new_bytes > SESSION_METADATA {
             row["detail"] = json!({"terminalStreamDetailOmitted":true,"reason":"metadata_limit"});
         }
-        let new_bytes = row.to_string().len() + id.len() + 512 + 256;
+        let new_bytes = metadata_row_bytes(&row) + id.len() + 512 + 256;
         m.metadata_bytes = m.metadata_bytes - old_bytes + new_bytes;
         let s = m.sessions.get_mut(id).unwrap();
         s.row = row;
@@ -247,7 +276,7 @@ impl TerminalStreams {
             }
             s.row["detail"]["reason"] = json!(RELEASE_REASON);
             // finish reserves 256 bytes for this fixed operator explanation.
-            let new_bytes = old_bytes.max(s.row.to_string().len() + id.len() + 512);
+            let new_bytes = old_bytes.max(metadata_row_bytes(&s.row) + id.len() + 512);
             s.metadata_bytes = new_bytes;
             s.revision += 1;
             s.complete = false;
@@ -612,7 +641,7 @@ fn marker(shared: &Shared, store: &mut Store, mut task: Marker) {
     match result {
         Ok(()) => {
             s.saved_revision = Some(task.revision);
-            s.complete = task.can_complete && s.revision == task.revision;
+            if s.revision == task.revision { s.complete = task.can_complete; }
             // Mutations requiring an immediate checkpoint set marker_dirty
             // themselves. A geometry-only race waits for finish's checkpoint.
         }
@@ -632,7 +661,7 @@ fn registration(row: &Value) -> Result<(String, usize)> {
     let rows = row["rows"].as_u64().context("Session rows required")?;
     let cols = row["cols"].as_u64().context("Session cols required")?;
     ensure!(rows <= u16::MAX as u64 && cols <= u16::MAX as u64, "Invalid dimensions");
-    let actual = serde_json::to_vec(row)?.len() + id.len() + 512;
+    let actual = metadata_row_bytes(row) + id.len() + 512;
     ensure!(actual <= SESSION_METADATA, "Terminal session metadata exceeds 64 KiB");
     Ok((id, actual + 32*1024))
 }
@@ -657,6 +686,64 @@ fn prepare(m: &mut Memory, config: &Config, id: &str, bytes: usize) -> Result<()
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn eight_active_caches_and_repeated_renames_fit_reserved_metadata() {
+        let t=manual(Config::default());
+        let mut store=db(&[]);
+        for n in 0..8 {
+            let id=format!("native-{n}");
+            t.register(row(&id)).unwrap();
+            store.insert_native(&t.session(&id).unwrap()).unwrap();
+        }
+        let before=t.shared.lock().metadata_bytes;
+        for n in 0..8 {
+            let id=format!("native-{n}");
+            for title in ["🐺".repeat(120),"\"".repeat(120),"short".into()] {
+                store.native_checkpoint(&t.session(&id).unwrap()).unwrap();
+                store.rename_session(&id,&title).unwrap();
+                let renamed=t.rename(&id,&title).unwrap().unwrap();
+                assert_eq!(renamed["title"],title);assert_eq!(renamed["status"],"running");
+                assert_eq!(t.shared.lock().metadata_bytes,before);
+                check_bounds(&t);
+            }
+        }
+        assert!(before<=METADATA);
+        assert!(serde_json::to_vec(&t.sessions()).unwrap().len()<=METADATA);
+        for title in ["\n", "a\0b", "\u{1b}escaped", "a\u{7f}b", "trailing\n"] {
+            assert!(t.rename("native-0",title).is_err());
+        }
+        drain(&t,&mut store);
+        for n in 0..8 {
+            let id=format!("native-{n}");
+            t.finish(&id,"exited",json!({"reason":"x".repeat(31*1024)}));
+        }
+        drain(&t,&mut store);check_bounds(&t);
+        assert!(serde_json::to_vec(&t.sessions()).unwrap().len()<=METADATA);
+    }
+
+    #[test]
+    fn rename_merges_latest_lifecycle_and_fences_inflight_checkpoint() {
+        let t=manual(Config::default());let mut store=db(&[]);
+        t.register(row("s")).unwrap();store.insert_native(&t.session("s").unwrap()).unwrap();
+        drain(&t,&mut store);
+        t.shared.lock().sessions.get_mut("s").unwrap().marker_dirty=true;
+        let old=match work(&t.shared,&mut t.shared.lock()) {Work::Marker(task)=>task,_=>panic!("expected marker")};
+        t.finish("s","exited",json!({"exitCode":0,"custom":"preserved"}));
+        let latest=t.session("s").unwrap();let bytes=t.shared.lock().metadata_bytes;
+        store.native_checkpoint(&latest).unwrap();store.rename_session("s","History").unwrap();
+        let renamed=t.rename("s","History").unwrap().unwrap();
+        assert_eq!(renamed["status"],"exited");assert_eq!(renamed["detail"]["exitCode"],0);
+        assert_eq!(renamed["detail"]["custom"],"preserved");
+        assert_eq!(t.shared.lock().metadata_bytes,bytes);
+        assert!(renamed["terminalStream"]["revision"].as_u64().unwrap()>latest["terminalStream"]["revision"].as_u64().unwrap());
+        marker(&t.shared,&mut store,old);
+        assert_eq!(store.session("s").unwrap().unwrap()["status"],"exited");
+        assert_eq!(t.session("s").unwrap()["title"],"History");
+        drain(&t,&mut store);
+        assert_eq!(store.session("s").unwrap().unwrap()["title"],"History");
+        check_bounds(&t);
+    }
 
     fn row(id: &str) -> Value {
         json!({"id":id,"title":id,"kind":"fixture","status":"running","rows":24,"cols":80,

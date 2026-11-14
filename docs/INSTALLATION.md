@@ -1,0 +1,62 @@
+# Instalar Jauria 1.0.0 en macOS
+
+La distribución actual es para Mac con Apple Silicon (arm64/aarch64). La configuración de la app declara macOS 11.0 como mínimo; la compatibilidad solo se ha validado en el Mac actual de pruebas, no en todas las versiones desde macOS 11. No hay paquete Intel ni Windows en esta distribución.
+
+## Instalar el paquete local
+
+La release 1.0.0 de GitHub contiene código y documentación. El DMG se preparó para uso local y **no se adjunta a GitHub Releases** en esta entrega. La disponibilidad del código no implica que exista un instalador descargable.
+
+1. Abre la carpeta donde recibiste o generaste `Jauria_1.0.0_aarch64_unsigned.dmg`. Conserva junto a él `SHA256SUMS` y el archivo `.receipt.json`; describen la misma imagen y sus verificaciones.
+2. Para comprobar el archivo, ejecuta desde esa carpeta:
+
+   ```sh
+   shasum -a 256 -c SHA256SUMS
+   ```
+
+3. Abre el DMG y arrastra **Jauria.app** al acceso directo **Applications**.
+4. Expulsa la imagen y abre Jauria desde Aplicaciones. No ejecutes la app directamente desde el DMG.
+5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y selecciona la carpeta de trabajo. No necesitas registrar un proyecto para abrir una sesión.
+
+Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Información → Diagnóstico → Comprobar CLI** si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
+
+Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio es privado: se necesita acceso para consultar sus releases. No se ha cambiado su visibilidad.
+
+## Estado de firma de esta distribución
+
+`Jauria_1.0.0_aarch64_unsigned.dmg` identifica una app sin firma Developer ID validada para distribución. Puede tener firma Apple Development o ad-hoc; eso no equivale a Developer ID ni a notarización. Esta entrega **no es una distribución pública sin fricción**: macOS puede bloquear una app descargada que no tiene las verificaciones necesarias. No desactives Gatekeeper ni elimines la cuarentena para instalarla. Si macOS la bloquea, solicita una release Developer ID notarizada al responsable de la distribución.
+
+La firma Developer ID, la notarización y el stapling para distribución están pendientes de las credenciales y certificados correspondientes. Una identidad Apple Development no los sustituye. El empaquetador no firma, no busca identidades en el llavero y no solicita ni carga secretos.
+
+Los nombres `_signed.dmg` y `_notarized.dmg` solo se usan si el script valida la firma Developer ID de la **app incluida**. `_notarized` exige además evaluación Gatekeeper y validación de su ticket stapled. El recibo deja explícito que el contenedor DMG creado por este script no está firmado ni notarizado (`dmgSigned: false`, `dmgNotarized: false`); las etiquetas describen la app incluida. `signed` en el recibo indica que codesign verificó una firma, incluso si es de desarrollo o ad-hoc; `developerIdSigned` distingue la firma válida para distribución.
+
+## Actualizar una instalación existente
+
+Guarda tu trabajo y termina de forma controlada las sesiones y procesos de trabajo administrados por Jauria antes de reemplazar la app o reiniciar el runner. Cierra la interfaz, reemplaza Jauria.app en Aplicaciones y vuelve a abrirla. Cerrar la interfaz no garantiza que el runner ni los procesos hayan terminado: comprueba su estado y usa la acción de reiniciar runner solo después de terminar el trabajo activo.
+
+Las funciones nuevas del backend requieren un runner actualizado. Si aparece el aviso de runner anterior en Información → Diagnóstico, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
+
+El paquete incluye exclusivamente el bundle proporcionado, esta guía y los avisos de terceros disponibles. No se copian perfiles de usuario, tokens del runner, credenciales ni configuraciones de proveedores desde el equipo que empaqueta. La actualización conserva los datos externos de tu perfil; no los añadas manualmente al bundle ni al DMG.
+
+## Crear el paquete desde un bundle existente
+
+Este paso es para quien prepara la release, en macOS Apple Silicon, con Python 3.9 o posterior y las herramientas nativas `ditto`, `lipo`, `codesign` y `hdiutil`. La comprobación de notarización usa también `spctl` y `xcrun stapler`. No requiere reconstruir la app ni instalar dependencias Python.
+
+Desde la raíz del repositorio:
+
+```sh
+python3 scripts/package-macos.py --app /ruta/absoluta/Jauria.app
+```
+
+La salida predeterminada es `dist/macos` dentro del repositorio. Puedes elegir un directorio distinto con `--output /ruta/absoluta/paquetes`. El script rechaza un destino que atraviese symlinks, esté dentro del bundle o contenga cualquiera de los archivos de salida. Usa un directorio de salida nuevo para cada entrega; nunca se sobrescriben un DMG, su recibo o `SHA256SUMS`.
+
+Para exigir una app ya firmada y notarizada:
+
+```sh
+python3 scripts/package-macos.py --app /ruta/absoluta/Jauria.app --output /ruta/absoluta/paquetes --require-notarized
+```
+
+Esta opción verifica `codesign --verify --deep --strict` con requisito Developer ID, `spctl --assess` y `xcrun stapler validate` antes de crear el artefacto. No firma ni envía la app a Apple. El script comprueba la versión contra `VERSION`, los dos binarios arm64 y la copia temporal; crea una imagen comprimida UDZO y verifica su integridad con `hdiutil verify` antes de publicarla junto al checksum y recibo.
+
+Antes de publicar en GitHub Releases, el coordinador debe montar el DMG en modo de solo lectura y comprobar contenido e instalación en un equipo de prueba. Los tests unitarios simulan las herramientas y no crean imágenes reales.
+
+La elección de DMG sigue el formato habitual de distribución de macOS descrito por [Tauri: DMG](https://v2.tauri.app/distribute/dmg/). La separación entre firma Developer ID, notarización y ad-hoc sigue [Tauri: macOS Code Signing](https://v2.tauri.app/distribute/sign/macos/).

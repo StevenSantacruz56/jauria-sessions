@@ -163,6 +163,7 @@ pub struct Runner {
     resources: Mutex<crate::resources::ResourcesSampler>,
     terminal_streams: Arc<crate::terminal_stream::TerminalStreams>,
     status_cache: Mutex<Value>,
+    settings: crate::app_settings::AppSettings,
     // Per-instance fault injection: never change process-wide environment or inventory.
     #[cfg(test)]
     inventory: Arc<dyn Fn(u32) -> Result<Vec<u32>> + Send + Sync>,
@@ -178,6 +179,8 @@ impl Runner {
         ensure!(socket.as_os_str().as_encoded_bytes().len() < 104, "socket path too long");
         let lock = private_file(&data_dir.join("runner.lock"))?;
         ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0, "runner already owns data-dir");
+        // Read preferences only after obtaining exclusive profile custody.
+        let settings = crate::app_settings::AppSettings::open(&data_dir)?;
         let mut token_handle = private_file(&token_file)?;
         let mut token = String::new();
         (&mut token_handle).take(4097).read_to_string(&mut token)?;
@@ -223,7 +226,7 @@ impl Runner {
         File::open("/dev/urandom")?.read_exact(&mut random)?;
         let generation = STANDARD.encode(random);
         let terminal_streams = crate::terminal_stream::TerminalStreams::new(&data_dir.join("runner.sqlite"), generation.clone())?;
-        Ok(Self {data_dir, socket, token, generation, terminal_streams, status_cache:Mutex::new(Value::Null), _lock:lock, db:Arc::new(Mutex::new(db)), owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
+        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, status_cache:Mutex::new(Value::Null), _lock:lock, db:Arc::new(Mutex::new(db)), owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
             #[cfg(test)] inventory: Arc::new(session_survivors),
         })
     }
@@ -267,7 +270,22 @@ impl Runner {
                         let _ = runner.connection(stream);
                     });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Wake on connection readiness, rather than adding a fixed
+                    // 10 ms delay to each sequential RPC. The bounded wait also
+                    // observes shutdown/SIGTERM while the socket is idle.
+                    let mut ready=libc::pollfd {fd:listener.as_raw_fd(),events:libc::POLLIN,revents:0};
+                    let result=unsafe {libc::poll(&mut ready,1,50)};
+                    if result<0 {
+                        let error=std::io::Error::last_os_error();
+                        if error.kind()==std::io::ErrorKind::Interrupted {continue;}
+                        accept_error=Some(error);break;
+                    }
+                    if ready.revents & (libc::POLLERR|libc::POLLHUP|libc::POLLNVAL)!=0 {
+                        accept_error=Some(std::io::Error::other(format!("listener readiness failed: {}",ready.revents)));
+                        break;
+                    }
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => { accept_error = Some(e); break; }
             }
@@ -290,7 +308,7 @@ impl Runner {
         let children: Vec<_> = self.owned.lock().unwrap().values().cloned().collect();
         let verification_jobs=std::mem::take(&mut *self.verification_jobs.lock().unwrap());
         for job in verification_jobs.values(){job.cancel.store(true,Ordering::Release);}
-        // At most two active children. Cleanup never consults persisted PIDs.
+        // Cleanup owned children only; never consult persisted PIDs.
         for child in children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
         self.terminal_streams.shutdown();
         // Verification post-capture takes the workspace gate. Release both
@@ -329,6 +347,9 @@ impl Runner {
         let args = request["args"].as_object().context("args must be an object")?;
         let allowed: &[&str] = match op {
             "status" => &["workspaceAfter"],
+            "get_settings" => &[],
+            "set_settings" => &["maxConcurrentSessions"],
+            "rename_session" => &["id","title"],
             "shutdown" | "diagnostic_preview" | "telemetry" | "refresh_quotas" => &[],
             "register_project" => &["id","path"],
             "close_project" | "reopen_project" => &["id"],
@@ -360,6 +381,14 @@ impl Runner {
         };
         ensure!(args.keys().all(|k| allowed.contains(&k.as_str())), "unexpected argument");
         let args = &request["args"];
+        if op == "get_settings" { return Ok(self.settings.snapshot()); }
+        if op == "set_settings" {
+            let limit=args["maxConcurrentSessions"].as_u64().filter(|n|(1..=8).contains(n))
+                .context("maxConcurrentSessions must be an integer from 1 to 8")?;
+            let _guard=self.mutations.lock().unwrap();
+            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
+            return self.settings.set_limit(limit as usize);
+        }
         if op == "terminal_live" {
             let id=args["id"].as_str().context("id required")?;validate_id(id)?;
             let after=args["after"].as_u64().context("invalid terminal cursor")?;
@@ -429,13 +458,22 @@ impl Runner {
         }
         if op == "diagnostic_preview" { return crate::diagnostics::preview(&self.db.lock().unwrap()); }
         if op == "status" {
-            let fresh = self.db.try_lock().ok().and_then(|db| (|| -> Result<Value> {
+            self.db.try_lock().ok().and_then(|db| {
+                let value=(|| -> Result<Value> {
                 let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
                 Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
-            })().ok());
-            if let Some(value)=fresh {*self.status_cache.lock().unwrap()=value;}
+                })().ok()?;
+                // Publish while holding DB -> cache, the same order as rename.
+                // A pre-rename snapshot cannot overwrite the renamed fallback.
+                *self.status_cache.lock().unwrap()=value;
+                Some(())
+            });
             let mut result=self.status_cache.lock().unwrap().clone();
             ensure!(!result.is_null(),"Storage status unavailable; terminal_live and owned controls remain available");
+            // Settings remain current even when SQLite uses the cached fallback.
+            result["settings"]=self.settings.snapshot();
+            result["settingsVersion"]=json!(1);
+            result["sessionRenameVersion"]=json!(1);
             let sessions=result["sessions"].as_array_mut().context("Invalid session cache")?;
             for live in self.terminal_streams.sessions() {
                 if let Some(row)=sessions.iter_mut().find(|row|row["id"]==live["id"]) {*row=live;} else {sessions.push(live);}
@@ -551,7 +589,7 @@ impl Runner {
                             ensure!(!sessions.iter().any(|s|s["taskId"]==id && matches!(s["status"].as_str(),Some("starting"|"running"|"needs_attention"))), "La tarea ya tiene una sesión abierta o incierta");
                             let task = crate::projects::task(&db.0,id)?;
                             ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta de tarea inválida")?),&sessions)?;
-                            ensure!(occupied_slots(&sessions)<2,"concurrency limit is 2");
+                            ensure!(occupied_slots(&sessions)<self.settings.limit(),"concurrency limit is {}",self.settings.limit());
                         }
                         ensure!(!crate::workflow::archived(&self.db.lock().unwrap().0,id)?,"La tarea está archivada. Reábrela antes de iniciar una sesión.");
                         crate::verification::ensure_available(&self.db.lock().unwrap().0,id)?;
@@ -580,6 +618,24 @@ impl Runner {
         }
         let id = args["id"].as_str().context("id required")?;
         validate_id(id)?;
+        if op == "rename_session" {
+            let title=args["title"].as_str().context("title must be a string")?;
+            ensure!(!title.chars().any(char::is_control),"Session title must not contain control characters");
+            let title=title.trim();
+            ensure!(!title.is_empty() && title.chars().count()<=120 && title.len()<=480,
+                "Session title must contain 1 to 120 Unicode characters and at most 480 bytes");
+            let mut db=self.db.lock().unwrap();
+            if let Some(row)=self.terminal_streams.session(id) { db.native_checkpoint(&row)?; }
+            let saved=db.rename_session(id,title)?;
+            // Merge into the current cache: finish/output may have advanced it
+            // since the observed checkpoint. Never restore a stale full row.
+            let result=self.terminal_streams.rename(id,title)?.unwrap_or(saved);
+            let mut cache=self.status_cache.lock().unwrap();
+            if let Some(rows)=cache["sessions"].as_array_mut() {
+                if let Some(row)=rows.iter_mut().find(|row|row["id"]==id) {row["title"]=json!(title);}
+            }
+            return Ok(result);
+        }
         if matches!(op,"purge_history"|"compact_history") {
             ensure!(args["confirmed"]==true,"Confirma la eliminación del historial.");
             self.terminal_streams.ensure_purgeable(id)?;
@@ -730,7 +786,7 @@ impl Runner {
             return Ok(self.terminal_streams.session(id).unwrap_or(existing));
         }
         crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;
-        {let db=self.db.lock().unwrap();db.ensure_native_capacity()?;ensure!(occupied_slots(&db.sessions_with_live(&self.terminal_streams.sessions())?)<2,"El límite es 2; las sesiones inciertas conservan su plaza hasta liberarlas");}
+        {let db=self.db.lock().unwrap();db.ensure_native_capacity()?;ensure!(occupied_slots(&db.sessions_with_live(&self.terminal_streams.sessions())?)<self.settings.limit(),"El límite es {}; las sesiones inciertas conservan su plaza hasta liberarlas",self.settings.limit());}
         let size = dimensions(args)?;
         let title = args["title"].as_str().context("title required")?;
         ensure!(title.len() <= 512, "title too long");
@@ -758,7 +814,7 @@ impl Runner {
         // Keep only live handles; never count historical database rows as owned children.
         let mut owned = self.owned.lock().unwrap();
         owned.retain(|_,v| !(*v.done.lock().unwrap() && v.lifecycle.lock().unwrap().reaped));
-        ensure!(owned.len()+self.codex_jobs.lock().unwrap().values().filter(|job|!job.worker.is_finished()).count() < 2, "concurrency limit is 2");
+        ensure!(owned.len()+self.codex_jobs.lock().unwrap().values().filter(|job|!job.worker.is_finished()).count() < self.settings.limit(), "concurrency limit is {}",self.settings.limit());
         drop(owned);
         let work_root = self.data_dir.join("work");
         private_dir(&work_root)?;
@@ -1380,6 +1436,32 @@ mod standalone_native_tests {
         let sibling = home.parent().unwrap().join("home-extra"); fs::create_dir(&sibling)?;
         admitted(request(&r,"sibling","codex",&sibling).unwrap_err());
         assert!(r.db.lock().unwrap().sessions()?.is_empty());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod session_preferences_tests {
+    use super::*;
+
+    #[test]
+    fn renamed_archive_and_current_settings_survive_busy_status_fallback()->Result<()> {
+        let tmp=tempfile::Builder::new().prefix("aw-prefs-cache-").tempdir_in("/tmp")?;
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
+        let root=fs::canonicalize(tmp.path())?;
+        let runner=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
+        let request=|op:&str,args:Value|runner.request(json!({"version":1,"token":runner.token,"op":op,"args":args}));
+        for status in ["running","exited"] {
+            runner.db.lock().unwrap().insert(&json!({"id":status,"title":"old","kind":"fixture","status":status,"rows":24,"cols":80}))?;
+        }
+        request("status",json!({}))?;
+        for id in ["running","exited"] {request("rename_session",json!({"id":id,"title":"renamed"}))?;}
+        request("set_settings",json!({"maxConcurrentSessions":4}))?;
+        let _busy=runner.db.lock().unwrap();
+        let cached=request("status",json!({}))?;
+        assert_eq!(cached["settings"]["maxConcurrentSessions"],4);
+        assert_eq!(cached["settingsVersion"],1);assert_eq!(cached["sessionRenameVersion"],1);
+        for row in cached["sessions"].as_array().unwrap() {assert_eq!(row["title"],"renamed");}
         Ok(())
     }
 }

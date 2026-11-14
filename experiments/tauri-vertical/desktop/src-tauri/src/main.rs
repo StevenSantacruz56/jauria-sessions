@@ -4,7 +4,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{fs::{self, OpenOptions}, io::{Read, Write}, os::unix::{fs::{DirBuilderExt, MetadataExt, OpenOptionsExt}, net::UnixStream, process::CommandExt}, path::{Path, PathBuf}, process::{Command, Stdio}, sync::{Arc,Mutex}, time::{Duration, Instant}};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 mod start_policy;
 #[path = "../../../runner/src/resources.rs"]
@@ -90,7 +90,9 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     let obj = args.as_object().ok_or("args debe ser objeto")?;
     let fields: &[&str] = match op {
         "status" => &["workspaceAfter"],
-        "telemetry" | "refresh_quotas" => &[],
+        "telemetry" | "refresh_quotas" | "get_settings" => &[],
+        "set_settings" => &["maxConcurrentSessions"],
+        "rename_session" => &["id","title"],
         "register_project" => &["id","path"],
         "close_project" | "reopen_project" => &["id"],
         "create_task" => &["id","projectId","title","objective","acceptanceCriteria"],
@@ -123,6 +125,16 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     if fields.contains(&"id") {
         let id = args["id"].as_str().ok_or("Falta id")?;
         if id.is_empty() || id.len() > 80 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') { return Err("ID inválido".into()); }
+    }
+    if op == "set_settings" && args["maxConcurrentSessions"].as_u64().is_none_or(|n| !(1..=8).contains(&n)) {
+        return Err("El límite de sesiones debe ser un entero entre 1 y 8".into());
+    }
+    if op == "rename_session" {
+        let title = args["title"].as_str().ok_or("Falta título de sesión")?;
+        let trimmed = title.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > 120 || trimmed.len() > 480 || title.chars().any(char::is_control) {
+            return Err("El título debe contener entre 1 y 120 caracteres, hasta 480 bytes y sin controles".into());
+        }
     }
     if op == "register_project" {
         let path = args["path"].as_str().ok_or("Selecciona un proyecto")?;
@@ -434,8 +446,34 @@ async fn confirm_workflow(app: tauri::AppHandle, op: String, mut args: Value, st
 }
 #[tauri::command]
 fn quit_ui(app: tauri::AppHandle) { app.exit(0); }
+const SETTINGS_MENU_ID: &str = "open-settings";
+fn application_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{Menu, MenuItem, Submenu};
+    let menu = Menu::default(app)?;
+    let settings = MenuItem::with_id(app, SETTINGS_MENU_ID, "Configuración…", true, Some("CmdOrCtrl+,"))?;
+    #[cfg(target_os = "macos")]
+    {
+        // Extend Tauri's app submenu, preserving About, Services, Hide and Quit,
+        // and all the other default Edit/Window/Help menu actions.
+        if let Some(application) = menu.items()?.first().and_then(|item| item.as_submenu()) {
+            application.insert(&settings, 2)?;
+            application.insert(&tauri::menu::PredefinedMenuItem::separator(app)?, 3)?;
+        } else {
+            menu.append(&Submenu::with_items(app, "Jauria", true, &[&settings])?)?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    menu.append(&Submenu::with_items(app, "Configuración", true, &[&settings])?)?;
+    Ok(menu)
+}
 fn main() {
     tauri::Builder::default().plugin(tauri_plugin_notification::init()).plugin(tauri_plugin_dialog::init()).manage(Bridge::default())
+        .menu(application_menu)
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == SETTINGS_MENU_ID {
+                let _ = app.emit("open-settings", ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![connect_runner, runner_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }
@@ -443,6 +481,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_bridge_has_strict_fields_and_integer_limits() {
+        assert!(validate("get_settings", &json!({})).is_ok());
+        for args in [json!({"path":"/tmp"}), json!({"maxConcurrentSessions":2}), json!(null), json!([])] {
+            assert!(validate("get_settings", &args).is_err());
+        }
+        for limit in [1, 2, 8] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":limit})).is_ok());
+        }
+        for value in [json!(0), json!(9), json!(-1), json!(2.5), json!(2.0), json!("2"), json!(true), json!(null)] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":value})).is_err());
+        }
+        assert!(validate("set_settings", &json!({})).is_err());
+        assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"force":true})).is_err());
+    }
+    #[test]
+    fn rename_bridge_requires_bounded_nonempty_title_without_controls() {
+        for title in [" Nuevo título ".to_owned(), "x".repeat(120), "🦊".repeat(120), format!(" {} ", "🦊".repeat(120))] {
+            assert!(validate("rename_session", &json!({"id":"session-1","title":title})).is_ok());
+        }
+        for title in [json!(""), json!(" \u{2003} "), json!("x".repeat(121)), json!("🦊".repeat(121)),
+            json!("bad\nname"), json!("\tname"), json!("name\r"), json!("bad\u{7f}name"),
+            json!("bad\u{85}name"), json!("bad\0name"), json!(null), json!(42)] {
+            assert!(validate("rename_session", &json!({"id":"session-1","title":title})).is_err());
+        }
+        for args in [json!({"title":"Name"}), json!({"id":"session-1"}),
+            json!({"id":"../escape","title":"Name"}), json!({"id":"session-1","title":"Name","cwd":"/tmp"})] {
+            assert!(validate("rename_session", &args).is_err());
+        }
+    }
     fn start_args(kind: &str) -> Value {
         json!({"id":"session-123","title":"Prueba","kind":kind,"rows":24,"cols":80})
     }

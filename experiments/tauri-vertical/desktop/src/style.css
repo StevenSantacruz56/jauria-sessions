@@ -137,10 +137,12 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--mute
 .search-field:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .search-field input { width: 100%; padding: 5px 0; border: 0; background: transparent; outline: none; font-size: 12px; }
 .search-field kbd { font-size: 10px; }
-.session-filters { display: flex; gap: 4px; margin: 0 12px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-.session-filters button { flex: 1; min-width: 0; min-height: 29px; padding: 5px 7px; font-size: 11px; background: transparent; border-color: transparent; color: var(--muted); }
-.session-filters button[aria-pressed="true"] { background: var(--surface); color: var(--text); border-color: var(--border); }
-.session-filters button span { font-size: 10px; font-variant-numeric: tabular-nums; }
+.session-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 0 12px 16px; padding: 0; border-bottom: 1px solid var(--border); }
+.session-filters button { position: relative; min-width: 0; min-height: 36px; gap: 6px; margin-bottom: -1px; padding: 7px; border: 1px solid transparent; border-radius: 7px 7px 0 0; font-size: 11px; font-weight: 500; white-space: nowrap; background: transparent; color: var(--muted); }
+.session-filters button:hover { background: var(--hover); color: var(--text); }
+.session-filters button[aria-pressed="true"] { z-index: 1; background: var(--surface); color: var(--text); border-color: var(--border); border-bottom-color: var(--surface); font-weight: 600; }
+.session-filters button span { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; min-height: 19px; padding: 1px 5px; border-radius: 4px; background: var(--hover); color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
+.session-filters button[aria-pressed="true"] span { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .attention-filter { margin: 0 12px 12px; justify-content: flex-start; color: var(--warning); font-size: 11px; border-color: var(--border); }
 .attention-filter .icon { margin-left: auto; width: 13px; }
 .attention-filter .state-dot { background: var(--state-attention); }

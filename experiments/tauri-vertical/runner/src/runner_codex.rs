@@ -145,9 +145,9 @@ impl Runner {
         ensure!(cwd.is_dir() && cwd.to_str()==args["cwd"].as_str(),"Selecciona una carpeta canónica existente");
         ensure!(!cwd.starts_with(self.data_dir.join("worktrees")) || args["taskId"].is_string(),"Inicia esta carpeta desde su tarea");
         let workspace=workspace_for(&cwd)?;
-        let db=self.db.lock().unwrap();let others=db.sessions()?.into_iter().filter(|s|s["id"]!=id).collect::<Vec<_>>();
+        let db=self.db.lock().unwrap();let others=db.sessions_with_live(&self.terminal_streams.sessions())?.into_iter().filter(|s|s["id"]!=id).collect::<Vec<_>>();
         ensure_workspace_available(&workspace,&others)?;crate::verification::ensure_path_available(&db.0,&workspace)?;db.ensure_capacity()?;
-        ensure!(occupied_slots(&others)<2,"concurrency limit is 2");drop(db);
+        ensure!(occupied_slots(&others)<self.settings.limit(),"concurrency limit is {}",self.settings.limit());drop(db);
         let size=dimensions(args)?;let title=args["title"].as_str().context("Falta título")?;ensure!(title.len()<=512,"Título demasiado largo");
         let mut db=self.db.lock().unwrap();
         let attached=if resume.is_none(){

@@ -21,6 +21,24 @@ try {
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
     assert.equal(a.list([session('unknown', 'future')]).length, 1);
   });
+  test('old seen failure plus background process end is two listed sessions but only one new alert', () => {
+    const a=new SessionAttention();
+    const sessions=[session('old-failure','failed'),session('recent-end')];
+    const baseline=a.list(sessions);
+    assert.equal(baseline.length,1);assert.equal(baseline[0].unseen,false);
+    a.observeEnd('recent-end','running','stopped');sessions[1].status='stopped';
+    const current=a.list(sessions);
+    assert.equal(current.length,2);
+    assert.equal(current.filter((item:{unseen:boolean;stale:boolean})=>item.unseen&&!item.stale).length,1);
+    assert.match(current.find((item:{id:string})=>item.id==='recent-end').reason,/El proceso terminó/);
+    a.see(current.filter((item:{id:string})=>item.id==='recent-end'));
+    const seen=a.list(sessions);
+    assert.equal(seen.length,1);assert.equal(seen[0].id,'old-failure');assert.equal(seen[0].unseen,false);
+    assert.equal(sessions[0].status,'failed','viewing never repairs or releases a failed session');
+    assert.equal(sessions[1].status,'stopped','acknowledgement never restarts a process');
+    a.observeEnd('recent-end','running','stopped');
+    assert.equal(a.list(sessions).length,1,'duplicate delivery must not recreate a consumed end alert');
+  });
   test('primed running native Codex ignores repeated raw output without storing activity', () => {
     const a = new SessionAttention();
     const sessions = [{ ...session('codex'), kind: 'codex' }];

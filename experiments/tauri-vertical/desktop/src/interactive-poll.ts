@@ -10,9 +10,10 @@ export class InteractivePoll {
     this.wake?.();
   }
   output() { this.outputUntil = this.now() + 100; }
+  isTyping(foreground: boolean) { return foreground && this.now() < this.activeUntil; }
   delay(foreground: boolean) {
     if (!foreground) return 150;
-    if (this.now() < this.activeUntil) return 12;
+    if (this.isTyping(foreground)) return 12;
     return this.now() < this.outputUntil ? 33 : 150;
   }
   wait(foreground: boolean): Promise<void> {

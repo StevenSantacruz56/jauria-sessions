@@ -7,13 +7,13 @@ python3 scripts/build-macos.py --check-only
 python3 scripts/build-macos.py
 ```
 
-El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention` y `terminal_stream_rpc`, además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
+El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc` y el benchmark opt-in `listener_latency` (ignorado por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
 
 El fixture `runner/tests/fixtures/protocol.synthetic.jsonl` contiene exclusivamente mensajes construidos para pruebas: dos solicitudes de aprobación, 24 fragmentos de mensaje y tres terminaciones de turno. La prueba `replay_synthetic_protocol_offline` conserva las aserciones del replay: dos denegaciones, tres terminaciones y más de veinte eventos normalizados. No es una transcripción nativa ni demuestra comportamiento real del proveedor.
 
 El workflow `.github/workflows/macos.yml` configura Node 24 para ejecutar los tests TypeScript con el soporte nativo de borrado de tipos; no implica que los tests locales se hayan ejecutado en Node 24. Usa Rust estable, macOS Apple Silicon, permisos de repositorio de solo lectura y acciones fijadas a SHA. No instala CLI de proveedores, no realiza login, no firma, no publica ni sube perfiles o evidencia. Referencia del runner: https://docs.github.com/en/actions/reference/runners/github-hosted-runners .
 
-Los resultados deben verificarse sobre el snapshot final: una compilación anterior al freeze no valida cambios posteriores. Firma, notarización, instalador de distribución, Intel y otras plataformas quedan fuera de esta preparación.
+Los resultados deben verificarse sobre el snapshot final: una compilación anterior al freeze no valida cambios posteriores. El DMG local se genera y verifica con `scripts/package-macos.py`; no se publica automáticamente. La firma Developer ID, la notarización, la distribución del instalador en GitHub, Intel y otras plataformas quedan pendientes.
 
 Los scripts originales de build/launch de laboratorio se sustituyen por `scripts/build-macos.py` y `scripts/launch-macos.py`; no se copian sus rutas de SDK, cachés, preferencias de perfil ni fallbacks a experimentos externos. La detección de ejecutables de proveedores en el backend no cambia en este paquete.
 
@@ -60,3 +60,32 @@ TERMINAL_STREAM_BROWSER=1 node --test tests/terminal-stream.test.ts
 ```
 
 El primer comando se ejecuta desde `experiments/tauri-vertical/runner` y el segundo desde `experiments/tauri-vertical/desktop`. Ambos usan fixtures temporales y no abren proveedores. Los tests unitarios del módulo de stream cubren además límites por bytes y frames, cola en vuelo, pérdida de rangos, orden, finalización y fallos de almacenamiento.
+
+## Integración de avisos y Configuración
+
+Las siguientes suites son opt-in; el glob de Node no las ejecuta en CI sin navegador instalado. Desde `experiments/tauri-vertical/desktop`:
+
+```sh
+SETTINGS_PANEL_BROWSER=1 node --test tests/settings-panel.test.ts
+ATTENTION_CONSISTENCY_BROWSER=1 node --test tests/attention-consistency.test.ts
+ATTENTION_CONSISTENCY_BROWSER=1 ENGINE=webkit node --test tests/attention-consistency.test.ts
+TERMINAL_STREAM_BROWSER=1 TERMINAL_STREAM_ENGINE=webkit node --test tests/terminal-stream.test.ts
+```
+
+Configuración usa Chrome y WebKit en una misma ejecución; las otras suites seleccionan un motor por ejecución. Comprueban apertura y cierre de diálogos, guardado explícito, compatibilidad con un runner anterior, renombrado desde el menú real, separación de abiertas e historial, avisos detrás de un diálogo y coherencia del Dock. La suite de streams incluye backfill durante escritura sin duplicar salida ni enviar respuestas de terminal históricas.
+
+`JAURIA_TEST_RUNNER=/ruta/absoluta/Jauria.app/Contents/Resources/bin/aw-runner` permite ejecutar `session_preferences_rpc` y `terminal_stream_rpc` contra el runner empaquetado, desde la carpeta del runner. Estas pruebas siguen creando perfiles desechables. Consulta [la validación de 1.0.0](RELEASE_1.0.0.md).
+
+## Preferencias y nombres de sesión
+
+`get_settings` consulta la capacidad del perfil y `set_settings` guarda `maxConcurrentSessions` entre 1 y 8. Las admisiones y el guardado se serializan con el mismo bloqueo de mutaciones; reducir el límite no detiene procesos. El valor predeterminado sigue siendo 2. `settingsVersion: 1` y `sessionRenameVersion: 1` anuncian estas capacidades. Una interfaz nueva conserva el límite antiguo hasta actualizar el runner.
+
+`rename_session` guarda únicamente el título local y su evento de metadatos en una transacción. Admite sesiones activas y finalizadas, incluso sin cuota para más salida. No cambia el identificador ni renombra conversaciones del proveedor. Los títulos se validan como texto y se presentan sin interpretación HTML.
+
+## Latencia de entrada
+
+El listener del runner espera legibilidad del socket con `poll`, en vez de agregar una espera fija a cada nueva conexión RPC. La interfaz consulta primero las terminales visibles; durante escritura nativa sincronizada espacía las lecturas del archivo a 150 ms. Replay, gaps, páginas pendientes y proveedores dependientes del archivo mantienen lectura inmediata. La entrada no añade eco local.
+
+El benchmark opt-in `runner/tests/listener_latency.rs` usa dos PTYs desechables y exige la respuesta del proceso hijo, distinguiéndola del eco de comandos del kernel. Ejecuta `cargo test --locked --test listener_latency -- --ignored --nocapture` en el runner; `LISTENER_BASELINE_RUNNER` permite comparar con un ejecutable anterior de ruta absoluta. No utiliza perfiles reales ni impone umbrales de tiempo frágiles en CI. Las mediciones del runner no equivalen a latencia de renderizado WKWebView.
+
+La compilación de escritorio usa ahora `release` de forma predeterminada. `--debug` conserva una compilación de desarrollo y debe pasarse también al launcher. El DMG se empaqueta aparte con `scripts/package-macos.py` para distinguir la distribución verificada de un artefacto local sin firma.

@@ -686,3 +686,152 @@ fn native_purge_and_incomplete_marker_rollback_together()->Result<()> {
     assert_eq!(db.session("s")?.unwrap()["detail"]["terminalStream"]["history"]["state"],"complete");
     Ok(())
 }
+
+#[test]
+fn native_eight_sessions_reserve_and_finish_with_32k_details()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    for i in 0..8 {
+        db.insert_native(&native_row(&format!("native-{i}"),"running",1,"recording",0))?;
+    }
+    let retention=db.retention()?;
+    assert_eq!(retention["sessionMetadataAdmissionBytes"].as_u64().unwrap()
+        -retention["sessionMetadataBytes"].as_u64().unwrap(),9*64*1024);
+    assert_eq!(retention["sessionMetadataReservePerMutableSessionBytes"]["nativeTerminal"],64*1024);
+    assert_eq!(retention["sessionMetadataReservePerMutableSessionBytes"]["legacyOrStructured"],storage::PAGE_BYTES+1024);
+    // Fill final history metadata until admission refuses it. Each live native
+    // must still have enough reserved space for its bounded final detail.
+    let mut n=0;
+    while db.insert(&json!({"id":format!("old-{n}"),"title":"x".repeat(180_000),
+        "kind":"fixture","status":"exited","rows":24,"cols":80})).is_ok() {
+        n+=1;assert!(n<20);
+    }
+    assert!(n>0);
+    for i in 0..8 {
+        let id=format!("native-{i}");
+        let mut row=native_row(&id,"stopped",2,"complete",5);
+        row["detail"]["padding"]=json!("");
+        let padding=32*1024-serde_json::to_vec(&row["detail"])?.len();
+        row["detail"]["padding"]=json!("x".repeat(padding));
+        assert_eq!(serde_json::to_vec(&row["detail"])?.len(),32*1024);
+        db.native_checkpoint(&row)?;
+        assert_eq!(db.session(&id)?.unwrap()["detail"],row["detail"]);
+        assert!(serde_json::to_vec(&db.sessions()?)?.len()<=storage::SESSION_METADATA_BYTES);
+        assert!(db.retention()?["sessionMetadataAdmissionBytes"].as_u64().unwrap()<=storage::SESSION_METADATA_BYTES as u64);
+    }
+    Ok(())
+}
+
+#[test]
+fn metadata_reserve_keeps_legacy_and_structured_markers_conservative()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    session(&mut db,"legacy","running")?;
+    let mut structured=native_row("structured","starting",1,"recording",0);
+    structured["kind"]=json!("codex");
+    db.insert_codex(&structured)?;
+    let mut malformed=native_row("malformed","starting",1,"recording",0);
+    malformed["detail"]["terminalStream"]=json!("not an object");
+    db.insert_native(&malformed)?;
+    let retention=db.retention()?;
+    assert_eq!(retention["sessionMetadataAdmissionBytes"].as_u64().unwrap()
+        -retention["sessionMetadataBytes"].as_u64().unwrap(),
+        (64*1024+3*(storage::PAGE_BYTES+1024)) as u64);
+    Ok(())
+}
+
+#[test]
+fn rename_active_and_final_preserves_metadata_and_persists_at_history_capacity()->Result<()> {
+    let tmp=tempfile::tempdir()?;let path=tmp.path().join("rename.sqlite");
+    let mut db=Store::open(&path)?;
+    let mut row=native_row("native","running",7,"incomplete",3);
+    row["pid"]=json!(123);row["cwd"]=json!("/fixture/cwd");
+    row["workspace"]=json!("workspace");row["taskId"]=json!("task");
+    row["detail"]["history"]=row["detail"]["terminalStream"]["history"].clone();
+    db.insert_native(&row)?;
+    db.output("native","x")?;
+    db.set_test_limits(1,3,1)?;
+    assert!(db.ensure_capacity().is_err());
+    let mut expected=db.session("native")?.unwrap();
+    let before=db.retention()?;let cursor=db.last_seq()?;
+    expected["title"]=json!("Nuevo 🐺");
+    assert_eq!(db.rename_session("native","  Nuevo 🐺 \u{2003}")?,expected);
+    assert_eq!(db.retention()?["eventRows"].as_i64(),Some(before["eventRows"].as_i64().unwrap()+1));
+    assert_eq!(db.retention()?["outputEncodedBytes"],before["outputEncodedBytes"]);
+    let events=db.events(cursor,10)?;
+    assert_eq!(events["events"][0]["kind"],"state");
+    let data:serde_json::Value=serde_json::from_str(events["events"][0]["data"].as_str().unwrap())?;
+    for key in ["title","status","pid","rows","cols","detail"] {assert_eq!(data[key],expected[key]);}
+    drop(db);
+    let mut db=Store::open(&path)?;
+    assert_eq!(db.session("native")?.unwrap(),expected);
+    // The owner checkpoints its observed terminal end before renaming history.
+    expected["status"]=json!("released");expected["rows"]=json!(35);expected["cols"]=json!(111);
+    expected["detail"]["terminalStream"]["revision"]=json!(8);
+    db.native_checkpoint(&expected)?;
+    expected["title"]=json!("Historial");
+    assert_eq!(db.rename_session("native","Historial")?,expected);
+    drop(db);
+    assert_eq!(Store::open(&path)?.session("native")?.unwrap(),expected);
+    Ok(())
+}
+
+#[test]
+fn rename_validates_unicode_and_keeps_injection_literal()->Result<()> {
+    let tmp=tempfile::tempdir()?;
+    let marker=tmp.path().join("must-not-exist");
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    session(&mut db,"s","running")?;
+    for title in ["a".repeat(120),"é".repeat(120),"🐺".repeat(120)] {
+        assert_eq!(db.rename_session("s",&title)?["title"],title);
+    }
+    let literal=format!("'; DROP TABLE sessions; -- $(touch {}) `id`",marker.display());
+    assert!(literal.chars().count()<=120);
+    assert_eq!(db.rename_session("s",&literal)?["title"],literal);
+    assert!(!marker.exists());
+    let before=db.session("s")?.unwrap();let retention=db.retention()?;let seq=db.last_seq()?;
+    for title in ["".into()," \n\t\u{2003}".into(),"a".repeat(121),"🐺".repeat(121),"é".repeat(241),
+        "a\0b".into(),"a\nb".into(),"a\u{1b}b".into(),"a\u{7f}b".into(),"a\u{85}b".into()] {
+        assert!(db.rename_session("s",&title).is_err());
+    }
+    assert!(db.rename_session("missing","valid").is_err());
+    assert_eq!(db.session("s")?.unwrap(),before);
+    assert_eq!(db.retention()?,retention);assert_eq!(db.last_seq()?,seq);
+    Ok(())
+}
+
+#[test]
+fn rename_metadata_quota_and_injected_failures_roll_back_everything()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    db.insert_native(&native_row("s","running",1,"recording",0))?;
+    session(&mut db,"filler","exited")?;
+    let admission=db.retention()?["sessionMetadataAdmissionBytes"].as_u64().unwrap() as usize;
+    let filler_len="filler".len()+storage::SESSION_METADATA_BYTES-admission-10;
+    db.0.execute("UPDATE sessions SET title=? WHERE id='filler'",["x".repeat(filler_len)])?;
+    let before=db.session("s")?.unwrap();let retention=db.retention()?;let seq=db.last_seq()?;
+    assert!(db.rename_session("s",&"x".repeat(120)).is_err());
+    assert_eq!(db.session("s")?.unwrap(),before);
+    assert_eq!(db.retention()?,retention);assert_eq!(db.last_seq()?,seq);
+    // Inject after insertion/counter triggers: all effects, including the title,
+    // must unwind, regardless of trigger execution order.
+    db.0.execute_batch("CREATE TRIGGER fail_rename AFTER INSERT ON events WHEN NEW.kind='state' AND json_extract(NEW.data,'$.title')='renamed' BEGIN SELECT RAISE(ABORT,'injected rename failure'); END;")?;
+    assert!(db.rename_session("s","renamed").is_err());
+    assert_eq!(db.session("s")?.unwrap(),before);
+    assert_eq!(db.retention()?,retention);assert_eq!(db.last_seq()?,seq);
+    db.0.execute_batch("DROP TRIGGER fail_rename")?;
+    assert_eq!(db.rename_session("s","renamed")?["title"],"renamed");
+    assert_eq!(db.last_seq()?,seq+1);
+    Ok(())
+}
+
+#[test]
+fn rename_overbudget_profile_can_shrink_but_cannot_grow()->Result<()> {
+    let mut db=Store::open(std::path::Path::new(":memory:"))?;
+    session(&mut db,"s","exited")?;session(&mut db,"filler","exited")?;
+    db.0.execute("UPDATE sessions SET title=? WHERE id='filler'",["x".repeat(storage::SESSION_METADATA_BYTES)])?;
+    db.0.execute("UPDATE sessions SET title='original' WHERE id='s'",[])?;
+    assert_eq!(db.rename_session("s","short")?["title"],"short");
+    let before=db.retention()?;let seq=db.last_seq()?;
+    assert!(db.rename_session("s","longer").is_err());
+    assert_eq!(db.session("s")?.unwrap()["title"],"short");
+    assert_eq!(db.retention()?,before);assert_eq!(db.last_seq()?,seq);
+    Ok(())
+}

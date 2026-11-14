@@ -91,15 +91,20 @@ export class TerminalStreamCursor {
   }
 }
 
+/** Retention is informational; transport loss and I/O remain separate warnings. */
+export function isLocalHistoryLimit(history?: TerminalHistory): boolean {
+  return !!history && ['limited', 'incomplete'].includes(history.state) && ['quota', 'session_quota'].includes(history.reason ?? '');
+}
+
 export function historyLabel(history?: TerminalHistory): string {
   if (!history) return '';
-  return { recording: '', limited: 'Historial limitado', error: 'Error al guardar historial', complete: 'Historial completo', incomplete: 'Historial incompleto', unknown_tail: 'Historial sin confirmar' }[history.state];
+  return { recording: '', limited: 'Historial local parcial', error: 'Error al guardar historial', complete: 'Historial completo', incomplete: 'Historial incompleto', unknown_tail: 'Historial sin confirmar' }[history.state];
 }
 
 export function historyReasonLabel(reason?: string): string {
   switch (reason) {
     case 'quota':
-    case 'session_quota': return 'Cuota alcanzada';
+    case 'session_quota': return 'Límite de guardado local';
     case 'io': return 'Almacenamiento no disponible';
     case 'queue_overflow': return 'El guardado no siguió el ritmo de la salida';
     case 'explicit_purge': return 'Historial eliminado';

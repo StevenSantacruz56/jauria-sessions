@@ -5,6 +5,7 @@ mod fixture;
 mod runner;
 mod storage;
 mod terminal_stream;
+mod app_settings;
 mod projects;
 mod git_worktree;
 

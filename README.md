@@ -7,7 +7,7 @@
 
 Jauria reúne Codex, Claude Code y una terminal zsh en una aplicación de escritorio para macOS. Mantén tus sesiones organizadas por carpeta, vuelve a su historial y trabaja en dos paneles. Para tareas de programación, registra un proyecto Git y prepara un worktree separado para cada tarea.
 
-Candidato de desarrollo. Consulta la [versión actual](VERSION) y el [changelog](CHANGELOG.md) para ver los cambios de cada entrega. La compilación y las pruebas locales no equivalen a aceptación de producto, instalación validada en otro Mac ni certificación de todos los flujos con proveedores reales.
+Jauria 1.0 es la primera versión oficial para macOS Apple Silicon. Consulta la [versión actual](VERSION) y el [changelog](CHANGELOG.md). El bundle local se distribuye sin firma de distribución ni notarización; las pruebas y las limitaciones de esta entrega están en [las notas de 1.0.0](docs/RELEASE_1.0.0.md).
 
 ## Para qué sirve
 
@@ -34,7 +34,13 @@ Con la aplicación abierta:
    git status  # si elegiste una carpeta dentro de un repositorio Git
    ```
 
-Pulsa **Dividir** para mostrar dos paneles y elige una sesión distinta en el menú de cada uno. Dividir cambia la vista; no crea otra sesión. Hay **dos plazas de ejecución en total**, no dos por proveedor. Las sesiones con estado incierto pueden seguir ocupando una plaza hasta resolverlas.
+Pulsa **Dividir** para mostrar dos paneles y elige una sesión distinta en el menú de cada uno. Dividir cambia la vista; no crea otra sesión. El selector separa **Abiertas** e **Historial**, y distingue las sesiones con nombres iguales por carpeta o identificador. El límite predeterminado es de **dos sesiones simultáneas** y puedes cambiarlo entre 1 y 8 en **Configuración…** (`⌘,`). El límite es compartido por los proveedores. Reducirlo no detiene sesiones abiertas. Las sesiones con estado incierto pueden seguir ocupando una plaza hasta resolverlas.
+
+Abre **Acciones de la sesión → Cambiar nombre…** en el menú de los tres puntos del panel para cambiar el nombre de una sesión activa o del historial. El nuevo nombre se guarda localmente y no modifica la conversación del proveedor.
+
+En **Configuración…** puedes elegir la apariencia y el máximo de sesiones. El cambio de capacidad se aplica a los próximos inicios; se mantienen las protecciones de worktree. La apariencia se guarda para la interfaz local; la capacidad se guarda en el perfil del runner.
+
+Actualizar el código o reemplazar la app no actualiza un runner que ya está ejecutándose. Si Información → Diagnóstico indica un runner anterior, termina primero el trabajo activo y usa **Reiniciar runner…**. Las nuevas opciones de capacidad, renombrado y lanzamiento se habilitan con el runner actualizado; las preferencias nativas de permisos se aplican a sesiones nuevas.
 
 ## Sesiones, proyectos e historial
 
@@ -45,9 +51,13 @@ Pulsa **Dividir** para mostrar dos paneles y elige una sesión distinta en el me
 
 Jauria admite un solo escritor administrado por worktree Git: no abras dos sesiones que editen la misma copia. Usa un worktree por tarea paralela. Terminal comparte estas restricciones y los bloqueos de recuperación y verificación. Estas protecciones no controlan procesos que abras por fuera de Jauria ni los cambios de carpeta que hagas dentro de una shell.
 
+**Historial local parcial** indica que Jauria dejó de guardar salida al alcanzar su límite local. La sesión sigue funcionando y puedes escribir, interrumpirla o terminarla. La salida nueva puede faltar al reconectar. Este estado no indica que hayas agotado la cuota de Claude o Codex.
+
+Los avisos nuevos se concentran en la campana de la barra superior. Su contador y el Dock muestran los avisos sin ver; al abrir la vista puedes consultarlos y marcar los avisos como vistos. Ver un aviso no resuelve un fallo ni concede permisos.
+
 ## Capturas
 
-Capturas de la aplicación en macOS, con carpetas y sesiones temporales de demostración.
+Las dos primeras capturas muestran la aplicación en macOS con sesiones temporales de demostración. Las vistas de Configuración y pestañas de 1.0.0 usan los componentes reales de la interfaz con datos sintéticos, sin perfiles de usuario.
 
 ![Diálogo Nueva sesión para elegir herramienta, carpeta de trabajo y nombre](docs/screenshots/nueva-sesion.jpg)
 
@@ -57,19 +67,33 @@ Capturas de la aplicación en macOS, con carpetas y sesiones temporales de demos
 
 *Terminal dividida: dos sesiones de demostración visibles lado a lado, sin datos de usuarios.*
 
+![Configuración de Jauria 1.0.0 con apariencia y límite de sesiones](docs/screenshots/configuracion-1.0.0.png)
+
+*Configuración: apariencia, límite combinado de 1 a 8 sesiones e información de versión. Vista de prueba del componente.*
+
+![Pestañas Abiertas e Historial con apariencia de navegador](docs/screenshots/pestanas-1.0.0.png)
+
+*Pestaña activa elevada y contadores separados; el selector del panel distingue abiertas e historial.*
+
 ## CPU, RAM y cuotas
 
 **Uso y recursos** muestra procesos observados de la interfaz, el runner, las CLI y sus hijos. No garantiza el consumo total: puede excluir servicios reparentados y procesos WebKit no atribuibles. El pie de ventana resume el proceso de interfaz.
 
 La CPU usa **100 % por núcleo** y puede superar ese valor; la primera muestra queda pendiente. La RAM es **RSS residente**, que puede contar memoria compartida más de una vez. Son observaciones del momento, no requisitos mínimos ni promesas de rendimiento.
 
-**Actualizar cuotas** consulta las ventanas informadas por Codex. Para Claude Code se usan datos de la barra de estado de una sesión nativa compatible, cuando los entregue tras una respuesta. Si faltan datos, están vencidos o falla la consulta, la interfaz lo indica: no se inventa un saldo. Las cuotas del proveedor son distintas del límite local de dos sesiones y de la cuota de almacenamiento del historial.
+**Actualizar cuotas** consulta las ventanas informadas por Codex. Para Claude Code se usan datos de la barra de estado de una sesión nativa compatible, cuando los entregue tras una respuesta. Si faltan datos, están vencidos o falla la consulta, la interfaz lo indica: no se inventa un saldo. Las cuotas del proveedor son distintas del límite local de sesiones simultáneas y de la cuota de almacenamiento del historial.
 
 ## Requisitos
 
 Esta entrega soporta **macOS en Apple Silicon**. Para compilar requiere Xcode Command Line Tools, Rust estable con soporte de edición 2024, Node.js 24 y npm, Git y Python 3.9 o posterior. Las versiones de dependencias están fijadas en los lockfiles. Los scripts descubren `cargo`, `rustc`, `node` y `npm` mediante `PATH` y conservan la configuración de herramientas del usuario.
 
 Para sesiones reales, instala y autentica las CLI por separado. El backend actual espera Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`. No se promete compatibilidad con Intel ni con otras ubicaciones de Codex en este corte. Las cuentas, permisos y límites dependen del proveedor; Jauria no incluye credenciales.
+
+## Instalar sin compilar
+
+La instalación para otros usuarios se prepara como un archivo **`.dmg` para Apple Silicon**: abre la imagen y arrastra **Jauria** a **Aplicaciones**. Jauria no requiere instalar Rust ni Node para abrir la app; las CLI de los proveedores y su acceso se preparan por separado. Consulta [la guía de instalación](docs/INSTALLATION.md).
+
+La entrega 1.0.0 en GitHub contiene **código y documentación**; el DMG se conserva como **instalador local**, sin adjuntarlo a la release. Su nombre es `Jauria_1.0.0_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. El repositorio sigue siendo privado. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
 
 ## Compilar y abrir
 
@@ -88,7 +112,7 @@ python3 scripts/build-macos.py
 python3 scripts/launch-macos.py --data "$HOME/Library/Application Support/Jauria-local"
 ```
 
-La compilación instala dependencias npm con `npm ci`, construye el frontend, ejecuta tests locales de frontend y runner con fixtures temporales, compila el runner release y crea una app de escritorio debug sin firma de distribución ni notarización. La salida está en `experiments/tauri-vertical/desktop/src-tauri/target/debug/bundle/macos/`. Los nombres del bundle proceden de la configuración Tauri.
+La compilación instala dependencias npm con `npm ci`, construye el frontend, ejecuta tests locales de frontend y runner con fixtures temporales, compila el runner release y crea una app de escritorio optimizada en modo release, sin firma de distribución ni notarización. La salida está en `experiments/tauri-vertical/desktop/src-tauri/target/release/bundle/macos/`. Para una compilación de desarrollo usa `--debug` tanto en el script de build como en el de apertura. Los nombres del bundle proceden de la configuración Tauri.
 
 La estructura `experiments/tauri-vertical/{desktop,runner}` se conserva intencionalmente: desktop comparte módulos Rust mediante rutas relativas. No muevas esas carpetas por separado.
 

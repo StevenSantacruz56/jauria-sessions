@@ -8,9 +8,12 @@ pub const PAGE_ROWS: usize = 256;
 
 const SCHEMA_VERSION: i64 = 5;
 pub const SESSION_METADATA_BYTES: usize = 2 * 1024 * 1024;
-// Reserve per nonfinal session covers one maximum event's status/detail plus
-// pid/dimensions growth; the floor also leaves room for routine final metadata.
+// Keep a global safety floor, plus transport-specific nonfinal growth reserves.
+// Native terminal detail is clamped to 32 KiB by the runtime; legacy/structured
+// sessions still need room for one maximum event and pid/dimensions growth.
 const SESSION_METADATA_RESERVE: usize = 64 * 1024;
+const NATIVE_METADATA_RESERVE: usize = 64 * 1024;
+const LEGACY_METADATA_RESERVE: usize = PAGE_BYTES + 1024;
 const CORE_SQL: &str = r#"CREATE TABLE IF NOT EXISTS sessions(
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
                 status TEXT NOT NULL, pid INTEGER, rows INTEGER NOT NULL, cols INTEGER NOT NULL);
@@ -302,7 +305,9 @@ impl Store {
                 "lifecycleReserveRows":reserve,"outputRowLimit":max_rows-reserve,
                 "lifecycleWritesExempt":true,"rowCountSemantics":"retained events excluding purged markers; lifecycle writes may exceed admission budget",
                 "sessionMetadataBytes":metadata_bytes,"sessionMetadataAdmissionBytes":admission_bytes,
-                "maxSessionMetadataBytes":SESSION_METADATA_BYTES,"sessionMetadataReserveBytes":SESSION_METADATA_RESERVE,"sessionMetadataReservePerMutableSessionBytes":PAGE_BYTES+1024,
+                "maxSessionMetadataBytes":SESSION_METADATA_BYTES,"sessionMetadataReserveBytes":SESSION_METADATA_RESERVE,
+                "sessionMetadataReservePerMutableSessionBytes":{"nativeTerminal":NATIVE_METADATA_RESERVE,"legacyOrStructured":LEGACY_METADATA_RESERVE},
+                "sessionMetadataNativeReserveCondition":"detail.terminalStream object and no app-server generation",
                 "outputRejected":rejected,"atCapacity":rejected || bytes>=max_bytes || rows>=max_rows-reserve || admission_bytes>=SESSION_METADATA_BYTES,
                 "automaticPurge":false,"gapProtocol":"purged-ranges-v1","secureErase":false,
                 "scope":"logical output encoded bytes and retained event rows; excludes physical row/disk quota and task artifacts"}))
@@ -312,8 +317,11 @@ impl Store {
     fn metadata_usage(db: &Connection) -> Result<(usize,usize)> {
         let sessions=Self::sessions_from(db)?;
         let actual=serde_json::to_vec(&sessions)?.len();
-        let mutable=sessions.iter().filter(|s|!final_status(s["status"].as_str().unwrap_or(""))).count();
-        Ok((actual,actual+SESSION_METADATA_RESERVE+mutable*(PAGE_BYTES+1024)))
+        let reserved:usize=sessions.iter().filter(|s|!final_status(s["status"].as_str().unwrap_or("")))
+            .map(|s|if s["detail"]["terminalStream"].is_object() && s["codex"]["generation"].is_null() {
+                NATIVE_METADATA_RESERVE
+            } else { LEGACY_METADATA_RESERVE }).sum();
+        Ok((actual,actual+SESSION_METADATA_RESERVE+reserved))
     }
 
     fn check_metadata_update(db: &Connection, before_admission: usize) -> Result<()> {
@@ -480,6 +488,30 @@ impl Store {
 
     pub fn session(&self, id: &str) -> Result<Option<Value>> {
         Ok(self.sessions()?.into_iter().find(|s| s["id"] == id))
+    }
+
+    /// Rename durable metadata only. Callers checkpoint observed native state
+    /// first and fence their runtime cache revision when applying the result.
+    /// History row/byte exhaustion must not prevent a metadata-only rename.
+    pub fn rename_session(&mut self, id: &str, title: &str) -> Result<Value> {
+        ensure!(!title.chars().any(char::is_control), "Session title must not contain control characters");
+        let title=title.trim();
+        ensure!(!title.is_empty(), "Session title must not be empty");
+        ensure!(title.chars().count()<=120 && title.len()<=480,
+            "Session title exceeds 120 Unicode characters or 480 bytes");
+        let tx=self.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before_admission=Self::metadata_usage(&tx)?.1;
+        let mut session=Self::sessions_from(&tx)?.into_iter().find(|s|s["id"]==id)
+            .context("Unknown session")?;
+        session["title"]=json!(title);
+        let data=session.to_string();
+        validate_event(id,"state",&data)?;
+        ensure!(tx.execute("UPDATE sessions SET title=? WHERE id=?",params![title,id])?==1,
+            "Unknown session");
+        tx.execute("INSERT INTO events(session_id,kind,data) VALUES(?,'state',?)",params![id,data])?;
+        Self::check_metadata_update(&tx,before_admission)?;
+        tx.commit()?;
+        Ok(session)
     }
 
     pub fn last_seq(&self) -> Result<i64> {

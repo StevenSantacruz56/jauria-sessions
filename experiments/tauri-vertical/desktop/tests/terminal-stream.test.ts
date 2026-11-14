@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TerminalStreamCursor, HistoryQuotaWarnings, historyUsage, deferTerminalGap, terminalFramesPayload, terminalGapNotice, validateFrames, historyLabel, historyReasonLabel, type TerminalFrame } from '../src/terminal-stream.ts';
+import { TerminalStreamCursor, HistoryQuotaWarnings, historyUsage, deferTerminalGap, terminalFramesPayload, terminalGapNotice, validateFrames, historyLabel, historyReasonLabel, isLocalHistoryLimit, type TerminalFrame } from '../src/terminal-stream.ts';
 const resize = (index = 1): TerminalFrame => ({index,kind:'resize',data:{rows:24,cols:80}});
 const output = (index: number): TerminalFrame => ({index,kind:'output',data:btoa('\x1b[6n')});
 test('history reasons use plain Spanish and never echo unknown backend codes',()=>{
   for (const [reason,label] of [
-    ['quota','Cuota alcanzada'],
-    ['session_quota','Cuota alcanzada'],
+    ['quota','Límite de guardado local'],
+    ['session_quota','Límite de guardado local'],
     ['io','Almacenamiento no disponible'],
     ['queue_overflow','El guardado no siguió el ritmo de la salida'],
     ['explicit_purge','Historial eliminado'],
@@ -135,7 +135,7 @@ test('finish status and storage history remain independent',async()=>{
     const history={state,durableFrame:1,lastFrame:2};
     assert.equal(cursor.lastFrame,2);if(state!=='recording')assert.ok(historyLabel(history));
   }
-  assert.equal(historyLabel({state:'limited',durableFrame:1,lastFrame:2}),'Historial limitado');
+  assert.equal(historyLabel({state:'limited',durableFrame:1,lastFrame:2}),'Historial local parcial');
   assert.equal(historyLabel({state:'incomplete',durableFrame:1,lastFrame:2}),'Historial incompleto');
 });
 
@@ -200,6 +200,12 @@ test('real browser: native replay is quiet, live survives archive errors, gaps r
     await page.waitForFunction(()=>(window as any).nativeFixture.afters.includes(3));
     assert.deepEqual(await page.evaluate(()=>(window as any).nativeFixture.inputs),[],'historical DSR must not become input');
     assert.equal(await page.locator('#attention-banner').isVisible(),false,'historical BEL stays quiet');
+    // Enter the fast typing window, then require archive backfill below to
+    // bypass its idle budget as soon as a recoverable live gap appears.
+    await page.locator('.xterm-helper-textarea').press('q');
+    await page.waitForFunction(() => (window as any).nativeFixture.inputs.length === 1);
+    assert.equal(await page.evaluate(() => (window as any).nativeFixture.inputs[0].data), 'q');
+    await page.evaluate(() => (window as any).nativeFixture.inputs.splice(0));
     for(const [pending,after] of [[false,6],[true,9]] as const){
       await page.evaluate(value=>(window as any).nativeFixture.backfill(value),pending);
       await page.waitForFunction(()=>document.querySelector('#notice-text')?.textContent?.includes('Recuperando salida guardada'));
@@ -256,4 +262,13 @@ test('quota warnings consider row saturation independently of bytes and rearm wi
   assert.equal(historyUsage({...retention,outputEncodedBytes:99,eventRows:2}),.99);
   assert.equal(historyUsage({outputEncodedBytes:81,maxOutputEncodedBytes:100,eventRows:100}),.81,'legacy retention has no row limit');
   assert.equal(historyLabel({state:'unknown_tail',durableFrame:1,lastFrame:2}),'Historial sin confirmar');
+});
+
+test('local retention limits stay distinct from actual storage and transport failures', () => {
+  for (const state of ['limited', 'incomplete'] as const) {
+    for (const reason of ['quota', 'session_quota']) assert.equal(isLocalHistoryLimit({state, reason, durableFrame: 1, lastFrame: 2}), true);
+    for (const reason of ['io', 'queue_overflow', 'reader_error', undefined]) assert.equal(isLocalHistoryLimit({state, reason, durableFrame: 1, lastFrame: 2}), false);
+  }
+  assert.equal(isLocalHistoryLimit(undefined), false);
+  assert.equal(isLocalHistoryLimit({state: 'error', reason: 'quota', durableFrame: 1, lastFrame: 2}), false);
 });

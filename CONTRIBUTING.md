@@ -11,11 +11,11 @@ Los cambios que afecten a datos, permisos, recuperación o Git requieren revisi�
 
 ## Versiones y changelog
 
-Registra los cambios de producto en [CHANGELOG.md](CHANGELOG.md), bajo `Unreleased`. Usa versiones `MAJOR.MINOR.PATCH`: patch para correcciones compatibles, minor para capacidades nuevas y major para cambios incompatibles del contrato publicado. Jauria sigue siendo un candidato de desarrollo.
+Registra los cambios de producto en [CHANGELOG.md](CHANGELOG.md), bajo `Unreleased`. Usa versiones `MAJOR.MINOR.PATCH`: patch para correcciones compatibles, minor para capacidades nuevas y major para cambios incompatibles del contrato publicado. La serie 1.x corresponde a las versiones oficiales de Jauria.
 
 `VERSION` es la fuente de verdad. Para preparar una versión:
 
-1. Ejecuta `python3 scripts/version.py --set 0.1.2` con la versión elegida. Sincroniza los paquetes npm, los paquetes propios de Rust, sus lockfiles, Tauri y la etiqueta de la interfaz; no modifica versiones de dependencias.
+1. Ejecuta `python3 scripts/version.py --set 1.0.0` con la versión elegida. Sincroniza los paquetes npm, los paquetes propios de Rust, sus lockfiles, Tauri y la etiqueta de la interfaz; no modifica versiones de dependencias.
 2. Mueve las entradas de `Unreleased` a una sección fechada y actualiza los enlaces del changelog. El script no inventa ni publica notas.
 3. Ejecuta `python3 scripts/version.py --check` y las comprobaciones de desarrollo. La compilación rechaza versiones divergentes o una entrega sin entrada fechada.
 4. Tras la instrucción del propietario para publicar, crea el tag `vX.Y.Z` sobre el commit validado y usa su sección del changelog para las notas de GitHub. Una release de código no acredita firma o notarización del bundle.
