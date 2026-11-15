@@ -358,7 +358,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.equal(contexts[0].sessionId, undefined, 'the last terminal must not be preselected for a project grant');
         assert.equal(await p.getByLabel('Sesión que recibirá permiso').count(), 0);
         assert.equal(await p.getByRole('button', { name: /Conceder acceso y ver comando|Revocar permiso|Gestionar permisos recordados/ }).count(), 0);
-        assert.equal(await p.getByLabel('Comando de registro', { exact: true }).count(), 0);
+        assert.equal(await p.getByLabel('Comando local para el agente', { exact: true }).count(), 0);
         assert.deepEqual(await run(p, 'return f.calls.filter(c=>/^(grant|revoke|policies|revoke_policy)$/.test(c.op))'), []);
       });
       await t.test('toolbar continues a live main session without launching or sending input', async () => {

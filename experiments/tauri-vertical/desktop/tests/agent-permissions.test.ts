@@ -73,13 +73,20 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByLabel('Alcance del permiso').selectOption('__own_projects__');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.find(c => c[0] === "grant")'), ['grant', { sessionId: 's1', canCreateProjects: true }]);
-        assert.equal(await page.getByLabel('Comando de registro').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
+        assert.equal(await page.getByLabel('Comando local para el agente').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
         assert.doesNotMatch(await page.locator('body').evaluate(el => el.outerHTML + Array.from(el.querySelectorAll('input,textarea')).map(n => (n as HTMLInputElement).value).join('')), /secret-token|secret-handle|secret-guidance/);
-        await page.getByRole('button', { name: 'Copiar comando de registro' }).click();
-        assert.deepEqual(await act(page, 'return f.copied'), ["jauria-pulso --handle '/synthetic/safe-handle'"]);
+        await page.getByRole('button', { name: 'Copiar instrucciones para el agente' }).click();
+        const copied=await act(page,'return f.copied[0]');
+        assert.match(copied,/jauria-pulso --handle '\/synthetic\/safe-handle'/);
+        assert.match(copied,/Crea un proyecto de Pulso y sus fases/);
+        assert.doesNotMatch(copied,/secret-token|secret-handle|secret-guidance/);
         await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox').check();
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.filter(c => c[0] === "grant").at(-1)'), ['grant', { sessionId: 's1', projectId: 'project1', canCreateProjects: false, remember: true }]);
+        await page.getByRole('button',{name:'Copiar instrucciones para el agente'}).click();
+        const scoped=await act(page,'return f.copied.at(-1)');
+        assert.match(scoped,/proyecto «Synthetic project» \(ID: project1\)/);
+        assert.doesNotMatch(scoped,/Crea un proyecto de Pulso/);
         await page.getByRole('button', { name: 'Revocar permiso de la sesión' }).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.at(-1)'), ['revoke', { sessionId: 's1' }]);
         await page.getByRole('button', { name: 'Revocar permiso recordado', exact: true }).first().click(); await ready(page);
@@ -105,7 +112,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
         await page.getByLabel('Alcance del permiso').selectOption('project1');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
-        assert.equal(await page.getByLabel('Comando de registro').count(), 0);
+        assert.equal(await page.getByLabel('Comando local para el agente').count(), 0);
         assert.match(await page.locator('.settings-permissions [role="status"]').innerText(), /no devolvió un comando/);
       });
       await t.test('keyboard focus stays in Settings after grant, paging and policy revocation', async () => {
@@ -116,7 +123,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByLabel('Alcance del permiso').selectOption('project1');
         const grant = page.getByRole('button', { name: 'Conceder acceso y ver comando' });
         await grant.focus(); await page.keyboard.press('Enter'); await ready(page);
-        assert.equal(await page.getByRole('button', { name: 'Copiar comando de registro' }).evaluate(el => el === document.activeElement), true);
+        assert.equal(await page.getByRole('button', { name: 'Copiar instrucciones para el agente' }).evaluate(el => el === document.activeElement), true);
         const more = page.getByRole('button', { name: 'Más proyectos' });
         await more.focus(); await page.keyboard.press('Enter'); await ready(page);
         assert.equal(await more.isVisible(), false);
@@ -215,10 +222,10 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox').check();
         await act(page, 'f.failPolicies=true;');
         await page.getByRole('button', {name:'Conceder acceso y ver comando'}).click(); await ready(page);
-        assert.match(await page.locator('.settings-permissions [role="status"]').innerText(), /Permiso concedido.*No se pudo actualizar la lista/);
+        assert.match(await page.locator('.settings-permissions [role="status"]').innerText(), /Acceso concedido.*No se pudo actualizar la lista/);
         assert.doesNotMatch(await page.locator('.settings-permissions [role="status"]').innerText(), /No se pudo confirmar/);
         assert.equal(await page.getByRole('checkbox').isChecked(), false);
-        assert.equal(await page.getByLabel('Comando de registro').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
+        assert.equal(await page.getByLabel('Comando local para el agente').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
         await act(page, 'f.failPolicies=false;');
         await page.getByRole('button', {name:'Actualizar permisos y proyectos'}).click(); await ready(page);
         assert.equal(await act(page, 'return f.calls.filter(c=>c[0]==="grant").length'), 1);
@@ -268,7 +275,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
         await page.getByLabel('Alcance del permiso').selectOption('project1');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
-        const command = page.getByLabel('Comando de registro');
+        const command = page.getByLabel('Comando local para el agente');
         const original = await command.inputValue();
         await act(page, 'f.available = false;');
         await page.waitForFunction(() => document.querySelector('.settings-permissions [role="status"]')?.textContent?.includes('Conexión temporalmente'));

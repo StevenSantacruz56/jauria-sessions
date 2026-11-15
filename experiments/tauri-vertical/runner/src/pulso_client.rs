@@ -46,6 +46,12 @@ El acceso se concede y revoca desde Pulso. Esta CLI no inicia sesiones, no enví
     ensure!(raw.len()<=120*1024, "La petición supera el límite del cliente");
     let args:Value=serde_json::from_str(raw).context("Envía un objeto JSON válido")?;
     ensure!(args.is_object(), "Los argumentos deben ser un objeto JSON");
+    let result=request(&path,op,args)?;
+    println!("{}",serde_json::to_string(&result)?);
+    Ok(())
+}
+
+pub(crate) fn request(path:&Path,op:&str,args:Value)->Result<Value> {
     let credential=handle(&path)?;
     let socket=credential["socket"].as_str().unwrap();
     let mut stream=UnixStream::connect(socket).context("Pulso no está disponible. Abre Jauria y comprueba la conexión; no se encola la acción")?;
@@ -60,8 +66,7 @@ El acceso se concede y revoca desde Pulso. Esta CLI no inicia sesiones, no enví
     let response:Value=serde_json::from_slice(&line).context("Respuesta inválida")?;
     // The server derives identity. Do not echo requests, credentials, or handle content.
     if response["ok"] != true { anyhow::bail!("{}",response["error"].as_str().unwrap_or("La operación no se confirmó")); }
-    println!("{}",serde_json::to_string(&response["result"])?);
-    Ok(())
+    Ok(response["result"].clone())
 }
 
 #[cfg(test)] mod tests {

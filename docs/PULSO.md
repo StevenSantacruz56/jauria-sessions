@@ -59,11 +59,30 @@ El acceso empieza desactivado. Desde **Configuración → Permisos de agentes**,
 
 La casilla **Recordar para futuras sesiones de esta herramienta en esta carpeta** empieza desmarcada. Puedes marcarla para guardar una política. Esa política solo se aplica al proveedor y a la ruta canónica elegidos. Cada sesión futura recibe una credencial nueva; detener una sesión invalida su acceso. Puedes gestionar y revocar los permisos recordados desde el mismo bloque de acceso.
 
-Pulso proporciona un comando copiable, con una ruta a un permiso privado. Compártelo con esa conversación y pide, por ejemplo:
+Pulso muestra el comando local y un botón **Copiar instrucciones para el agente**. Pega el texto copiado en la misma conversación y describe el plan. El texto ya indica si puede crear un proyecto o si debe trabajar en uno existente; no necesitas preparar JSON. Por ejemplo, después de pegarlo puedes pedir:
 
 > Registra este plan como proyecto de Jauria. Crea sus fases en el orden acordado. Antes de cambiar de fase, guarda qué quedó listo y el siguiente paso. Consulta la revisión vigente antes de actualizar y no sobrescribas un conflicto.
 
-El comando y su guía explican la API. No hace falta copiar un token al chat ni cambiar la configuración MCP de tus herramientas. La primera integración usa una CLI local; un adaptador MCP no forma parte de esta entrega.
+El comando usa una ruta a un permiso privado, nunca el token de administración del runner. La CLI local funciona también en las sesiones actuales con un runner compatible. No hace falta cambiar la configuración MCP para usarla.
+
+### MCP local opcional para nuevas sesiones
+
+El runner 1.3.0 incluye un servidor MCP por `stdio` que ofrece herramientas para listar y crear proyectos y fases, leer revisiones, actualizar fases y registrar checkpoints. Reutiliza exactamente el permiso de Pulso de la sesión; configurar el servidor **no concede acceso**. Para que Claude Code lo descubra en futuras sesiones iniciadas desde Jauria, configura una vez el servidor desde una terminal del sistema:
+
+```sh
+claude mcp add-json jauria-pulso '{"type":"stdio","command":"${JAURIA_PULSO_CLIENT}","args":["--pulso-mcp"],"env":{"JAURIA_PULSO_HANDLE":"${JAURIA_PULSO_HANDLE}"}}' --scope user
+```
+
+Para Codex, añade esta entrada a `~/.codex/config.toml` si quieres que reciba las dos variables de la sesión local:
+
+```toml
+[mcp_servers.jauria-pulso]
+command = "/bin/zsh"
+args = ["-c", "exec \"$JAURIA_PULSO_CLIENT\" --pulso-mcp"]
+env_vars = ["JAURIA_PULSO_CLIENT", "JAURIA_PULSO_HANDLE"]
+```
+
+Jauria no modifica esos archivos por sí sola. La configuración no contiene credenciales: la app pasa la ruta del permiso a cada proceso y cada llamada vuelve a validarlo. Si no has concedido acceso en **Configuración**, las herramientas responden sin consultar datos. La revocación corta el acceso. Claude Code y Codex deben cargar la nueva configuración al iniciar una sesión; no se reinician las dos sesiones actuales ni su runner para probar este flujo. Mientras ese runner siga en 1.2.0, usa la CLI copiada; MCP necesita el runner nuevo incluido en la entrega local. [Claude Code](https://code.claude.com/docs/en/mcp) y [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) documentan estos servidores locales.
 
 Para sesiones ya iniciadas, utiliza el comando que muestra Pulso. Las nuevas también reciben `JAURIA_PULSO_CLIENT` y `JAURIA_PULSO_HANDLE` en su entorno, sin conceder acceso por el mero hecho de tener esas variables.
 

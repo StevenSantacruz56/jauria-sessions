@@ -290,9 +290,15 @@ fn corrupt_pulso_database_degrades_without_disabling_core() {
 #[test]
 fn actual_binary_cli_uses_private_handle_and_reports_errors() {
     let app = Instance::new();
-    app.project("cli-project");
     app.start("cli-fixture");
-    let grant = app.pulso("grant", json!({"sessionId":"cli-fixture","projectId":"cli-project","remember":false}));
+    let grant = app.pulso("grant", json!({"sessionId":"cli-fixture","canCreateProjects":true,"remember":false}));
+    let project_args=json!({"id":"cli-project","requestId":"cli-plan-create","title":"Plan desde terminal"});
+    let shell = Command::new("/bin/zsh").arg("-f").arg("-c")
+        .arg(format!("{} project_create '{}'",grant["command"].as_str().unwrap(),project_args))
+        .env("HOME",app.path("home")).current_dir(app.root.path()).output().unwrap();
+    assert!(shell.status.success(),"the copyable command must create a project from a shell");
+    let created:Value=serde_json::from_slice(&shell.stdout).unwrap();
+    assert_eq!(created["project"]["mainSessionId"],"cli-fixture");
     let run = |op: &str, args: Value| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_aw-runner"));
         command.arg("--pulso-client").arg("--handle").arg(grant["handle"].as_str().unwrap())
@@ -317,9 +323,78 @@ fn actual_binary_cli_uses_private_handle_and_reports_errors() {
     let result = output.get("result").unwrap_or(&output);
     assert_eq!(result["item"]["id"], "cli-item");
     assert_eq!(app.pulso("item", json!({"id":"cli-item"}))["item"]["title"], "From CLI");
+    assert_eq!(app.pulso("items",json!({"projectId":"cli-project"}))["items"].as_array().unwrap().len(),1);
     assert!(!run("item", json!({"id":"missing"})).status.success());
     app.core("stop", json!({"id":"cli-fixture"}));
     assert!(!run("items", json!({"projectId":"cli-project"})).status.success());
+}
+
+#[test]
+fn stdio_mcp_creates_project_and_phase_with_scoped_permission_and_stable_retry() {
+    let app=Instance::new();app.start("mcp-fixture");
+    let grant=app.pulso("grant",json!({"sessionId":"mcp-fixture","canCreateProjects":true,"remember":false}));
+    let exchange=|messages:Vec<Value>| -> Vec<Value> {
+        let mut child=Command::new(env!("CARGO_BIN_EXE_aw-runner"))
+            .arg("--pulso-mcp").env("JAURIA_PULSO_HANDLE",grant["handle"].as_str().unwrap())
+            .env("HOME",app.path("home")).current_dir(app.root.path())
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        {
+            let mut input=child.stdin.take().unwrap();
+            for message in messages {writeln!(input,"{message}").unwrap();}
+        }
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now()>=deadline {let _=child.kill();let _=child.wait();panic!("MCP stdio timeout");}
+            thread::sleep(Duration::from_millis(10));
+        }
+        let output=child.wait_with_output().unwrap();
+        assert!(output.status.success(),"MCP server exited unsuccessfully");
+        output.stdout.split(|b|*b==b'\n').filter(|line|!line.is_empty())
+            .map(|line|serde_json::from_slice::<Value>(line).expect("MCP stdout must contain only JSON-RPC lines")).collect()
+    };
+    let request=|id:u64,method:&str,params:Value|json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
+    let project=json!({"title":"Plan MCP","idempotencyKey":"mcp-plan-1"});
+    let phase=json!({"projectId":"project-mcp-plan-1","title":"Primera fase","idempotencyKey":"mcp-phase-1"});
+    let replies=exchange(vec![
+        request(1,"initialize",json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"synthetic-test","version":"1"}})),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        request(2,"tools/list",json!({})),
+        request(3,"tools/call",json!({"name":"jauria_create_project","arguments":project})),
+        request(4,"tools/call",json!({"name":"jauria_create_project","arguments":project})),
+        request(5,"tools/call",json!({"name":"jauria_create_phase","arguments":phase})),
+        request(6,"tools/call",json!({"name":"jauria_create_phase","arguments":phase})),
+        request(7,"tools/call",json!({"name":"jauria_phases","arguments":{"projectId":"project-mcp-plan-1"}})),
+    ]);
+    assert_eq!(replies.len(),7,"the initialized notification must not produce a reply");
+    assert_eq!(replies[0]["result"]["protocolVersion"],"2025-11-25");
+    assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().any(|tool|tool["name"]=="jauria_create_phase"));
+    assert_eq!(replies[2]["result"]["structuredContent"],replies[3]["result"]["structuredContent"]);
+    assert_eq!(replies[2]["result"]["structuredContent"]["project"]["mainSessionId"],"mcp-fixture");
+    assert_eq!(replies[4]["result"]["structuredContent"],replies[5]["result"]["structuredContent"]);
+    assert_eq!(replies[6]["result"]["structuredContent"]["items"].as_array().unwrap().len(),1);
+    assert_eq!(app.pulso("projects",json!({}))["projects"].as_array().unwrap().len(),1);
+    assert_eq!(app.pulso("items",json!({"projectId":"project-mcp-plan-1"}))["items"].as_array().unwrap().len(),1);
+    let phase_read=exchange(vec![request(8,"tools/call",json!({"name":"jauria_phase","arguments":{"id":"phase-mcp-phase-1"}}))]);
+    let revision=phase_read[0]["result"]["structuredContent"]["item"]["revision"].clone();
+    let updated=exchange(vec![request(9,"tools/call",json!({"name":"jauria_update_phase","arguments":{"id":"phase-mcp-phase-1","expectedRevision":revision,"status":"doing","idempotencyKey":"mcp-phase-edit-1"}}))]);
+    assert_eq!(updated[0]["result"]["structuredContent"]["item"]["status"],"doing");
+    let revision=updated[0]["result"]["structuredContent"]["item"]["revision"].clone();
+    let checkpoint=exchange(vec![request(10,"tools/call",json!({"name":"jauria_checkpoint","arguments":{"itemId":"phase-mcp-phase-1","expectedRevision":revision,"brief":"Fase iniciada","nextAction":"Seguir con la integración","idempotencyKey":"mcp-checkpoint-1"}}))]);
+    assert_eq!(checkpoint[0]["result"]["structuredContent"]["checkpoint"]["brief"],"Fase iniciada");
+    app.pulso("grant",json!({"sessionId":"mcp-fixture","projectId":"project-mcp-plan-1","canCreateProjects":false,"remember":false}));
+    let restricted=exchange(vec![
+        request(11,"tools/call",json!({"name":"jauria_create_project","arguments":{"title":"Fuera de alcance","idempotencyKey":"mcp-outside-1"}})),
+        request(12,"tools/call",json!({"name":"jauria_phase","arguments":{"id":"phase-mcp-phase-1"}})),
+        request(13,"tools/call",json!({"name":"jauria_create_phase","arguments":{"projectId":"project-mcp-plan-1","title":"Segunda fase","idempotencyKey":"mcp-phase-2"}})),
+    ]);
+    assert_eq!(restricted[0]["result"]["isError"],true);
+    assert_eq!(restricted[1]["result"]["structuredContent"]["item"]["title"],"Primera fase");
+    assert_eq!(restricted[2]["result"]["structuredContent"]["item"]["title"],"Segunda fase");
+    assert_eq!(app.pulso("items",json!({"projectId":"project-mcp-plan-1"}))["items"].as_array().unwrap().len(),2);
+    app.pulso("revoke",json!({"sessionId":"mcp-fixture"}));
+    let denied=exchange(vec![request(14,"tools/call",json!({"name":"jauria_projects","arguments":{}}))]);
+    assert_eq!(denied[0]["result"]["isError"],true);
+    assert!(!denied[0].to_string().contains(grant["handle"].as_str().unwrap()));
 }
 
 #[test]

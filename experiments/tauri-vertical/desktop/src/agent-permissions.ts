@@ -29,7 +29,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   function option(value: string, title: string) { const node = el('option', title); node.value = value; return node; }
   const heading = el('h3', 'Permisos de agentes'); heading.tabIndex = -1; heading.id = prefix;
   host.setAttribute('aria-labelledby', prefix);
-  host.append(heading, el('p', 'Elige una sesión y un proyecto, o permite crear proyectos propios. Conceder muestra un comando que tú copias y ejecutas en esa sesión. Claude y Codex conservan sus permisos nativos.', 'settings-dialog-help'));
+  host.append(heading, el('p', 'Elige una sesión y un proyecto, o permite crear proyectos propios. Después copia las instrucciones y pégalas en esa conversación para que el agente registre el plan. Claude y Codex conservan sus permisos nativos.', 'settings-dialog-help'));
   const session = select('Sesión que recibirá permiso', 'session');
   const scope = select('Alcance del permiso', 'scope');
   const rememberLabel = el('label', '', 'settings-permissions-check');
@@ -178,15 +178,20 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       completed = true;
       if (op === 'grant') {
         remember.checked = false;
-        status.textContent = 'Permiso concedido. Copia el comando y ejecútalo en la sesión elegida cuando estés listo.';
+        status.textContent = 'Acceso concedido. Copia las instrucciones y pégalas en la sesión elegida; después describe el plan.';
         // Only the bridge's safe command string is displayable. Never render
         // response objects, opaque handles, tokens, guidance or raw RPC errors.
         if (typeof data?.command === 'string' && data.command) {
           hasCommand = true;
-          const label = el('label', 'Comando de registro'); const command = el('textarea');
+          const label = el('label', 'Comando local para el agente'); const command = el('textarea');
           command.id = `${prefix}-command`; label.htmlFor = command.id; command.readOnly = true; command.value = data.command;
-          result.append(label, command, button('Copiar comando de registro', () => {
-            void navigator.clipboard.writeText(command.value).then(() => { if (valid(token)) status.textContent = 'Copiado. Pégalo en la sesión elegida cuando estés listo.'; }, () => { if (valid(token)) status.textContent = 'No se pudo copiar. Selecciona y copia el comando de registro.'; });
+          const project=projects.find(project=>project.id===scope.value);
+          const target=project
+            ? `Trabaja solo en el proyecto «${project.title}» (ID: ${project.id}) y crea sus fases a partir del plan que te describa.`
+            : 'Crea un proyecto de Pulso y sus fases a partir del plan que te describa.';
+          const instruction=`Tienes acceso a Pulso de Jauria desde esta sesión. Usa este prefijo de comando local para consultar y registrar el trabajo:\n${command.value}\n\n${target} Consulta el estado antes de editar. Para cada escritura genera ID y requestId nuevos; si una respuesta es incierta, conserva ambos y el mismo contenido al reintentar. No imprimas credenciales ni rutas del permiso. Si falta el plan, pídemelo antes de crear nada.`;
+          result.append(label, command, button('Copiar instrucciones para el agente', () => {
+            void navigator.clipboard.writeText(instruction).then(() => { if (valid(token)) status.textContent = 'Instrucciones copiadas. Pégalas en esa conversación y describe el plan.'; }, () => { if (valid(token)) status.textContent = 'No se pudieron copiar. Selecciona el comando para compartirlo con el agente.'; });
           }));
         } else status.textContent = 'Permiso concedido, pero el runner no devolvió un comando de registro. Consulta los permisos antes de volver a intentarlo.';
       } else status.textContent = op === 'revoke' ? 'Permiso de la sesión revocado.' : 'Permiso recordado revocado. Las futuras sesiones necesitarán autorización.';
@@ -200,7 +205,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       if (valid(token)) status.textContent = completed
         ? (op === 'grant'
           ? hasCommand
-            ? 'Permiso concedido. No se pudo actualizar la lista de permisos recordados. Copia el comando para usarlo; pulsa Actualizar permisos y proyectos para consultar la lista sin volver a conceder el permiso.'
+            ? 'Acceso concedido. No se pudo actualizar la lista de permisos recordados. Copia las instrucciones y consulta la lista sin volver a conceder el permiso.'
             : 'Permiso concedido, pero no se recibió un comando ni se pudo actualizar la lista. Consulta los permisos antes de volver a intentarlo.'
           : 'Permiso recordado revocado. No se pudo actualizar la lista. Pulsa Actualizar permisos y proyectos para consultarla.')
         : 'No se pudo confirmar la operación. Consulta la lista antes de volver a intentarlo.';

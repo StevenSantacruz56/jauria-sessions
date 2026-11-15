@@ -15,3 +15,11 @@ La compilación release y las suites afectadas aprobaron: Configuración y permi
 Se mantienen las decisiones de [la revisión de Herdr](HERDR_REVIEW.md): navegación directa, separación de vista y runtime y señales explícitas de estado. Sin mods JavaScript, SSH remoto ni reanudación automática.
 
 Consulta [el flujo de recuperación](PULSO.md#recuperar-el-trabajo) y [la instalación](INSTALLATION.md). Codex conserva continuidad por historial/contexto; la reanudación nativa de Codex no está incluida. La identidad exacta de Claude no garantiza que el proveedor conserve su historial.
+
+## Entrega local de terminal y MCP
+
+`Jauria-1.3.0-terminal-mcp-local.app` permite iniciar el plan desde una conversación: en **Configuración → Permisos de agentes** se elige una sesión y su alcance, y **Copiar instrucciones para el agente** prepara el comando y la indicación de crear un proyecto o trabajar en el proyecto elegido. La terminal puede crear el proyecto y sus fases sin escribir JSON a mano. El flujo conserva el permiso por sesión y las revisiones e identificadores de reintento del servicio Pulso.
+
+El runner nuevo incluye un servidor MCP local por `stdio` con ocho herramientas de proyectos, fases y checkpoints. Usa el mismo permiso acotado; su configuración es opcional y se aplica a sesiones nuevas. [Pulso](PULSO.md#permitir-que-los-agentes-registren-planes) contiene los pasos de conexión. La entrega no altera la configuración de Claude Code o Codex ni reemplaza el runner 1.2.0 que mantiene las sesiones activas. La CLI copiada sí funciona con ese runner; el MCP requiere abrir sesiones con el runner 1.3.0 del nuevo paquete.
+
+La prueba end to end con un perfil desechable ejecutó el comando copiable en `zsh`, creó proyecto y fase mediante el binario real, y después verificó MCP por `stdio`: creación, reintento sin duplicados, reducción de alcance y revocación. También se probó el enlace con el SDK oficial MCP de JavaScript y la interfaz de permisos en Chromium y WebKit. Consulta [los resultados](PULSO_VALIDATION_1.3.0.md#terminal-y-mcp-local). No hubo push ni instalación sobre las sesiones del usuario.

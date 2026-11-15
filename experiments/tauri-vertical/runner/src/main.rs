@@ -10,6 +10,7 @@ mod projects;
 mod git_worktree;
 mod pulso;
 mod pulso_client;
+mod pulso_mcp;
 mod native_sessions;
 
 fn main() {
@@ -23,6 +24,10 @@ fn run() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.first().is_some_and(|a| a == "--pulso-client") {
         return pulso_client::run(&args[1..]);
+    }
+    if args.first().is_some_and(|a| a == "--pulso-mcp") {
+        anyhow::ensure!(args.len()==1,"--pulso-mcp no acepta argumentos");
+        return pulso_mcp::run();
     }
     if args.first().is_some_and(|a|a=="--quota-hook") {
         anyhow::ensure!(args.len()==3 && args[1]=="--data-dir","invalid quota callback arguments");
