@@ -49,3 +49,19 @@
 }
 #open-settings { margin: 4px 12px; justify-content: flex-start; }
 #open-settings kbd { margin-left: auto; }
+
+.settings-permissions > .settings-dialog-row { margin-top: 12px; }
+.settings-permissions .settings-dialog-row select { width: min(340px, 55%); min-width: 0; }
+.settings-permissions-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; font-size: 12px; }
+.settings-permissions-check input { flex: 0 0 auto; margin-top: 3px; }
+.settings-permissions-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.settings-permissions h4 { margin-top: 20px; font-size: 12px; font-weight: 600; }
+.settings-permissions-policy { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.settings-permissions-policy button { margin-top: 8px; }
+.settings-permissions-result:empty { display: none; }
+.settings-permissions-result label { display: block; margin-top: 12px; font-size: 12px; }
+.settings-permissions-result textarea { width: 100%; min-height: 80px; margin: 8px 0; resize: vertical; overflow-wrap: anywhere; }
+.settings-dialog .settings-section { margin: 0 0 12px; }
+@media (max-width: 480px) {
+  .settings-permissions .settings-dialog-row select { width: 100%; }
+}

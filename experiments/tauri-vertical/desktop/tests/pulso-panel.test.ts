@@ -54,6 +54,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         delayed: [] as any[], holdOps: [] as string[], calls: [] as any[], revision: 1, projects: [project('p1')], items: [item('i1', 'p1'), item('solo')], checkpoints: [] as any[], links: [] as any[],
         policies: [{ id: 'policy-1', policy: { projectId: 'p1', provider: 'claude', cwd: '/synthetic', canCreateProjects: true } }],
         sessions: [{ id: 'ended', title: 'Claude anterior', kind: 'claude', cwd: '/synthetic', status: 'exited' }, { id: 'live', title: 'Claude viva', kind: 'claude', cwd: '/synthetic', status: 'running' }, { id: 'attention', title: 'Sin confirmar', kind: 'claude', cwd: null, status: 'needs_attention' }],
+        permissionContexts: [] as any[], profile: null as string | null, storage: {} as Record<string, string>, bindingFailures: 0, failProjectReads: 0, cacheKey: 'synthetic-connection-1', bindingHeld: [] as any[], holdBinding: false,
         opened: [] as string[], created: [] as any[], notices: [] as string[], resumed: [] as string[], bindings: [] as string[], copied: [] as string[],
         receipts: new Map(), failWrite: false, failRead: false, timeoutAfterCommit: false, holdRead: false, held: [] as any[], bindingProvider: 'claude',
         project, item,
@@ -81,12 +82,12 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         }
         if (op === 'projects' || op === 'items') {
           if (op === 'items' && args.expectedSnapshotRevision !== f.revision) throw 'stale snapshot';
-          const all = op === 'projects' ? f.projects : f.items.filter((i: any) => !i.archived && i.projectId === args.projectId && (!args.status || i.status === args.status));
+          const all = op === 'projects' ? f.projects.filter((p: any) => args.archived === undefined || p.archived === args.archived) : f.items.filter((i: any) => !i.archived && i.projectId === args.projectId && (!args.status || i.status === args.status));
           const cursor = args.cursor ?? 0; if (typeof cursor !== 'number') throw 'numeric offset required';
           const rows = all.slice(cursor, cursor + args.limit);
           return deliver({ [op]: structuredClone(rows), revision: f.revision, hasMore: all.length > cursor + rows.length, totalCount: all.length, ...(op === 'items' ? { nextCursor: cursor + rows.length } : {}) });
         }
-        if (op === 'project') return deliver({ project: structuredClone(f.projects.find((p: any) => p.id === args.id)) });
+        if (op === 'project') { if(f.failProjectReads>0){f.failProjectReads--;throw new Error('synthetic transient project read');} return deliver({ project: structuredClone(f.projects.find((p: any) => p.id === args.id)) }); }
         if (op === 'item') { const all=f.checkpoints.filter((c:any)=>c.itemId===args.id);return { item: structuredClone(f.items.find((i: any) => i.id === args.id)), links: structuredClone(f.links.filter((l: any) => l.itemId === args.id)), checkpoints: structuredClone(all.slice(-10)), checkpointsHasMore:all.length>10,checkpointCursor:10 }; }
         if(op==='checkpoint_history'){const all=[...f.checkpoints.filter((c:any)=>c.itemId===args.itemId)].reverse();const cursor=args.cursor??0;return{checkpoints:structuredClone(all.slice(cursor,cursor+args.limit)),hasMore:all.length>cursor+args.limit,nextCursor:cursor+args.limit};}
         if (op === 'links') return { links: structuredClone(f.links.filter((l: any) => l.projectId === args.projectId)) };
@@ -113,14 +114,24 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         if (f.timeoutAfterCommit) { f.timeoutAfterCommit = false; throw 'timeout after commit'; }
         return structuredClone(result);
       };
-      f.panel = w.Pulso.mountPulsoPanel({
+      for (const [key, value] of Object.entries(f.storage)) localStorage.setItem(key, value as string);
+      f.mount = () => f.panel = w.Pulso.mountPulsoPanel({
         host: document.querySelector('#stage'), request: f.request, sessions: () => f.sessions, currentSession: () => f.sessions[1],
         openSession: (id: string) => f.opened.push(id), newSession: (cwd?: string) => f.created.push(cwd), notice: (text: string) => f.notices.push(text),
-        binding: async (id: string) => { f.bindings.push(id); return { binding: f.bindingProvider ? { provider: f.bindingProvider, conversationId: 'synthetic-conversation' } : null,activeSessionId:f.activeNative??null }; },
+        persistenceKey: () => f.profile, bindingCacheKey: () => f.cacheKey,
+        onOpenPermissions: (context: any) => f.permissionContexts.push(structuredClone(context)),
+        binding: async (id: string) => {
+          f.bindings.push(id);
+          const data = { binding: f.bindingProvider ? { provider: f.bindingProvider, conversationId: 'synthetic-conversation' } : null, activeSessionId: f.activeNative ?? null };
+          if (f.holdBinding) await new Promise(resolve => f.bindingHeld.push(resolve));
+          if (f.bindingFailures > 0) { f.bindingFailures--; throw new Error('synthetic binding unavailable'); }
+          return data;
+        },
         resumeSession: async (id: string) => { f.resumed.push(id); },
       });
+      f.mount();
     }, setup);
-    await run(page, 'f.panel.show()'); await page.getByRole('button', { name: 'Proyecto p1', exact: true }).waitFor();
+    await run(page, 'f.panel.show()'); await page.getByRole('button', { name: 'Pendientes', exact: true }).waitFor();
     return page;
   }
   for (const engine of process.env.PULSO_PANEL_WEBKIT === '1' ? [chromium, webkit] : [chromium]) {
@@ -232,47 +243,188 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('history, live focus, uncertain inspection and Claude resume are separate; bindings do not poll', async () => {
         const p = await mounted('f.links=[{itemId:"i1",sessionId:"live"},{itemId:"i1",sessionId:"attention"}];'); await itemDetail(p);
-        await p.getByRole('button', { name: 'Intentar reanudar conversación' }).waitFor();
+        await p.getByRole('button', { name: 'Reanudar conversación' }).waitFor();
         assert.match(await p.locator('.pulso-detail').innerText(), /Historial local/);
         await p.getByRole('button', { name: 'Enfocar sesión viva' }).click(); await p.getByRole('button', { name: 'Inspeccionar sesión' }).click();
         await p.getByRole('button',{name:'Ver historial',exact:true}).click();
-        await p.getByRole('button', { name: 'Intentar reanudar conversación' }).click(); await idle(p);
+        await p.getByRole('button', { name: 'Reanudar conversación' }).click(); await idle(p);
         assert.deepEqual(await run(p, 'return f.opened'), ['live', 'attention', 'ended']); assert.deepEqual(await run(p, 'return f.resumed'), ['ended']);
-        const count = await run(p, 'return f.bindings.length'); await run(p, 'f.revision++; return f.panel.refresh()');
-        assert.equal(await run(p, 'return f.bindings.length'), count);
+        await run(p, 'f.revision++; return f.panel.refresh()');
+        const count = await run(p, 'return f.bindings.length');
+        await run(p, 'f.revision++; return f.panel.refresh()');
+        assert.equal(await run(p, 'return f.bindings.length'), count, 'explicit resume may invalidate metadata once; later refreshes reuse it');
         const q = await mounted('f.bindingProvider="codex";'); await itemDetail(q);
-        assert.equal(await q.getByRole('button', { name: 'Intentar reanudar conversación' }).count(), 0);
+        assert.equal(await q.getByRole('button', { name: 'Reanudar conversación' }).count(), 0);
       });
       await t.test('an exact live continuation opens without launching the conversation again',async()=>{
         const p=await mounted('f.activeNative="live";');await projectDetail(p);
-        await p.getByRole('button',{name:'Volver a conversación reanudada',exact:true}).click();
+        await p.getByRole('dialog').getByRole('button',{name:'Volver a conversación reanudada',exact:true}).click();
         assert.deepEqual(await run(p,'return f.opened'),['live']);assert.deepEqual(await run(p,'return f.resumed'),[]);
-        assert.equal(await p.getByRole('button',{name:'Intentar reanudar conversación',exact:true}).count(),0);
+        assert.equal(await p.getByRole('button',{name:'Reanudar conversación',exact:true}).count(),0);
       });
       await t.test('a stopped session changes to history without a planning mutation or provider poll',async()=>{
         const p=await mounted('f.projects[0].mainSessionId="live"');
         await projectDetail(p);await idle(p);
-        assert.equal(await p.getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),1);
+        assert.equal(await p.getByRole('dialog').getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),1);
         await run(p,'f.sessions.find(s=>s.id==="live").status="exited"');
         await p.getByRole('button',{name:'Ver historial',exact:true}).waitFor({timeout:4000});
         assert.equal(await p.getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),0);
         assert.equal(await run(p,'return f.revision'),1);
       });
-      await t.test('grant is explicitly scoped, command is copyable, opaque credentials never enter DOM', async () => {
+      await t.test('project permissions delegate context and expose no local authority controls', async () => {
         const p = await mounted(); await projectDetail(p);
-        assert.equal((await run(p, 'return f.calls.filter(x=>x.op==="grant")')).length, 0);
-        await p.getByLabel('Sesión que recibirá permiso').selectOption('live');
-        await p.getByRole('button', { name: 'Permitir registrar planes' }).click(); await idle(p);
-        assert.deepEqual(await run(p, 'return f.calls.find(x=>x.op==="grant").args'), { sessionId: 'live', projectId: 'p1', canCreateProjects: true });
-        assert.doesNotMatch(await p.locator('.pulso-panel').innerText(), /opaque-not-for-dom|secret-not-for-dom/);
-        assert.match(await p.getByLabel('Comando de registro', { exact: true }).inputValue(), /--handle/);
-        await p.getByRole('button', { name: 'Copiar comando de registro' }).click();
-        assert.equal((await run(p, 'return f.copied')).length, 1);
+        await p.getByRole('button', { name: 'Configurar permisos…', exact: true }).click();
+        const contexts = await run(p, 'return f.permissionContexts');
+        assert.equal(contexts.length, 1); assert.equal(contexts[0].projectId, 'p1');
+        assert.ok(!contexts[0].sessionId || ['ended', 'live'].includes(contexts[0].sessionId));
+        assert.equal(await p.getByLabel('Sesión que recibirá permiso').count(), 0);
+        assert.equal(await p.getByRole('button', { name: /Permitir registrar planes|Revocar permiso|Gestionar permisos recordados/ }).count(), 0);
+        assert.equal(await p.getByLabel('Comando de registro', { exact: true }).count(), 0);
+        assert.deepEqual(await run(p, 'return f.calls.filter(c=>/^(grant|revoke|policies|revoke_policy)$/.test(c.op))'), []);
+      });
+      await t.test('toolbar continues a live main session without launching or sending input', async () => {
+        const p = await mounted('f.projects[0].mainSessionId="live";'); await projectBoard(p);
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
+        const cta = p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Continuar proyecto', exact: true });
+        assert.match(await cta.getAttribute('class') ?? '', /primary/); await cta.click();
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [['live'], [], []]);
+        assert.deepEqual(await run(p, 'return f.calls.filter(c=>/grant|pty|input|turn/.test(c.op))'), []);
+      });
+      await t.test('a project without phases recovers its ended main session only on explicit action', async () => {
+        const p = await mounted('f.items=f.items.filter(i=>i.projectId!=="p1");'); await projectBoard(p);
+        const resume = p.locator('.pulso-board-toolbar').getByRole('button', { name: /Reanudar.*principal/ });
+        await resume.waitFor(); assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
+        await resume.click(); assert.deepEqual(await run(p, 'return f.resumed'), ['ended']);
+      });
+      await t.test('a project created from live Claude recovers after automatic refresh with uncached binding', async () => {
+        const p = await mounted(); await p.getByRole('button', { name: 'Nuevo proyecto', exact: true }).click();
+        await p.getByLabel('Nombre del proyecto').fill('Proyecto de Claude vivo');
+        await p.getByRole('button', { name: 'Crear proyecto', exact: true }).click(); await idle(p);
+        assert.equal(await p.locator('dialog[open]').count(), 0);
+        await p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Continuar proyecto', exact: true }).waitFor();
+        assert.equal(await run(p, 'return f.bindings.filter(id=>id==="live").length'), 0);
+        await run(p, 'f.sessions.find(s=>s.id==="live").status="exited"');
+        await p.locator('.pulso-board-toolbar').getByRole('button', { name: /Reanudar.*principal/ }).waitFor({ timeout: 5000 });
+        assert.equal(await run(p, 'return f.bindings.filter(id=>id==="live").length'), 1);
+        assert.deepEqual(await run(p, 'return [f.created,f.resumed]'), [[], []]);
+      });
+      await t.test('closed rows fetch once even when their live detail refresh disables binding queries', async () => {
+        const p = await mounted('f.projects[0].mainSessionId="live";'); await projectDetail(p);
+        await run(p, 'f.sessions.find(s=>s.id==="live").status="exited"');
+        await p.getByRole('dialog').getByRole('button', { name: 'Reanudar conversación', exact: true }).waitFor();
+        assert.equal(await run(p, 'return f.bindings.filter(id=>id==="live").length'), 1);
         await run(p, 'f.revision++; return f.panel.refresh()');
-        assert.equal(await p.getByLabel('Sesión que recibirá permiso').inputValue(), 'live');
-        assert.equal(await p.getByRole('button', { name: 'Revocar permiso', exact: true }).isVisible(), true);
-        await p.getByRole('button', { name: 'Revocar permiso', exact: true }).click(); await idle(p);
-        assert.deepEqual(await run(p, 'return f.calls.find(x=>x.op==="revoke").args'), { sessionId: 'live' });
+        assert.equal(await run(p, 'return f.bindings.filter(id=>id==="live").length'), 1);
+      });
+      await t.test('binding lookup shows checking, failure and a bounded explicit retry', async () => {
+        const p = await mounted('f.holdBinding=true; f.bindingFailures=1;'); await projectBoard(p);
+        await p.locator('.pulso-board-toolbar').getByText(/Comprobando|Consultando|Verificando/i).waitFor();
+        await run(p, 'f.holdBinding=false; f.bindingHeld.splice(0).forEach(resolve=>resolve())');
+        const retry = p.locator('.pulso-board-toolbar').getByRole('button', { name: /Reintentar/ }); await retry.waitFor();
+        assert.match(await p.locator('.pulso-board-toolbar').innerText(), /no.*pudo|fall|error/i);
+        const calls = await run(p, 'return f.bindings.length');
+        await run(p, 'f.revision++; return f.panel.refresh()'); assert.equal(await run(p, 'return f.bindings.length'), calls);
+        await retry.click(); await p.locator('.pulso-board-toolbar').getByRole('button', { name: /Reanudar.*principal/ }).waitFor();
+        assert.equal(await run(p, 'return f.bindings.length'), calls + 1);
+      });
+      await t.test('phase continuation prefers its newest checkpoint session over the project main session', async () => {
+        const p = await mounted('f.checkpoints=[{id:"old",itemId:"i1",sessionId:"ended",brief:"Viejo",nextAction:"",actor:"fixture",revision:1,createdAt:1},{id:"new",itemId:"i1",sessionId:"live",brief:"Nuevo",nextAction:"",actor:"fixture",revision:2,createdAt:2}];');
+        await itemDetail(p); await p.getByRole('button', { name: 'Preparar contexto' }).click();
+        await p.getByRole('button', { name: 'Continuar en la sesión', exact: true }).first().click();
+        assert.deepEqual(await run(p, 'return [f.opened,f.resumed,f.created]'), [['live'], [], []]);
+      });
+      await t.test('missing recoverable binding retains an explicit editable context fallback', async () => {
+        const p = await mounted('f.bindingProvider=null;'); await itemDetail(p);
+        await p.getByRole('button', { name: 'Preparar contexto' }).click();
+        await p.getByLabel('Contexto editable para continuar').waitFor();
+        assert.equal(await p.getByRole('button', { name: 'Reanudar conversación', exact: true }).count(), 0);
+        assert.equal(await p.getByRole('button', { name: 'Copiar contexto', exact: true }).isVisible(), true);
+        assert.equal(await p.getByRole('button', { name: 'Abrir nueva sesión', exact: true }).isVisible(), true);
+        assert.deepEqual(await run(p, 'return [f.created,f.resumed]'), [[], []]);
+      });
+      await t.test('committed board preference survives remount and show without provider commands', async () => {
+        const p = await mounted('f.profile="synthetic-profile-a";'); await projectBoard(p);
+        assert.deepEqual(await p.evaluate(() => JSON.parse(localStorage.getItem('jauria-pulso:last-board:synthetic-profile-a')!)), { schemaVersion: 1, projectId: 'p1' });
+        await run(p, 'f.panel.dispose(); f.mount(); f.panel.show()');
+        await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).waitFor();
+        await run(p, 'f.panel.hide(); f.panel.show()'); await idle(p);
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed,f.calls.filter(c=>/grant|pty|input|turn/.test(c.op))]'), [[], [], [], []]);
+        await p.getByRole('button', { name: 'Pendientes', exact: true }).click();
+        await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+        assert.deepEqual(await p.evaluate(() => JSON.parse(localStorage.getItem('jauria-pulso:last-board:synthetic-profile-a')!)), { schemaVersion: 1, projectId: null });
+      });
+      for (const saved of ['malformed', 'missing', 'archived']) await t.test(`saved ${saved} project falls back to Pendientes without commands`, async () => {
+        const value = saved === 'malformed' ? '{bad json' : JSON.stringify({ schemaVersion: 1, projectId: saved === 'missing' ? 'absent' : 'p1' });
+        const p = await mounted(`f.profile="synthetic-fallback"; f.storage["jauria-pulso:last-board:synthetic-fallback"]=${JSON.stringify(value)}; ${saved === 'archived' ? 'f.projects[0].archived=true;' : ''}`);
+        await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+        assert.equal(await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).count(), 0);
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
+      });
+      await t.test('failed board navigation cannot persist an uncommitted project', async () => {
+        const p = await mounted('f.profile="synthetic-commit";');
+        await run(p, 'f.failRead=true'); await p.getByRole('button', { name: 'Proyecto p1', exact: true }).click();
+        await p.getByRole('button', { name: /Reintentar|Actualizar tablero/ }).first().waitFor();
+        assert.notEqual(await p.evaluate(() => JSON.parse(localStorage.getItem('jauria-pulso:last-board:synthetic-commit') ?? 'null')?.projectId), 'p1');
+      });
+      await t.test('profile namespaces restore independently', async () => {
+        const p = await mounted('f.profile="synthetic-a"; f.storage["jauria-pulso:last-board:synthetic-b"]=JSON.stringify({schemaVersion:1,projectId:"p1"});');
+        await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+        await run(p, 'f.panel.dispose(); f.profile="synthetic-b"; f.mount(); f.panel.show()');
+        await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).waitFor();
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
+      });
+      for (const change of ['session', 'reconnect', 'profile']) await t.test(`binding cache invalidates once on ${change} lifecycle changes`, async () => {
+        const p=await mounted('f.profile="synthetic-lifecycle-a";'); await projectBoard(p);
+        await p.locator('.pulso-board-toolbar').getByRole('button',{name:/Reanudar.*principal/}).waitFor();
+        const before=await run(p,'return f.bindings.filter(id=>id==="ended").length');
+        await run(p, `f.bindingProvider=null; ${change === 'session' ? 'f.sessions.find(s=>s.id==="live").status="exited";' : 'f.cacheKey="synthetic-connection-2";'} ${change === 'profile' ? 'f.panel.hide();f.profile="synthetic-lifecycle-b";f.panel.show();' : ''} return f.panel.refresh()`);
+        await p.locator('.pulso-board-toolbar').getByText(/No hay una identidad de conversación/).waitFor();
+        assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),before+1);
+        await run(p,'return f.panel.refresh()');
+        assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),before+1,'stable lifecycle must reuse metadata');
+        assert.deepEqual(await run(p,'return [f.opened,f.resumed,f.created]'),[[],[],[]]);
+      });
+      await t.test('late binding response from before reconnect cannot restore an obsolete resume action', async () => {
+        const p=await mounted('f.holdBinding=true;'); await projectBoard(p);
+        await p.locator('.pulso-board-toolbar').getByText(/Comprobando conversación/).waitFor();
+        await run(p,'f.holdBinding=false;f.bindingProvider=null;f.cacheKey="synthetic-reconnected";return f.panel.refresh()');
+        await p.locator('.pulso-board-toolbar').getByText(/No hay una identidad de conversación/).waitFor();
+        await run(p,'f.bindingHeld.splice(0).forEach(resolve=>resolve())');
+        assert.equal(await p.locator('.pulso-board-toolbar').getByRole('button',{name:/Reanudar.*principal/}).count(),0);
+        assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),2);
+      });
+      await t.test('an attention-state active continuation offers review without a duplicate resume', async () => {
+        const p=await mounted('f.activeNative="attention";'); await projectBoard(p);
+        const review=p.locator('.pulso-board-toolbar').getByRole('button',{name:'Revisar estado de la sesión',exact:true}); await review.waitFor();
+        assert.equal(await p.locator('.pulso-board-toolbar').getByRole('button',{name:/Reanudar.*principal/}).count(),0);
+        await review.click(); assert.deepEqual(await run(p,'return [f.opened,f.resumed,f.created]'),[['attention'],[],[]]);
+      });
+      await t.test('transient restore failure preserves the saved project for a later show', async () => {
+        const p=await mounted('f.profile="synthetic-transient";f.failProjectReads=1;f.storage["jauria-pulso:last-board:synthetic-transient"]=JSON.stringify({schemaVersion:1,projectId:"p1"});');
+        await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).waitFor();
+        assert.deepEqual(await p.evaluate(()=>JSON.parse(localStorage.getItem('jauria-pulso:last-board:synthetic-transient')!)),{schemaVersion:1,projectId:'p1'});
+        await run(p,'f.panel.hide();f.panel.show()'); await p.getByRole('button',{name:'Plan y sesiones',exact:true}).waitFor();
+        assert.deepEqual(await run(p,'return [f.opened,f.resumed,f.created]'),[[],[],[]]);
+      });
+      await t.test('transient restore failure followed by choosing Pendientes clears the restore candidate', async () => {
+        const p=await mounted('f.profile="synthetic-explicit-pending";f.failProjectReads=1;f.storage["jauria-pulso:last-board:synthetic-explicit-pending"]=JSON.stringify({schemaVersion:1,projectId:"p1"});');
+        await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).waitFor();
+        await p.getByRole('button',{name:'Reintentar consulta',exact:true}).waitFor();
+        assert.equal(await run(p,'return f.calls.filter(c=>c.op==="project").length'),1);
+        await p.getByRole('button',{name:'Pendientes',exact:true}).click();
+        await p.waitForFunction(()=>JSON.parse(localStorage.getItem('jauria-pulso:last-board:synthetic-explicit-pending') ?? 'null')?.projectId===null);
+        await run(p,'return f.panel.refresh()');
+        assert.equal(await p.getByRole('button',{name:'Pendientes',exact:true}).getAttribute('aria-current'),'true');
+        assert.equal(await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).isVisible(),true);
+        assert.equal(await p.getByRole('button',{name:'Plan y sesiones',exact:true}).count(),0);
+        assert.equal(await run(p,'return f.calls.filter(c=>c.op==="project").length'),1,'refresh must not retry the abandoned project restoration');
+        assert.deepEqual(await run(p,'return [f.opened,f.resumed,f.created,f.calls.filter(c=>/grant|pty|input|turn/.test(c.op))]'),[[],[],[],[]]);
+      });
+      await t.test('a restored project outside the first page remains a visible selected tab', async () => {
+        const p=await mounted('f.projects=Array.from({length:55},(_,i)=>f.project("p"+(i+1)));f.profile="synthetic-offpage";f.storage["jauria-pulso:last-board:synthetic-offpage"]=JSON.stringify({schemaVersion:1,projectId:"p55"});');
+        const tab=p.getByRole('button',{name:'Proyecto p55',exact:true}); await tab.waitFor();
+        assert.equal(await tab.getAttribute('aria-current'),'true');
+        assert.deepEqual(await run(p,'return [f.opened,f.resumed,f.created]'),[[],[],[]]);
       });
       await t.test('pages are bounded to 50 and numeric fallback offsets advance without duplicate rows', async () => {
         const p = await mounted('f.projects=Array.from({length:55},(_,i)=>f.project(i===0?"p1":"p"+(i+1)));');
@@ -281,22 +433,16 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.equal(await p.locator('.pulso-project-tabs .pulso-tab').count(), 56);
         const pages = await run(p, 'return f.calls.filter(x=>x.op==="projects")'); assert.equal(pages[1].args.cursor, 50); assert.equal(pages[1].args.limit, 50);
       });
-      await t.test('remember requires opt-in; saved policies load and revoke only on explicit action', async () => {
-        const p = await mounted(); await projectDetail(p);
-        const remember = p.getByLabel('Recordar para futuras sesiones de esta herramienta en esta carpeta');
-        assert.equal(await remember.isChecked(), false);
-        assert.equal((await run(p, 'return f.calls.filter(x=>x.op==="policies")')).length, 0);
-        await p.getByLabel('Sesión que recibirá permiso').selectOption('live'); await remember.check();
-        await p.getByRole('button', { name: 'Permitir registrar planes' }).click(); await idle(p);
-        assert.equal(await run(p, 'return f.calls.find(x=>x.op==="grant").args.remember'), true);
-        await p.getByRole('button', { name: 'Gestionar permisos recordados' }).click(); await idle(p);
-        assert.match(await p.locator('.pulso-policies').innerText(), /claude · \/synthetic/);
+      await t.test('pending board delegates global permissions without reading or mutating authority', async () => {
+        const p = await mounted();
+        await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).click();
+        await p.getByRole('button', { name: 'Configurar permisos…', exact: true }).click();
+        const contexts = await run(p, 'return f.permissionContexts');
+        assert.equal(contexts.length, 1); assert.equal(contexts[0].projectId, undefined);
+        assert.ok(!contexts[0].sessionId || contexts[0].sessionId === 'live');
         await run(p, 'f.revision++; return f.panel.refresh()');
-        assert.equal((await run(p, 'return f.calls.filter(x=>x.op==="policies")')).length, 1);
-        await p.getByRole('button', { name: 'Gestionar permisos recordados' }).click(); await idle(p);
-        await p.getByRole('button', { name: 'Revocar permiso recordado' }).click(); await idle(p);
-        assert.deepEqual(await run(p, 'return f.calls.find(x=>x.op==="revoke_policy").args'), { id: 'policy-1' });
-        assert.match(await p.locator('.pulso-policies').innerText(), /No hay permisos recordados/);
+        assert.deepEqual(await run(p, 'return f.calls.filter(c=>/^(grant|revoke|policies|revoke_policy)$/.test(c.op))'), []);
+        assert.equal(await p.getByLabel('Recordar para futuras sesiones de esta herramienta en esta carpeta').count(), 0);
       });
       await t.test('fixed columns show standalone done cards; tabs select boards without opening a drawer', async () => {
         const p=await mounted('f.items.push({...f.item("finished"),status:"done"});');

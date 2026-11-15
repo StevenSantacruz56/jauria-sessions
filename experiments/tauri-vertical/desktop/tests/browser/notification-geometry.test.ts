@@ -15,7 +15,7 @@ const historical = new Map(baselineRef ? ['ui.ts', 'style.css', 'main.ts'].map(n
   execFileSync('git', ['show', `${baselineRef}:experiments/tauri-vertical/desktop/src/${name}`], { encoding: 'utf8' }),
 ]) : []);
 const server = await createServer({
-  configFile: false, server: { host: '127.0.0.1', port: 0 },
+  configFile: false, server: { host: '127.0.0.1', port: 0, hmr: false },
   plugins: [{ name: 'historical-notification-layout-in-memory', enforce: 'pre', load(id) {
     for (const [name, source] of historical) if (id.split('?')[0].endsWith(`/src/${name}`)) return source;
   } }],

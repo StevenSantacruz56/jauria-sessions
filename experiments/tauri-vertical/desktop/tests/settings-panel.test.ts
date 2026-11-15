@@ -168,6 +168,21 @@ for (const engine of [chromium, webkit]) {
       assert.deepEqual(await action(page, 'return [f.themes, f.saved.length]'), [['dark'], 1]);
     });
 
+    await t.test('forced native close during save reopens; an intentional close event cannot undo a rapid reopen', async () => {
+      const page = await mounted('f.holdSave = true;');
+      await page.locator('#opener').click(); await ready(page);
+      await page.getByLabel('Apariencia').selectOption('dark');
+      await page.getByRole('button', { name: 'Guardar', exact: true }).click();
+      await page.locator('dialog').evaluate((dialog: HTMLDialogElement) => dialog.close());
+      await page.waitForFunction(() => document.querySelector('dialog')?.open === true);
+      assert.deepEqual(await action(page, 'return f.themes'), []);
+      await action(page, 'f.resolveSave(f.settings);'); await ready(page);
+      await action(page, 'f.panel.close(); f.panel.open();'); await ready(page);
+      assert.equal(await page.locator('dialog[open]').count(), 1);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('dialog')?.open === false);
+    });
+
     await t.test('older runner allows theme only, including when the settings RPC is unavailable', async () => {
       const page = await mounted('f.editable = false; f.readError = true;');
       await page.locator('#opener').click(); await ready(page);

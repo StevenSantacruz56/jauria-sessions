@@ -6,6 +6,17 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 Sin cambios pendientes registrados.
 
+## [1.3.0] - 2026-11-14
+
+### Continuidad y configuración
+
+- Acción directa en el tablero para continuar la sesión principal o reanudar su conversación Claude registrada. Si ya existe una continuación viva, vuelve a ella sin consumir otra plaza.
+- Corregida la consulta de identidad al terminar una sesión mientras el detalle estaba abierto: el refresco automático ya no omite la acción de reanudación. Fallos de consulta muestran reintento explícito.
+- La recuperación de una fase prioriza su último checkpoint y su sesión vinculada antes de la principal del proyecto. Se conservan la principal original y el historial.
+- Configuración centraliza permisos de agentes, políticas recordadas y revocación, junto con avisos de macOS. El tablero enlaza a esta sección sin duplicar formularios. El alcance sigue limitado por proyecto, herramienta y carpeta; recordar requiere elección explícita.
+- Pulso recuerda el último tablero por perfil mediante su identificador local. Restaurar la vista no inicia agentes ni concede permisos.
+- Se conserva una sola campana de avisos; Configuración permite abrir la lista que requiere atención.
+
 ## [1.2.0] - 2026-11-14
 
 ### Tablero de Pulso

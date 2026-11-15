@@ -1,6 +1,6 @@
 # Pulso: proyectos, fases y continuidad
 
-Pulso es el espacio de planificación dentro de Jauria 1.2.0. Cada proyecto representa un plan completo y tiene una pestaña de tablero con cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Jira puede conservar las especificaciones y el seguimiento de equipo.
+Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto representa un plan completo y tiene una pestaña de tablero con cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Jira puede conservar las especificaciones y el seguimiento de equipo.
 
 ## Empezar desde una sesión
 
@@ -9,7 +9,7 @@ Pulso es el espacio de planificación dentro de Jauria 1.2.0. Cada proyecto repr
 3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
 4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o cambia el selector **Mover** con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
 5. Pulsa **Abrir** sobre una tarjeta para ver el drawer derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
-6. Abre **Plan y sesiones** en la barra del tablero del proyecto para editar el plan opcional, cambiar la sesión principal, vincular sesiones y gestionar permisos. Esos controles no ocupan las columnas. La principal no cambia automáticamente cuando termina.
+6. Abre **Plan y sesiones** en la barra del tablero del proyecto para editar el plan opcional, cambiar la sesión principal, vincular sesiones. Los permisos se administran en **Configuración → Permisos de agentes**; el detalle ofrece un enlace con el proyecto y la sesión seleccionados. Esos controles no ocupan las columnas. La principal no cambia automáticamente cuando termina.
 
 La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
 
@@ -24,6 +24,12 @@ El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el
 Mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos. No consulta por tarjeta; la vista oculta o el documento oculto detienen ese polling. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
 
 ## Recuperar el trabajo
+
+Al volver a Pulso se restaura el último tablero de este perfil. Solo se guarda su identificador: no se ejecutan agentes ni se restauran permisos al abrirlo. Si el proyecto fue archivado o ya no existe, se muestran los Pendientes.
+
+En la barra del proyecto, **Continuar proyecto** vuelve a su sesión viva. Si terminó y Jauria registró su identidad Claude, **Reanudar sesión principal** permite abrir esa misma conversación. Si la continuación ya está abierta, **Volver a conversación reanudada** la enfoca, incluso con todas las plazas ocupadas. Puedes cerrar el detalle para usar la acción de la barra.
+
+Desde una fase se prioriza la sesión de su último checkpoint; después su vínculo y finalmente la principal. Reanudar continúa el estado actual del proveedor, no rebobina hasta esa fase. Si no existe identidad registrada, consulta **Ver historial** o prepara el contexto para una sesión nueva. Una comprobación fallida muestra **Reintentar comprobación** y nunca inicia otra sesión automáticamente.
 
 | Acción | Qué hace |
 | --- | --- |
@@ -49,7 +55,7 @@ Cambiar una fase a **Hecho** registra avance de agenda. No implica pruebas aprob
 
 ## Permitir que los agentes registren planes
 
-El acceso empieza desactivado. Desde **Plan y sesiones** del proyecto, selecciona una sesión viva y pulsa **Permitir registrar planes**. Esto concede acceso al proyecto seleccionado y permite crear planes propios de esa sesión; no comparte toda tu agenda ni los pendientes independientes. Incluye actualizar fases y marcarlas Hecho.
+El acceso empieza desactivado. Desde **Configuración → Permisos de agentes**, selecciona una sesión viva y el alcance del proyecto (o solo proyectos propios de la sesión) y pulsa **Permitir registrar planes**. Esto concede acceso al proyecto seleccionado y permite crear planes propios de esa sesión; no comparte toda tu agenda ni los pendientes independientes. Incluye actualizar fases y marcarlas Hecho.
 
 La casilla **Recordar para futuras sesiones de esta herramienta en esta carpeta** empieza desmarcada. Puedes marcarla para guardar una política. Esa política solo se aplica al proveedor y a la ruta canónica elegidos. Cada sesión futura recibe una credencial nueva; detener una sesión invalida su acceso. Puedes gestionar y revocar los permisos recordados desde el mismo bloque de acceso.
 

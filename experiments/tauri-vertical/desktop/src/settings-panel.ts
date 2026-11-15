@@ -1,4 +1,5 @@
 import './settings-panel.css';
+import { mountAgentPermissions, type PermissionsOptions, type PermissionsContext } from './agent-permissions';
 
 export type AppSettings = {
   schemaVersion: number;
@@ -8,6 +9,9 @@ export type AppSettings = {
 };
 
 type Options = {
+  permissions?: PermissionsOptions;
+  notificationControls?: HTMLElement;
+  onOpenAttention?: () => void;
   read: () => Promise<AppSettings>;
   save: (limit: number) => Promise<AppSettings>;
   getTheme: () => string;
@@ -35,7 +39,7 @@ function checked(settings: AppSettings): AppSettings {
  * Mounting and opening only construct UI and read settings; neither saves.
  */
 export function mountSettings(options: Options): {
-  open: () => void;
+  open: (section?: 'permissions', context?: PermissionsContext) => void;
   close: () => void;
   dispose: () => void;
   readonly isOpen: boolean;
@@ -81,7 +85,6 @@ export function mountSettings(options: Options): {
   info.setAttribute('aria-labelledby', infoTitle.id);
   info.append(infoTitle,
     node('p', 'Los proveedores conservan sus permisos y confirmaciones nativos guardados. Jauría los respeta.', 'settings-dialog-help'),
-    node('p', 'Los avisos nativos siguen siendo opcionales y se activan desde su control actual.', 'settings-dialog-help'),
     node('p', `Jauría ${options.version}`, 'settings-dialog-version'));
   const warning = node('p', '', 'settings-dialog-warning'); warning.setAttribute('role', 'status'); warning.hidden = true;
   const error = node('p', '', 'form-error'); error.id = `${prefix}-error`; error.setAttribute('role', 'alert'); error.hidden = true;
@@ -91,14 +94,35 @@ export function mountSettings(options: Options): {
   const closeButton = node('button', 'Cerrar', 'quiet'); closeButton.type = 'button';
   const saveButton = node('button', 'Guardar', 'primary'); saveButton.type = 'submit';
   footer.append(closeButton, saveButton);
-  form.append(heading, general, sessions, info, warning, error, retry, status, footer);
+  const permissionsHost = node('section', '', 'settings-dialog-section settings-permissions');
+  const notices = node('section', '', 'settings-dialog-section');
+  notices.append(node('h3', 'Avisos'));
+  // Move the original controls, preserving IDs, state and listeners.
+  if (options.notificationControls) {
+    for (const button of Array.from(options.notificationControls.querySelectorAll('button'))) button.type = 'button';
+    notices.append(options.notificationControls);
+  }
+  if (options.onOpenAttention) {
+    const attention = node('button', 'Ver sesiones que necesitan atención', 'secondary'); attention.type = 'button';
+    attention.addEventListener('click', () => {
+      if (busy || permissions?.isBusy) return;
+      close(); options.onOpenAttention?.();
+    });
+    notices.append(attention);
+  }
+  form.append(heading, general, sessions);
+  if (options.permissions) form.append(permissionsHost);
+  if (options.notificationControls || options.onOpenAttention) form.append(notices);
+  form.append(info, warning, error, retry, status, footer);
   dialog.append(form); document.body.append(dialog);
 
   let disposed = false, busy = false, loaded = false, readFailed = false;
   let limitDirty = false, themeDirty = false;
   let current: AppSettings | null = null;
   let opener: HTMLElement | null = null;
-  let generation = 0;
+  let underlyingDialog: HTMLDialogElement | null = null;
+  let generation = 0, intentionalCloses = 0;
+  const permissions = options.permissions ? mountAgentPermissions(permissionsHost, options.permissions, sync) : null;
 
   function showError(message: string, invalid = false): void {
     error.textContent = message; error.hidden = !message;
@@ -107,11 +131,12 @@ export function mountSettings(options: Options): {
   }
   function sync(): void {
     const editable = options.canEdit();
-    dialog.setAttribute('aria-busy', String(busy));
+    const blocked = busy || !!permissions?.isBusy;
+    dialog.setAttribute('aria-busy', String(blocked));
     theme.disabled = busy;
     limit.disabled = busy || !loaded || !editable;
-    closeButton.disabled = busy;
-    saveButton.disabled = busy || (editable && !loaded);
+    closeButton.disabled = blocked;
+    saveButton.disabled = blocked || (editable && !loaded);
     saveButton.textContent = busy && !readFailed ? 'Esperando…' : 'Guardar';
     retry.disabled = busy; retry.hidden = !readFailed;
     compatibility.hidden = editable;
@@ -142,7 +167,7 @@ export function mountSettings(options: Options): {
     }
   }
   async function save(): Promise<void> {
-    if (disposed || busy || !dialog.open) return;
+    if (disposed || busy || permissions?.isBusy || !dialog.open) return;
     const editable = options.canEdit();
     if (editable && (!loaded || !current)) return;
     const value = Number(limit.value);
@@ -180,11 +205,19 @@ export function mountSettings(options: Options): {
   }
   function restoreFocus(): void {
     if (opener?.isConnected) opener.focus();
-    opener = null;
+    else if (underlyingDialog?.isConnected && underlyingDialog.open) {
+      // Pulso polling may replace the opener while Settings is stacked above it.
+      const focusable = Array.from(underlyingDialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled),a[href],input:not(:disabled):not([type="hidden"]),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])',
+      )).find(node => !node.closest('[hidden],[inert]') && node.getClientRects().length > 0);
+      if (focusable) focusable.focus();
+      else { underlyingDialog.tabIndex = -1; underlyingDialog.focus(); }
+    }
+    opener = null; underlyingDialog = null;
   }
   function close(): void {
-    if (disposed || busy || !dialog.open) return;
-    dialog.close(); restoreFocus();
+    if (disposed || busy || permissions?.isBusy || !dialog.open) return;
+    permissions?.close(); ++intentionalCloses; dialog.close(); restoreFocus();
   }
   theme.addEventListener('change', () => { if (!busy) { themeDirty = true; status.textContent = ''; } });
   limit.addEventListener('input', () => { if (!busy) { limitDirty = true; showError(''); status.textContent = ''; } });
@@ -194,22 +227,32 @@ export function mountSettings(options: Options): {
   dialog.addEventListener('cancel', event => {
     // Let the browser finish Escape's focus steps before the close handler.
     // Closing synchronously inside cancel can lose restored focus in WebKit.
-    if (busy) event.preventDefault();
+    if (busy || permissions?.isBusy) event.preventDefault();
   });
-  dialog.addEventListener('close', () => { if (!dialog.open) restoreFocus(); });
+  dialog.addEventListener('close', () => {
+    if (intentionalCloses) { --intentionalCloses; return; }
+    if (disposed || dialog.open) return;
+    // A native close watcher can bypass cancel; preserve in-flight writes.
+    if (busy || permissions?.isBusy) { dialog.showModal(); return; }
+    permissions?.close(); restoreFocus();
+  });
   sync();
   return {
     get isOpen() { return !disposed && dialog.open; },
-    open() {
-      if (disposed || dialog.open) return;
+    open(section, context) {
+      if (disposed) return;
+      if (dialog.open) { if (section === 'permissions') permissions?.focus(); return; }
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      underlyingDialog = opener?.closest<HTMLDialogElement>('dialog[open]')
+        ?? Array.from(document.querySelectorAll<HTMLDialogElement>('dialog[open]')).at(-1) ?? null;
       if (!themeDirty) theme.value = themeValue(options.getTheme());
-      dialog.showModal(); title.focus(); void read();
+      dialog.showModal(); title.focus(); void read(); permissions?.open(context);
+      if (section === 'permissions') permissions?.focus();
     },
     close,
     dispose() {
       if (disposed) return;
-      disposed = true; ++generation;
+      disposed = true; ++generation; permissions?.dispose();
       if (dialog.open) dialog.close();
       dialog.remove(); restoreFocus();
     },

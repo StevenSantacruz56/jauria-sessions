@@ -11,7 +11,7 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
 
-**Versión actual: 1.2.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.2.0](docs/RELEASE_1.2.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
+**Versión actual: 1.3.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.3.0](docs/RELEASE_1.3.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
@@ -50,25 +50,25 @@ Actualizar el código o reemplazar la app no actualiza un runner que ya está ej
 
 ## Pulso: un tablero por proyecto
 
-Pulso 1.2.0 presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Cada proyecto tiene su pestaña; **Pendientes** es una pestaña fija para tarjetas sin proyecto, incluidas las terminadas. **Repositorios** conserva aparte el trabajo Git.
+Pulso 1.3.0 presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Cada proyecto tiene su pestaña; **Pendientes** es una pestaña fija para tarjetas sin proyecto, incluidas las terminadas. **Repositorios** conserva aparte el trabajo Git.
 
 1. Pulsa **Nuevo proyecto**, escribe el nombre y confirma **Crear proyecto**. Si hay sesión actual, la casilla para usarla como principal aparece marcada; puedes desmarcarla. El proyecto se abre como pestaña de tablero.
 2. Usa **Añadir fase** dentro de cualquiera de las tres primeras columnas. En Pendientes, la acción es **Añadir pendiente**.
 3. Arrastra el agarre de una tarjeta a otra columna o usa el selector **Mover** con el teclado. Cambia el estado conservando el orden de fases; no hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
 4. **Abrir** en una tarjeta muestra el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
-5. **Plan y sesiones**, en la barra del tablero del proyecto, abre el plan opcional, la sesión principal, los vínculos y los permisos; esos controles quedan fuera del tablero.
+5. **Plan y sesiones**, en la barra del tablero del proyecto, abre el plan opcional, la sesión principal y los vínculos; esos controles quedan fuera del tablero. Los permisos y los avisos de macOS se administran en **Configuración**. El tablero recuerda el último proyecto y ofrece **Continuar proyecto**, **Reanudar sesión principal** o **Volver a conversación reanudada**, según su estado.
 
 Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos explícitos acotados por proyecto y políticas revocables; MCP, importación del Site y sincronización en la nube siguen pendientes.
 
 Cuando un programa emite explícitamente **OSC 7501**, la vista viva puede mostrar su estado. Es una señal cosmética, no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión no hay estado de programa; el replay no genera estados ni avisos y la reconexión reinicia este estado efímero.
 
-El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md) y [la entrega 1.2.0](docs/RELEASE_1.2.0.md).
+El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md) y [la entrega 1.3.0](docs/RELEASE_1.3.0.md).
 
-La entrega local **1.2.0** está compilada y su DMG verificado. Consulta [las pruebas y límites de validación](docs/PULSO_VALIDATION_1.2.0.md). La vista de ejemplo utiliza otro perfil; no se sustituyeron sesiones del perfil habitual ni se publicó este instalador.
+La entrega local **1.3.0** está compilada y su DMG verificado. Consulta [las pruebas y límites de validación](docs/PULSO_VALIDATION_1.3.0.md). La vista de ejemplo utiliza otro perfil; no se sustituyeron sesiones del perfil habitual ni se publicó este instalador.
 
-![Pulso · Jauria 1.2.0](docs/screenshots/pulso-1.2.0.png)
+![Pulso · Jauria 1.3.0](docs/screenshots/pulso-1.3.0.png)
 
-Tablero de ejemplo en Jauria 1.2.0. Captura sintética: no contiene sesiones ni tareas reales.
+Tablero de ejemplo en Jauria 1.3.0. Captura sintética: no contiene sesiones ni tareas reales.
 
 ## Sesiones, repositorios e historial
 
@@ -107,7 +107,7 @@ El código propio está bajo GPL-3.0-only, con condiciones separadas para tercer
 
 ## Capturas
 
-Las dos primeras capturas muestran la aplicación en macOS con sesiones temporales de demostración. Las vistas de Configuración y pestañas de 1.0.0 usan los componentes reales de la interfaz con datos sintéticos, sin perfiles de usuario.
+Las dos primeras capturas muestran la aplicación en macOS con sesiones temporales de demostración. Las vistas de Configuración de 1.3.0 y pestañas de 1.0.0 usan los componentes reales de la interfaz con datos sintéticos, sin perfiles de usuario.
 
 ![Diálogo Nueva sesión para elegir herramienta, carpeta de trabajo y nombre](docs/screenshots/nueva-sesion.jpg)
 
@@ -117,7 +117,7 @@ Las dos primeras capturas muestran la aplicación en macOS con sesiones temporal
 
 *Terminal dividida: dos sesiones de demostración visibles lado a lado, sin datos de usuarios.*
 
-![Configuración de Jauria 1.0.0 con apariencia y límite de sesiones](docs/screenshots/configuracion-1.0.0.png)
+![Configuración de Jauria 1.3.0 con permisos de agentes y avisos globales](docs/screenshots/configuracion-1.3.0.png)
 
 *Configuración: apariencia, límite combinado de 1 a 8 sesiones e información de versión. Vista de prueba del componente.*
 

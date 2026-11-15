@@ -4,7 +4,7 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-**Current version: 1.2.0.** Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Current version: 1.3.0.** Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -14,7 +14,7 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 - Register Git repositories and create a separate worktree for each parallel editing task. Jauria enforces one managed writer per worktree. Shell and provider settings determine filesystem and command permissions.
 - Inspect session state, optional attention notifications, provider usage when available, and observed CPU/RAM consumption.
 
-**Pulso 1.2.0** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones. Git repositories remain separate.
+**Pulso 1.3.0** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones. Git repositories remain separate.
 
 1. Choose **Nuevo proyecto**, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked. Creating the project opens its board tab.
 2. Add phases inline with **Añadir fase** in the first three columns (**Añadir pendiente** for standalone cards).
@@ -22,19 +22,21 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 4. A card's **Abrir** action opens the right drawer; it does not start a PTY. Edit title, notes and status, read the latest checkpoint and next step, or expand **Guardar avance** to append an immutable checkpoint. History loads 10 at a time.
 5. **Plan y sesiones** in the project board toolbar opens the optional plan, main session, links and grants, keeping those controls off the board.
 
+Permissions, saved policies, revocation and macOS notices live in **Configuración**. Pulso remembers the last board per profile and offers a direct action to continue the project or focus its existing Claude continuation.
+
 Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped grants and revocable policies. MCP, website import and cloud sync remain deferred.
 
 Explicit **OSC 7501** reports may display program status in the live view. This cosmetic signal never updates phases. Jauria installs no hooks and changes no agent configuration. Programs that do not emit it have no program status. Replay creates no status or alerts; reconnecting resets this ephemeral state.
 
-The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), and [1.2.0 release notes](docs/RELEASE_1.2.0.md) (Spanish).
+The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), and [1.3.0 release notes](docs/RELEASE_1.3.0.md) (Spanish).
 
-The local **1.2.0** release is built and its DMG verified. See [validation results and limits](docs/PULSO_VALIDATION_1.2.0.md). The example uses a separate profile; existing sessions were preserved and the installer was not published.
+The local **1.3.0** release is built and its DMG verified. See [validation results and limits](docs/PULSO_VALIDATION_1.3.0.md). The example uses a separate profile; existing sessions were preserved and the installer was not published.
 
 See the [screenshots and full usage guide](README.md#capturas). The current board is shown below.
 
-![Pulso · Jauria 1.2.0](docs/screenshots/pulso-1.2.0.png)
+![Pulso · Jauria 1.3.0](docs/screenshots/pulso-1.3.0.png)
 
-Example board in Jauria 1.2.0. Synthetic screenshot: no real session or task data.
+Example board in Jauria 1.3.0. Synthetic screenshot: no real session or task data.
 
 ## Install and start
 
@@ -75,4 +77,4 @@ The default desktop build is optimized release mode and unsigned. Use `--debug` 
 
 ## Project status and security
 
-Read the [changelog](CHANGELOG.md), [1.2.0 notes](docs/RELEASE_1.2.0.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).
+Read the [changelog](CHANGELOG.md), [1.3.0 notes](docs/RELEASE_1.3.0.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).

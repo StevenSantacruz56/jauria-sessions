@@ -1,4 +1,5 @@
 import './pulso-panel.css';
+import { readLastBoard,saveLastBoard } from './board-preferences';
 
 export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:string|null };
 type Timestamp = number | string;
@@ -14,6 +15,9 @@ export type PulsoPanelOptions = {
   newSession: (cwd?: string) => void;
   currentSession: () => Session | null;
   notice: (text: string) => void;
+  onOpenPermissions?: (context:{projectId?:string;sessionId?:string}) => void;
+  persistenceKey?: () => string | null;
+  bindingCacheKey?: () => string;
   backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
@@ -35,7 +39,7 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; dispose(): void } {
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
   }
@@ -80,7 +84,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const originText=el('span');originLabel.append(originCheck,originText);
   function syncOrigin(){const session=options.currentSession();originLabel.hidden=!session;originText.textContent=session?`Usar «${session.title}» como sesión principal`:'';}
   capture.append(captureTitle.wrap,originLabel);const captureSave=el('button','Crear proyecto','primary');captureSave.type='submit';capture.append(captureSave,button('Cancelar',()=>{dirty=false;activeEditor=null;closeDrawer();},'quiet'));
-  const grantPreferences=new Map<string,{sessionId:string;remember:boolean}>();
+
   let disposed = false, visible = false, timer: ReturnType<typeof setTimeout> | undefined;
   let revision: unknown, refreshing: Promise<void> | null = null, refreshGeneration = 0, generation = 0, selectionEpoch = 0;
   let projects: Page<PulsoProject> = { rows: [], hasMore: false };
@@ -102,7 +106,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     else{hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;freeze();}
   });
   const sessionSignature=()=>JSON.stringify(options.sessions().map(s=>[s.id,s.status,s.title]));
-  let shownSessions='';
+  let shownSessions='';let bindingContext='';
+  let restoredProfile:string|null|undefined;let restoreBoardId:string|null=null;
   let projectLinks: Link[] = [], dirty = false, busy = false, activeEditor: HTMLElement | null = null;
   let editBase: { revision: number } | null = null;
   type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void> };
@@ -159,7 +164,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const remote = el('pre', [record.title, record.status && labels[record.status as PulsoItem['status']], record.plan ?? record.note,
         ...(result.checkpoints ?? []).map((c: PulsoCheckpoint) => `${c.brief}\n${c.nextAction}`)].filter(Boolean).join('\n\n'), 'pulso-prose');
       errors.append(el('h3', `Versión actual · revisión ${record.revision}`), remote);
-      if(!drawer.open)errors.append(button('Actualizar tablero',async()=>{failed=null;errors.hidden=true;try{await reloadBoard();}catch{readError(()=>refresh());}freeze();}));
+      if(!drawer.open)errors.append(button('Actualizar tablero',async()=>{failed=null;errors.hidden=true;try{await reloadBoard();if(epoch===selectionEpoch&&boardScope===null)rememberBoard();}catch{readError(()=>refresh());}freeze();}));
       if (drawer.open && editBase && m.args.expectedRevision !== undefined) errors.append(button('Revisé los cambios; conservar mi borrador', () => {
         if (editBase) editBase.revision = record.revision;
         failed = null; errors.hidden = true; freeze(); say('Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');
@@ -184,7 +189,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
     projectList.replaceChildren();
     const pendingTab=button('Pendientes',()=>choosePending(),'pulso-tab');pendingTab.setAttribute('aria-current',String(!selectedProject));projectList.append(pendingTab);
-    for(const project of projects.rows){const b=button(project.title,()=>chooseProject(project.id),'pulso-tab');b.dataset.focusKey=`project-${project.id}`;b.setAttribute('aria-current',String(selectedProject?.id===project.id));projectList.append(b);}
+    const visibleProjects=selectedProject&&!projects.rows.some(p=>p.id===selectedProject!.id)?[...projects.rows,selectedProject]:projects.rows;
+    for(const project of visibleProjects){const b=button(project.title,()=>chooseProject(project.id),'pulso-tab');b.dataset.focusKey=`project-${project.id}`;b.setAttribute('aria-current',String(selectedProject?.id===project.id));projectList.append(b);}
     if(projects.hasMore)projectList.append(button('Más proyectos',()=>loadMoreProjects(),'quiet'));
     if(!dirty&&!failed&&!dragging)renderBoard();freeze();
     if(focus&&available())Array.from(outline.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
@@ -195,6 +201,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     toolbar.replaceChildren();const name=el('div');name.append(el('h2',selectedProject?.title??'Pendientes'));
     const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
     name.append(el('p',total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'} · arrastra entre columnas`:'Añade una tarjeta en la columna donde quieras empezar.','pulso-progress'));toolbar.append(name);
+    if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Continuar proyecto','Reanudar sesión principal');toolbar.append(recovery);}
     if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet'));
     board.replaceChildren();
     for(const status of statuses){
@@ -271,7 +278,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   async function loadMoreProjects(){if(busy||dirty||failed)return;busy=true;freeze();try{projects=await page<PulsoProject>('projects','projects',{archived:false},projects);renderLists();}catch{readError(()=>loadMoreProjects());}finally{busy=false;freeze();}}
   async function choosePending(){
     if(dirty||failed||busy)return;const epoch=++selectionEpoch;navigating=true;freeze();selectedProject=null;selectedItem=null;hideDrawer();drawerKind=null;
-    try{await reloadBoard();}catch{if(epoch===selectionEpoch&&available()){selectedProject=boardProject;renderLists();readError(()=>choosePending());}}
+    try{await reloadBoard();if(epoch===selectionEpoch&&available())rememberBoard();}catch{if(epoch===selectionEpoch&&available()){selectedProject=boardProject;renderLists();readError(()=>choosePending());}}
     finally{if(epoch===selectionEpoch){navigating=false;freeze();}}
   }
   async function chooseProject(id: string, queryBindings = true) {
@@ -282,7 +289,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const [data, links] = await Promise.all([request('project', { id }),request('links', { projectId: id })]);
       if (!available() || gen !== generation || epoch !== selectionEpoch || dirty || failed) return;
       selectedProject = data.project; selectedItem = null;projectLinks = links.links ?? [];
-      await readBoard(id);if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;hideDrawer();drawerKind=null;renderLists();if(!failed)errors.hidden=true;say('');
+      await readBoard(id);if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;hideDrawer();drawerKind=null;renderLists();if(!failed)errors.hidden=true;rememberBoard();say('');
     }catch{if(epoch===selectionEpoch&&available()){selectedProject=boardProject;renderLists();readError(()=>chooseProject(id));}}
     finally{if(epoch===selectionEpoch){navigating=false;freeze();}}
   }
@@ -342,7 +349,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       dirty=false;await chooseProject(p.id);await refresh();
     })); form.append(discardButton()); detail.append(form);
     sessionsBlock(detail, [...new Set([p.mainSessionId, ...projectLinks.map(l => l.sessionId)].filter((id): id is string => !!id))], queryBindings);
-    linkBlock(detail, { projectId: p.id }); grantBlock(detail, p.id); freeze();
+    linkBlock(detail, { projectId: p.id }); permissionsLink(detail,p.id);freeze();
   }
   function renderItem(item: PulsoItem, links: Link[], checkpoints: PulsoCheckpoint[], queryBindings: boolean) {
     detail.replaceChildren(); dirty = false; activeEditor = null; editBase = { revision: item.revision }; const base = editBase;
@@ -367,17 +374,19 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       id: crypto.randomUUID(), itemId: item.id, expectedRevision: base.revision, brief: brief.input.value.trim(), nextAction: next.input.value.trim(), ...(session.input.value ? { sessionId: session.input.value } : {}),
     }, async data => {dirty=false;await chooseItem(data.item);await reloadBoard();})); checkpoint.append(discardButton());const saveAdvance=el('details');saveAdvance.append(el('summary','Guardar avance'),checkpoint);detail.append(saveAdvance);
     const recover = el('section', '', 'pulso-section'); recover.append(el('h3', 'Continuar fase'));
+    const recent=[...checkpoints].sort(checkpointOrder).at(-1);const recoveryId=recent?.sessionId??links[0]?.sessionId??selectedProject?.mainSessionId;
+    if(recoveryId)recoveryAction(recover,recoveryId,'Continuar en la sesión','Reanudar sesión de la fase');
     recover.append(el('p', 'Prepara el contexto, revísalo y cópialo. Tú decides dónde pegarlo.', 'pulso-muted'));
     const composer = el('div'); composer.hidden = true;
     recover.append(button('Preparar contexto', () => { composer.hidden = false; }));
     const context = field('Contexto editable para continuar', true, 50000); context.input.value = pulsoContinuation(selectedProject, item, checkpoints);
     composer.append(context.wrap, button('Copiar contexto', () => copy(context.input.value)), discardButton()); watch(composer);
-    const known = options.sessions(); const source = known.find(s => s.id === selectedProject?.mainSessionId) ?? known.find(s => links.some(l => l.sessionId === s.id));
+    const known = options.sessions(); const source = known.find(s => s.id === recoveryId);
     composer.append(button('Abrir nueva sesión', () => options.newSession(source?.cwd ?? undefined)), el('p', 'Abre una sesión vacía. El contexto no se envía automáticamente.', 'pulso-muted'));
     recover.append(composer); detail.insertBefore(recover,form);
     const latest=[...checkpoints].sort(checkpointOrder).at(-1);if(latest){const preview=el('section','','pulso-checkpoint-preview');preview.append(el('h3','Último avance'),el('p',latest.brief,'pulso-prose'),el('h4','Siguiente paso'),el('p',latest.nextAction,'pulso-prose'));detail.insertBefore(preview,recover);}
     sessionsBlock(detail, [...new Set([selectedProject?.mainSessionId, ...links.map(l => l.sessionId), ...checkpoints.map(c => c.sessionId)].filter((id): id is string => !!id))], queryBindings);
-    const connections=el('details');connections.append(el('summary','Vincular sesiones y permisos'));linkBlock(connections, { itemId: item.id }); grantBlock(connections, item.projectId ?? undefined);detail.append(connections);
+    const connections=el('details');connections.append(el('summary','Vincular otra sesión'));linkBlock(connections, { itemId: item.id });detail.append(connections);permissionsLink(detail,item.projectId??undefined);
     const history = el('section', '', 'pulso-section'); history.append(el('h3', 'Historial de checkpoints'));
     if (!checkpoints.length) history.append(el('p', 'Todavía no hay checkpoints. Registra uno antes de dejar esta fase.', 'pulso-muted'));
     const entries = el('ol', '', 'pulso-history');
@@ -412,25 +421,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       } else {
         row.append(el('span', 'Historial local · sesión finalizada o no disponible', 'pulso-muted'));
         if(s)row.append(button('Ver historial',()=>options.openSession(id)));
-        if (options.binding && options.resumeSession && available() && (queryBindings || bindings.has(id))) {
-          // Cached per source; detail refreshes and revision polls never query bindings again.
-          if (!bindings.has(id)) bindings.set(id, Promise.resolve().then(() => options.binding!(id)));
-          void bindings.get(id)!.then(data => {
-            if (disposed || !available() || !detail.contains(row) || data.binding?.provider !== 'claude' || !data.binding.conversationId) return;
-            const active=options.sessions().find(session=>session.id===data.activeSessionId&&isLivePulsoSession(session));
-            if(active){row.append(button('Volver a conversación reanudada',()=>options.openSession(active.id)));freeze();return;}
-            row.append(button('Intentar reanudar conversación', async () => {
-              if (busy || disposed) return;
-              busy = true; freeze();
-              const scope=selectedItem?{itemId:selectedItem.id}:selectedProject?{projectId:selectedProject.id}:null;let started=false;
-              try { const next=await options.resumeSession!(id);started=true;
-                if(next&&scope){bindings.delete(id);await request('link',{...scope,sessionId:next,requestId:`resume-link-${next}`});}
-                if (!disposed) options.notice('Se solicitó reanudar la conversación.');
-              } catch {if(started)options.notice('La sesión se abrió; no se confirmó el vínculo con el plan. Puedes vincularla desde Pulso.');else say('No se pudo reanudar la conversación. Puedes continuar con el contexto del checkpoint.');}
-              finally { busy = false; if (!disposed) freeze(); }
-            })); freeze();
-          }).catch(() => { /* Missing/unavailable bindings retain history and checkpoints. */ });
-        }
+        recoveryAction(row,id,'Continuar en la sesión','Reanudar conversación',false);
       }
       section.append(row);
     }
@@ -446,71 +437,58 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       dirty = false; if (selectedItem) await chooseItem(selectedItem); else if (selectedProject) await chooseProject(selectedProject.id);
     })); section.append(discardButton()); host.append(section);
   }
-  function grantBlock(host: HTMLElement, projectId?: string) {
-    const section = el('section', '', 'pulso-section'); section.append(el('h3', 'Registro desde una sesión'), el('p', 'Permite a la sesión elegida registrar planes y checkpoints, actualizar fases y marcar Hecho. Compartirás el contexto del proyecto con esa sesión.', 'pulso-muted'));
-    const preferenceKey=projectId??'bootstrap';const preference=grantPreferences.get(preferenceKey);
-    const s = select('Sesión que recibirá permiso', [['', 'Seleccionar sesión'], ...sessionOptions().filter(([id]) => options.sessions().some(x => x.id === id && isLivePulsoSession(x)))], preference?.sessionId??'');
-    section.append(s.wrap);
-    const rememberLabel = el('label', '', 'pulso-check');
-    const remember = el('input'); remember.type = 'checkbox'; remember.checked = preference?.remember??false;
-    const rememberChoice=()=>grantPreferences.set(preferenceKey,{sessionId:s.input.value,remember:remember.checked});s.input.addEventListener('change',rememberChoice);remember.addEventListener('change',rememberChoice);
-    rememberLabel.append(remember, el('span', 'Recordar para futuras sesiones de esta herramienta en esta carpeta'));
-    section.append(rememberLabel);
-    const result = el('div');
-    const grant = button('Permitir registrar planes', async () => {
-      if (!s.input.value || busy || disposed) { say('Selecciona una sesión viva para conceder el permiso.'); return; }
-      const sessionId = s.input.value; busy = true; freeze();
-      try {
-        // The bridge owns secrets and authorization. Persist only an explicit opt-in.
-        const data = await request('grant', { sessionId, ...(projectId ? { projectId } : {}), canCreateProjects: true, ...(remember.checked ? { remember: true } : {}) });
-        if (disposed) return;
-        // Never insert the opaque handle or any credential fields.
-        result.replaceChildren(el('p', typeof data.guidance === 'string' ? data.guidance : 'Permiso concedido. Copia el comando y ejecútalo en la sesión elegida cuando estés listo.', 'pulso-muted'));
-        const command = typeof data.command === 'string' ? data.command : '';
-        // The parent's grant contract returns a handle-based command, never a token.
-        // Ignore all other response fields (including the opaque handle).
-        if (command) {
-          const text = field('Comando de registro', true, 8000); text.input.value = command; text.input.readOnly = true;
-          result.append(text.wrap, button('Copiar comando de registro', () => copy(command)));
-        }
-
-      } catch { say('No se confirmó el permiso. Consulta la conexión y vuelve a intentarlo explícitamente.'); }
-      finally { busy = false; if (!disposed) freeze(); }
-    });
-    const revoke=button('Revocar permiso',async()=>{
-      const sessionId=s.input.value;if(!sessionId||busy||disposed){say('Selecciona la sesión cuyo acceso quieres revocar.');return;}
-      busy=true;freeze();try{await request('revoke',{sessionId});if(!disposed)result.replaceChildren(el('p','Permiso revocado.','pulso-muted'));}
-      catch{say('No se pudo revocar el permiso. Reintenta la revocación.');}finally{busy=false;if(!disposed)freeze();}
-    });
-    const policies = el('div', '', 'pulso-policies'); policies.hidden = true;
-    type Policy = { id: string; policy: { projectId?: string; canCreateProjects?: boolean; provider?: string; cwd?: string } };
-    async function readPolicies() {
-      const data = await request('policies');
-      if (disposed || !detail.contains(section)) return;
-      if (!Array.isArray(data.policies)) throw Error('Respuesta no válida');
-      policies.replaceChildren(el('h4', 'Permisos recordados'));
-      if (!data.policies.length) policies.append(el('p', 'No hay permisos recordados.', 'pulso-muted'));
-      for (const entry of data.policies as Policy[]) {
-        const row = el('div', '', 'pulso-policy');
-        row.append(el('p', `${entry.policy.provider ?? 'Herramienta sin especificar'} · ${entry.policy.cwd ?? 'Carpeta sin especificar'}`, 'pulso-prose'),
-          el('p', `${entry.policy.projectId ? `Proyecto: ${entry.policy.projectId}` : 'Sin proyecto específico'}${entry.policy.canCreateProjects ? ' · Puede crear proyectos' : ''} · Puede actualizar fases y marcar Hecho`, 'pulso-muted'),
-          button('Revocar permiso recordado', () => managePolicy(entry.id)));
-        policies.append(row);
+  function permissionsLink(host:HTMLElement,projectId?:string){
+    const section=el('section','','pulso-section');section.append(el('h3','Acceso de agentes'),el('p','Los permisos y las reglas recordadas se gestionan en Configuración. Cada acceso conserva su alcance.','pulso-muted'));
+    section.append(button('Configurar permisos…',()=>{if(busy||dirty||failed)return;options.onOpenPermissions?.({...(projectId?{projectId}:{}),...(options.currentSession()?{sessionId:options.currentSession()!.id}:{})});},'quiet'));
+    host.append(section);
+  }
+  function bindingFor(id:string,retry=false){
+    if(retry)bindings.delete(id);
+    if(!bindings.has(id))bindings.set(id,Promise.resolve().then(()=>options.binding!(id)));
+    return bindings.get(id)!;
+  }
+  async function resumeConversation(id:string){
+    if(busy||dirty||failed||disposed)return;busy=true;freeze();
+    const scope=selectedItem?{itemId:selectedItem.id}:selectedProject?{projectId:selectedProject.id}:null;let started=false;
+    try{
+      const next=await options.resumeSession!(id);started=true;bindings.delete(id);
+      if(next&&scope)await request('link',{...scope,sessionId:next,requestId:`resume-link-${next}-${'itemId' in scope?'item':'project'}-${'itemId' in scope?scope.itemId:scope.projectId}`});
+      if(!disposed)options.notice('Conversación abierta con su identidad guardada.');
+    }catch(error){
+      if(started)options.notice('La sesión se abrió; no se confirmó el vínculo con el plan. Puedes vincularla manualmente.');
+      else say(`No se pudo reanudar la sesión: ${error instanceof Error?error.message:String(error)}. El historial y el contexto guardado se conservan.`);
+    }finally{busy=false;if(!disposed)freeze();}
+  }
+  function recoveryAction(host:HTMLElement,id:string,liveLabel:string,resumeLabel:string,primary=true){
+    const area=el('div','','pulso-recovery-action');host.append(area);
+    const session=options.sessions().find(s=>s.id===id);
+    if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'quiet'));return;}
+    if(session&&!['exited','stopped','released','failed','interrupted'].includes(session.status)){
+      area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'quiet'));return;
+    }
+    if(!session||!options.binding||!options.resumeSession){area.append(el('span','Usa el historial local o el contexto guardado para continuar.','pulso-muted'));return;}
+    async function check(retry=false){
+      area.replaceChildren(el('span','Comprobando conversación guardada…','pulso-muted'));
+      try{
+        const data=await bindingFor(id,retry);
+        // Read-only metadata may finish while this view is hidden. A detached
+        // action is ignored; no session is ever started by a lookup or refresh.
+        if(disposed||!area.isConnected||!root.contains(area))return;
+        area.replaceChildren();
+        const active=options.sessions().find(s=>s.id===data.activeSessionId&&isLivePulsoSession(s));
+        if(active)area.append(button('Volver a conversación reanudada',()=>options.openSession(active.id),primary?'primary':'quiet'));
+        else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!['exited','stopped','released','failed','interrupted'].includes(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
+        else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
+        else area.append(el('span',session?.kind==='codex'?'Codex: continúa con el historial local o el contexto de la fase.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
+        freeze();
+      }catch{
+        if(disposed||!area.isConnected||!root.contains(area))return;
+        area.replaceChildren(el('span','No se pudo comprobar la conversación.','pulso-muted'),button('Reintentar comprobación',()=>check(true),'quiet'));freeze();
       }
     }
-    async function managePolicy(id?: string) {
-      if (busy || disposed) return;
-      busy = true; policies.hidden = false; freeze();
-      try {
-        if (id) await request('revoke_policy', { id });
-        await readPolicies();
-        if (!disposed && id) say('Permiso recordado revocado. Las futuras sesiones necesitarán autorización.');
-      } catch {
-        if (!disposed && detail.contains(section)) policies.replaceChildren(el('p', 'No se pudo actualizar la lista de permisos recordados. Reintenta la consulta; si intentaste revocar, comprueba si el permiso sigue en la lista.', 'pulso-muted'), button('Consultar permisos recordados', () => managePolicy()));
-      } finally { busy = false; if (!disposed) freeze(); }
-    }
-    section.append(grant, revoke, result, button('Gestionar permisos recordados', () => managePolicy()), policies); host.append(section);
+    void check();
   }
+  function rememberBoard(){restoreBoardId=null;try{saveLastBoard(localStorage,options.persistenceKey?.()??null,selectedProject?.id??null);}catch{/* Optional view metadata. */}}
   async function copy(value: string) {
     try { await navigator.clipboard.writeText(value); if (!disposed) options.notice('Copiado. Pégalo cuando estés listo.'); }
     catch { say('No se pudo copiar. Selecciona el texto y cópialo manualmente.'); }
@@ -529,9 +507,18 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(!available()||gen!==generation||epoch!==selectionEpoch)return;
       projects={...ps,rows:ps.rows.map(p=>({...p,plan:''}))};
       if(dirty||failed){say('Tu borrador se conserva. Guarda o descarta antes de actualizar el detalle.');return;}
+      let restoreFailed=false;
+      if(restoreBoardId&&!selectedProject){
+        const saved=restoreBoardId;restoreBoardId=null;
+        try{const [data,links]=await Promise.all([request('project',{id:saved}),request('links',{projectId:saved})]);
+          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
+          if(data.project&&!data.project.archived){selectedProject=data.project;projectLinks=links.links??[];}
+          else rememberBoard();
+        }catch{if(!available()||gen!==generation||epoch!==selectionEpoch)return;restoreBoardId=saved;restoreFailed=true;say('No se pudo consultar el último tablero. Tus pendientes siguen disponibles. Reintenta la consulta o elige un tablero.');}
+      }
       const changed=await readBoard(selectedProject?.id??null,boardRevision);
       if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
-      const sessionsChanged=shownSessions!==sessionSignature();shownSessions=sessionSignature();revision=boardRevision;if(changed)renderLists();errors.hidden=true;syncProgramLabels();
+      const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed||sessionsChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
       if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem)await chooseItem(selectedItem,false);
       else if((changed||sessionsChanged)&&drawerKind==='project'&&selectedProject){const data=await request('project',{id:selectedProject.id});if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='project')return;selectedProject=data.project;renderProject(false);}
     }catch{if(available()&&gen===generation&&!failed)readError(()=>refresh());}})().finally(()=>{refreshing=null;});return refreshing;
@@ -544,7 +531,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       try {
         syncProgramLabels();if(!busy&&!refreshing&&!dirty&&!failed&&!dragging&&!navigating){
           syncProgramLabels();const data=await request('revision');
-          if(available()&&(data.revision!==boardRevision||shownSessions!==sessionSignature()))await refresh();
+          if(available()&&(data.revision!==boardRevision||shownSessions!==sessionSignature()||bindingContext!==(options.bindingCacheKey?.()??'')))await refresh();
         }
       } catch { if (available() && !failed) readError(() => refresh()); }
       finally { schedule(); }
@@ -553,9 +540,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function visibility() { stop(); if (available()) { void refresh(); schedule(); } }
   document.addEventListener('visibilitychange', visibility);
   return {
-    show(){if(disposed)return;syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
+    show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
     hide() {if(disposed)return;visible=false;cancelActiveDrag?.();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
+    prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
     dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

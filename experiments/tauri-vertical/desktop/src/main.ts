@@ -56,6 +56,7 @@ const codexDrafts=new Map<string,unknown>();
 const panes: Pane[] = [];
 let reviewPanel: ReturnType<typeof mountReviewPanel> | null = null;
 let connected = false;
+let profileDataDir: string | null = null;
 let connecting = false;
 let smoke = false;
 let renderedSeq = 0;
@@ -843,6 +844,7 @@ async function connect() {
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
     replaying = replayThrough > 0;
+    profileDataDir = config.dataDir;
     $('#layout').textContent = `Datos: ${config.dataDir}`;
     $('#layout').title = `Socket: ${config.socket}`;
     updateStatus(config.status);
@@ -1239,7 +1241,26 @@ function applyTheme(value: string) {
   try { localStorage.setItem('aw-theme', value); } catch { /* optional */ }
 }
 theme.addEventListener('change', () => applyTheme(theme.value));
+async function requestPulso(op: string, args: Record<string, unknown>) {
+  if (disposed || connecting || !connected || !runner?.pulsoAvailable || runner.pulsoVersion !== 1) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
+  const generation = runner.generation;
+  const check = workspaceContext();
+  const profile = profileDataDir;
+  const response = await invoke<{ok:boolean;result:unknown;error?:string}>('pulso_request', {op,args});
+  check();
+  if (!runner || runner.generation !== generation || profile !== profileDataDir || disposed) throw new Error('La conexión cambió. Consulta el estado antes de continuar.');
+  if (!response.ok) throw new Error(response.error ?? 'Pulso no confirmó la operación.');
+  return response.result;
+}
 const settingsPanel = mountSettings({
+  permissions: { request: requestPulso, sessions: () => [...views.values()].map(view => view.session), available: () => connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable },
+  notificationControls: $('#enable-native-notifications').closest<HTMLElement>('.settings-section')!,
+  onOpenAttention: () => {
+    if(settingsPanel.isOpen)return;
+    if(pulsoPanel && !pulsoPanel.prepareNavigation()){notice('Guarda o descarta el borrador antes de abrir los avisos.');return;}
+    showAttention();
+  },
+
   async read() {
     if (!connected || connecting) throw new Error('Runner sin conexión.');
     if (runner?.settingsVersion !== 1) return { schemaVersion: 1, maxConcurrentSessions: 2, maxSupportedSessions: 2,
@@ -1256,6 +1277,10 @@ const settingsPanel = mountSettings({
   canEdit: () => connected && !connecting && runner?.settingsVersion === 1,
   onSaved(settings) { if (runner) runner.settings = settings; refresh(); },
 });
+function openPermissions(context: {projectId?: string; sessionId?: string}) {
+  if(disposed || settingsPanel.isOpen || Array.from(document.querySelectorAll('dialog[open]')).some(dialog => !dialog.classList.contains('pulso-drawer')))return;
+  settingsPanel.open('permissions',context);closeSidebar();refresh();
+}
 function openSettings() {
   if (disposed || document.querySelector('dialog[open]')) return;
   settingsPanel.open(); closeSidebar(); refresh();
@@ -1382,14 +1407,10 @@ $('#probe').addEventListener('click', () => void probeTools(true));
 void probeTools();
 pulsoPanel = mountPulsoPanel({
   host: $('#pulso-panel-host'),
-  request: async (op, args) => {
-    if (!connected || runner?.pulsoBoardVersion !== 1 || !runner.pulsoAvailable) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
-    const generation = runner.generation;
-    const response = await invoke<{ok:boolean;result:unknown;error?:string}>('pulso_request', {op,args});
-    if (!runner || runner.generation !== generation || disposed) throw new Error('La conexión cambió. Consulta el estado antes de continuar.');
-    if (!response.ok) throw new Error(response.error ?? 'Pulso no confirmó la operación.');
-    return response.result;
-  },
+  request: requestPulso,
+  persistenceKey: () => profileDataDir,
+  bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,
+  onOpenPermissions: openPermissions,
   sessions: () => [...views.values()].map(view => ({...view.session,programState:programStatuses.get(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
@@ -1399,6 +1420,13 @@ pulsoPanel = mountPulsoPanel({
   binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
   resumeSession: async sourceId => {
     if (runner?.nativeResumeVersion !== 1 || !connected) throw new Error('Este runner no permite reanudar conversaciones nativas.');
+    const check=workspaceContext();
+    const native=await request<{activeSessionId?:string|null}>('native_binding',{id:sourceId});check();
+    if(native.activeSessionId){
+      const active=views.get(native.activeSessionId);
+      if(active&&isLive(active.session)){selectSession(active.session.id);return active.session.id;}
+      throw new Error('La conversación ya tiene una sesión activa o sin verificar. Consulta su estado antes de reanudar.');
+    }
     if(!resumeAttempts.has(sourceId)) requireSessionCapacity();
     const id=resumeAttempts.get(sourceId) ?? `claude-${crypto.randomUUID()}`; resumeAttempts.set(sourceId,id);
     const session=await request<Session>('resume_native',{id,sourceId,rows:24,cols:80});

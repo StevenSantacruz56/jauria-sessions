@@ -42,3 +42,7 @@ La decisión final se contrasta con el código actual: [pulso-panel.ts](../exper
 `claude-board-debate.json` y los registros de revisión de código son material privado de trabajo. Aquí solo se resume la decisión: no se copian logs, transcripciones ni contenido privado. No se copió código Herdr ni se añadió dependencia de Herdr. La licencia raíz de Jauria permanece **GPL-3.0-only**.
 
 Consulta [el flujo real de Pulso](PULSO.md) y [los pendientes de entrega](RELEASE_1.2.0.md).
+
+## Aplicación en 1.3.0
+
+El retorno directo se concreta en la acción del tablero para continuar o reanudar la principal y enfocar una continuación existente. La vista recuerda el último tablero por perfil, sin ejecutar procesos al restaurar el layout. Los permisos y avisos se administran en Configuración; no se añaden mods ni capacidades remotas. La revisión con Claude detectó y permitió corregir acciones de recuperación obsoletas, caché de identidad tras cambios de sesiones y alcance de los permisos seleccionados. Los límites de reanudación del proveedor siguen vigentes.
