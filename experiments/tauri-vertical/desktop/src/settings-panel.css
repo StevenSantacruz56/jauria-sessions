@@ -3,10 +3,13 @@
   width: min(760px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: calc(100dvh - 32px);
+  padding: 0;
   font: inherit;
-  scrollbar-gutter: stable;
+  overflow: hidden;
 }
-.settings-dialog .dialog-heading { margin-bottom: 20px; }
+.settings-dialog > form { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); min-height: 0; }
+.settings-dialog .dialog-heading { flex: 0 0 auto; margin: 0; padding: 24px 24px 16px; border-bottom: 1px solid var(--border); }
+.settings-dialog-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 20px 24px 24px; }
 .settings-dialog-section + .settings-dialog-section {
   margin-top: 24px;
   padding-top: 20px;
@@ -25,12 +28,18 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.settings-dialog-version { margin-top: 12px; }
+.settings-dialog-version { display: block; margin-top: 4px; }
 .settings-dialog-warning { color: var(--warning); }
-.settings-dialog-status { min-height: 1.6em; margin-top: 16px; }
+.settings-dialog-status { margin-top: 0; }
+.settings-dialog-status:empty { display: none; }
 .settings-dialog .form-error + button { margin-top: 10px; }
-.settings-dialog .dialog-footer { margin-top: 12px; }
+.settings-dialog .dialog-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; margin: 0; padding: 14px 24px 18px; }
+.settings-dialog-messages { min-width: 0; max-height: 7rem; overflow-y: auto; }
+.settings-dialog-messages .form-error { margin: 0 8px 0 0; }
 @media (max-width: 480px) {
+  .settings-dialog .dialog-heading { padding: 18px 20px 14px; }
+  .settings-dialog-content { padding: 16px 20px 20px; }
+  .settings-dialog .dialog-footer { grid-template-columns: minmax(0, 1fr) auto auto; padding: 12px 20px 16px; }
   .settings-dialog-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .settings-dialog-row select { width: 100%; }
   .settings-dialog .dialog-footer > button { min-height: 40px; }

@@ -12,6 +12,7 @@ type Options = {
   permissions?: PermissionsOptions;
   notificationControls?: HTMLElement;
   onOpenAttention?: () => void;
+  canOpenAttention?: () => boolean;
   hasAttention?: () => boolean;
   read: () => Promise<AppSettings>;
   save: (limit: number) => Promise<AppSettings>;
@@ -52,9 +53,12 @@ export function mountSettings(options: Options): {
   const dialog = node('dialog', '', 'session-dialog settings-dialog');
   const form = node('form'); form.noValidate = true;
   const heading = node('header', '', 'dialog-heading');
+  const content = node('div', '', 'settings-dialog-content');
   const title = node('h2', 'Configuración'); title.id = `${prefix}-title`; title.tabIndex = -1;
   dialog.setAttribute('aria-labelledby', title.id);
-  heading.append(title);
+  const headingCopy = node('div');
+  headingCopy.append(title, node('p', 'Apariencia y límite: pulsa Guardar. Permisos y avisos: se aplican al momento.'));
+  heading.append(headingCopy);
   const general = node('section', '', 'settings-dialog-section');
   const generalTitle = node('h3', 'General'); generalTitle.id = `${prefix}-general`;
   general.setAttribute('aria-labelledby', generalTitle.id);
@@ -77,24 +81,20 @@ export function mountSettings(options: Options): {
   limitRow.append(limitLabel, limit);
   const range = node('p', 'Consultando el límite del runner…', 'settings-dialog-help');
   range.id = `${prefix}-range`; limit.setAttribute('aria-describedby', range.id);
-  const explanation = node('p', 'El límite incluye todos los proveedores combinados: Codex, Claude Code y Terminal. El valor predeterminado del runner es 2. Reducirlo no cierra las sesiones existentes. Los escritores simultáneos en el mismo worktree siguen bloqueados.', 'settings-dialog-help');
+  const explanation = node('p', 'El límite suma Codex, Claude Code y Terminal. Reducirlo no cierra sesiones existentes; un mismo worktree sigue admitiendo un solo escritor.', 'settings-dialog-help');
   const compatibility = node('p', 'Este runner no permite ajustar el límite. Puedes guardar la apariencia; para cambiar el máximo, actualiza el runner.', 'settings-dialog-help');
   compatibility.hidden = true;
   sessions.append(sessionsTitle, limitRow, range, explanation, compatibility);
-  const info = node('section', '', 'settings-dialog-section');
-  const infoTitle = node('h3', 'Información'); infoTitle.id = `${prefix}-info`;
-  info.setAttribute('aria-labelledby', infoTitle.id);
-  info.append(infoTitle,
-    node('p', 'Los proveedores conservan sus permisos y confirmaciones nativos guardados. Jauría los respeta.', 'settings-dialog-help'),
-    node('p', `Jauría ${options.version}`, 'settings-dialog-version'));
   const warning = node('p', '', 'settings-dialog-warning'); warning.setAttribute('role', 'status'); warning.hidden = true;
   const error = node('p', '', 'form-error'); error.id = `${prefix}-error`; error.setAttribute('role', 'alert'); error.hidden = true;
   const retry = node('button', 'Reintentar consulta', 'secondary'); retry.type = 'button'; retry.hidden = true;
   const status = node('p', '', 'settings-dialog-status'); status.setAttribute('role', 'status');
   const footer = node('footer', '', 'dialog-footer');
+  const messages = node('div', '', 'settings-dialog-messages');
   const closeButton = node('button', 'Cerrar', 'quiet'); closeButton.type = 'button';
   const saveButton = node('button', 'Guardar', 'primary'); saveButton.type = 'submit';
-  footer.append(closeButton, saveButton);
+  messages.append(error, retry, status, node('span', `Jauría ${options.version}`, 'settings-dialog-version'));
+  footer.append(messages, closeButton, saveButton);
   const permissionsHost = node('section', '', 'settings-dialog-section settings-permissions');
   const notices = node('section', '', 'settings-dialog-section');
   let refreshAttention = () => {};
@@ -115,19 +115,25 @@ export function mountSettings(options: Options): {
     attention.addEventListener('click', () => {
       if (busy || permissions?.isBusy) return;
       if (options.hasAttention && !options.hasAttention()) { refreshAttention(); return; }
+      if (options.canOpenAttention && !options.canOpenAttention()) {
+        status.textContent = 'Guarda o descarta el borrador de Pulso antes de abrir los avisos.';
+        return;
+      }
       close(); options.onOpenAttention?.();
     });
     notices.append(attention, attentionEmpty);
     refreshAttention = syncAttention;
   }
-  form.append(heading, general, sessions);
-  if (options.permissions) form.append(permissionsHost);
-  if (options.notificationControls || options.onOpenAttention) form.append(notices);
-  form.append(info, warning, error, retry, status, footer);
+  content.append(general, sessions);
+  if (options.permissions) content.append(permissionsHost);
+  if (options.notificationControls || options.onOpenAttention) content.append(notices);
+  content.append(warning);
+  form.append(heading, content, footer);
   dialog.append(form); document.body.append(dialog);
 
   let disposed = false, busy = false, loaded = false, readFailed = false;
   let limitDirty = false, themeDirty = false;
+  const pendingLabel = () => limitDirty || themeDirty ? 'Cambios sin guardar. Pulsa Guardar para aplicarlos.' : '';
   let current: AppSettings | null = null;
   let opener: HTMLElement | null = null;
   let underlyingDialog: HTMLDialogElement | null = null;
@@ -146,6 +152,7 @@ export function mountSettings(options: Options): {
     theme.disabled = busy;
     limit.disabled = busy || !loaded || !editable;
     closeButton.disabled = blocked;
+    closeButton.textContent = limitDirty || themeDirty ? 'Cerrar y conservar borrador' : 'Cerrar';
     saveButton.disabled = blocked || (editable && !loaded);
     saveButton.textContent = busy && !readFailed ? 'Esperando…' : 'Guardar';
     retry.disabled = busy; retry.hidden = !readFailed;
@@ -167,7 +174,7 @@ export function mountSettings(options: Options): {
       const result = await options.read();
       if (disposed || token !== generation) return;
       accept(checked(result)); readFailed = false;
-      status.textContent = '';
+      status.textContent = pendingLabel();
     } catch {
       if (disposed || token !== generation) return;
       readFailed = true;
@@ -230,8 +237,8 @@ export function mountSettings(options: Options): {
     if (disposed || busy || permissions?.isBusy || !dialog.open) return;
     permissions?.close(); ++intentionalCloses; dialog.close(); restoreFocus();
   }
-  theme.addEventListener('change', () => { if (!busy) { themeDirty = true; status.textContent = ''; } });
-  limit.addEventListener('input', () => { if (!busy) { limitDirty = true; showError(''); status.textContent = ''; } });
+  theme.addEventListener('change', () => { if (!busy) { themeDirty = true; status.textContent = pendingLabel(); sync(); } });
+  limit.addEventListener('input', () => { if (!busy) { limitDirty = true; showError(''); status.textContent = pendingLabel(); sync(); } });
   form.addEventListener('submit', event => { event.preventDefault(); void save(); });
   retry.addEventListener('click', () => { void read(); });
   closeButton.addEventListener('click', close);

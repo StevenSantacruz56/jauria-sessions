@@ -1256,11 +1256,8 @@ const settingsPanel = mountSettings({
   permissions: { request: requestPulso, sessions: () => [...views.values()].map(view => view.session), available: () => connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable },
   notificationControls: $('#enable-native-notifications').closest<HTMLElement>('.settings-section')!,
   hasAttention: () => !$('#attention-filter').hidden,
-  onOpenAttention: () => {
-    if(settingsPanel.isOpen)return;
-    if(pulsoPanel && !pulsoPanel.prepareNavigation()){notice('Guarda o descarta el borrador antes de abrir los avisos.');return;}
-    showAttention();
-  },
+  canOpenAttention: () => !pulsoPanel || pulsoPanel.prepareNavigation(),
+  onOpenAttention: showAttention,
 
   async read() {
     if (!connected || connecting) throw new Error('Runner sin conexión.');

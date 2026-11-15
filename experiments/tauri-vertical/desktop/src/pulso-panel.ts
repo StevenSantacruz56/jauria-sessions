@@ -63,7 +63,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   heading.append(el('h1', 'Pulso'), el('p', 'Tu trabajo, de una fase a la siguiente.', 'pulso-muted'));
   const headerActions=el('div','','pulso-header-actions');
   if(options.backToTerminal)headerActions.append(button('Volver a terminal',()=>options.backToTerminal!(),'quiet'));
-  headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'),button('Actualizar',()=>refresh(),'quiet'));
+  headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'));
   header.append(heading,headerActions);
   const feedback = el('div', '', 'pulso-feedback'); feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   const errors = el('div', '', 'pulso-error'); errors.hidden = true; errors.setAttribute('role', 'alert');
@@ -82,7 +82,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const capture=el('form','','pulso-capture');const captureTitle=field('Nombre del proyecto',false,240);captureTitle.input.required=true;captureTitle.input.placeholder='Por ejemplo: lanzar mi aplicación';
   const originLabel=el('label','','pulso-check');const originCheck=el('input');originCheck.type='checkbox';originCheck.checked=true;
   const originText=el('span');originLabel.append(originCheck,originText);
-  function syncOrigin(){const session=options.currentSession();originLabel.hidden=!session;originText.textContent=session?`Usar «${session.title}» como sesión principal`:'';}
+  let captureOrigin: Session | null = null;
+  function syncOrigin(){originLabel.hidden=!captureOrigin;originText.textContent=captureOrigin?`Usar «${captureOrigin.title}» como sesión principal`:'';}
   capture.append(captureTitle.wrap,originLabel);const captureSave=el('button','Crear proyecto','primary');captureSave.type='submit';capture.append(captureSave,button('Cancelar',()=>{dirty=false;activeEditor=null;closeDrawer();},'quiet'));
 
   let disposed = false, visible = false, timer: ReturnType<typeof setTimeout> | undefined;
@@ -109,10 +110,40 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   let shownSessions='';let bindingContext='';
   let restoredProfile:string|null|undefined;let restoreBoardId:string|null=null;
   let projectLinks: Link[] = [], dirty = false, busy = false, activeEditor: HTMLElement | null = null;
+  let detailRecordKey = '';
+  let detailItemLinks: Link[] = [], detailItemCheckpoints: PulsoCheckpoint[] = [];
+  let recoveryFocus: { id: string; region: 'board' | 'detail'; epoch: number; gen: number } | null = null;
+  function clearRecoveryFocus(){recoveryFocus=null;document.removeEventListener('pointerdown',clearRecoveryFocus,true);document.removeEventListener('keydown',clearRecoveryFocus,true);}
+  function holdRecoveryFocus(id:string,region:'board'|'detail'){
+    clearRecoveryFocus();recoveryFocus={id,region,epoch:selectionEpoch,gen:generation};
+    document.addEventListener('pointerdown',clearRecoveryFocus,true);document.addEventListener('keydown',clearRecoveryFocus,true);
+  }
   let editBase: { revision: number } | null = null;
   type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void> };
   let failed: Mutation | null = null;
   const bindings = new Map<string, ReturnType<NonNullable<PulsoPanelOptions['binding']>>>();
+  function preserveDetailRender(render: () => void) {
+    if (!drawer.open) { render(); return; }
+    const controls = () => Array.from(detail.querySelectorAll<HTMLElement>('button,input,select,textarea,summary'));
+    const active = document.activeElement instanceof HTMLElement && detail.contains(document.activeElement) ? document.activeElement : null;
+    const focusedRecovery = active?.closest<HTMLElement>('.pulso-recovery-action');
+    if (focusedRecovery?.dataset.sessionId) holdRecoveryFocus(focusedRecovery.dataset.sessionId, 'detail');
+    const key = active ? `${active.tagName}:${active.getAttribute('aria-label') ?? active.textContent?.trim() ?? ''}` : '';
+    const matches = () => controls().filter(control => `${control.tagName}:${control.getAttribute('aria-label') ?? control.textContent?.trim() ?? ''}` === key);
+    const focusIndex = active ? matches().indexOf(active) : -1;
+    const openSections = new Set(Array.from(detail.querySelectorAll('details[open] summary')).map(summary => summary.textContent));
+    const contextOpen = detail.querySelector<HTMLElement>('.pulso-context-composer')?.hidden === false;
+    const scroll = detail.scrollTop;
+    render();
+    for (const section of Array.from(detail.querySelectorAll('details'))) section.open = openSections.has(section.querySelector('summary')?.textContent ?? '');
+    if (contextOpen) { const composer = detail.querySelector<HTMLElement>('.pulso-context-composer'); if (composer) composer.hidden = false; }
+    if (focusIndex >= 0) {
+      const target = matches()[focusIndex];
+      target?.focus({ preventScroll: true });
+      if (target && focusedRecovery && document.activeElement===target) clearRecoveryFocus();
+    }
+    detail.scrollTop = scroll;
+  }
   const available = () => visible && !disposed && !document.hidden;
   const say = (message: string) => { if (!disposed) feedback.textContent = message; };
   function freeze() {
@@ -184,7 +215,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function openDrawer(kind:'item'|'project'|'create',title:string){drawerKind=kind;drawerTitle.textContent=title;drawerMessages.append(feedback,errors);if(!drawer.open&&available())drawer.showModal();}
   function hideDrawer(){if(drawer.open){intentionalCloses++;drawer.close();}root.insertBefore(feedback,toolbar);root.insertBefore(errors,toolbar);}
   function closeDrawer(){if(busy)return;if(dirty||failed){say('Guarda los cambios o descarta el borrador antes de cerrar.');return;}hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;}
-  function newProject(){if(dirty||failed||busy)return;selectionEpoch++;navigating=false;selectedProject=boardProject;selectedItem=null;detail.replaceChildren(capture);captureTitle.input.value='';syncOrigin();openDrawer('create','Nuevo proyecto');captureTitle.input.focus();}
+  function newProject(){if(dirty||failed||busy)return;selectionEpoch++;navigating=false;selectedProject=boardProject;selectedItem=null;detail.replaceChildren(capture);captureTitle.input.value='';captureOrigin=options.currentSession();syncOrigin();openDrawer('create','Nuevo proyecto');captureTitle.input.focus();}
   function renderLists() {
     const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
     projectList.replaceChildren();
@@ -196,14 +227,19 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     if(focus&&available())Array.from(outline.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
   }
   function renderBoard(){
-    const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
+    const focusedRecovery=document.activeElement instanceof HTMLElement?document.activeElement.closest<HTMLElement>('.pulso-board-toolbar .pulso-recovery-action'):null;
+    if(focusedRecovery?.dataset.sessionId)holdRecoveryFocus(focusedRecovery.dataset.sessionId,'board');
+    const previousFocus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
     const scrolls=new Map(Array.from(board.querySelectorAll<HTMLElement>('.pulso-cards')).map(n=>[n.dataset.status,n.scrollTop]));
+    const sameBoard=board.dataset.projectId===(selectedProject?.id??'');
+    const focus=sameBoard?previousFocus:undefined;
+    const openAdds=new Set(sameBoard?Array.from(board.querySelectorAll<HTMLElement>('.pulso-column')).filter(n=>n.querySelector<HTMLFormElement>('.pulso-add-form')?.hidden===false).map(n=>n.dataset.state):[]);
     toolbar.replaceChildren();const name=el('div');name.append(el('h2',selectedProject?.title??'Pendientes'));
     const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
     name.append(el('p',total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'} · arrastra entre columnas`:'Añade una tarjeta en la columna donde quieras empezar.','pulso-progress'));toolbar.append(name);
     if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Reanudar sesión principal');toolbar.append(recovery);}
     if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet'));
-    board.replaceChildren();
+    board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';
     for(const status of statuses){
       const column=el('section','','pulso-column');column.dataset.state=status;column.setAttribute('aria-label',labels[status]);
       const h=el('header');h.append(el('h3',labels[status]),el('span',String(columns[status].totalCount),'pulso-count'));column.append(h);
@@ -214,10 +250,13 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       column.append(cards);
       if(status!=='done'){
         const add=el('form','','pulso-add-form');add.hidden=true;
-        const title=field(selectedProject?'Título de la fase':'Título del pendiente',false,240);title.input.required=true;title.input.placeholder='Escribe un título';
+        const title=field(selectedProject?'Título de la fase':'Título del pendiente',false,240);title.input.required=true;title.input.placeholder='Escribe un título';title.input.dataset.focusKey=`add-title-${status}`;
         const trigger=button(selectedProject?'Añadir fase':'Añadir pendiente',()=>{if(busy||dirty||failed)return;add.hidden=false;trigger.hidden=true;title.input.focus();},'quiet pulso-add-trigger');
+        trigger.dataset.focusKey=`add-${status}`;
         const cancel=button('Cancelar',()=>{dirty=false;activeEditor=null;add.hidden=true;trigger.hidden=false;title.input.value='';freeze();},'quiet');
-        add.append(title.wrap);submit(add,'Añadir tarjeta',()=>write('item_create',{id:crypto.randomUUID(),projectId:selectedProject?.id??null,title:title.input.value.trim(),status},async()=>{dirty=false;activeEditor=null;await reloadBoard();}));add.append(cancel);column.append(trigger,add);
+        add.append(title.wrap);submit(add,'Añadir tarjeta',()=>write('item_create',{id:crypto.randomUUID(),projectId:selectedProject?.id??null,title:title.input.value.trim(),status},async()=>{dirty=false;activeEditor=null;await reloadBoard();}));add.append(cancel);
+        if(openAdds.has(status)){add.hidden=false;trigger.hidden=true;}
+        column.append(trigger,add);
       }
       board.append(column);cards.scrollTop=scrolls.get(status)??0;
     }
@@ -229,6 +268,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     open.append(el('span',item.title,'pulso-card-title'));if(item.note)open.append(el('span',item.note,'pulso-card-note'));card.append(open);
     const footer=el('div','','pulso-card-footer');
     const move=select(`Mover ${item.title}`,Object.entries(labels),item.status);move.input.classList.add('pulso-card-move');move.input.onchange=()=>{void moveCard(item,move.input.value as PulsoItem['status']);};footer.append(move.input);
+    move.input.dataset.focusKey=`move-${item.id}`;
     const handle=button('',()=>say('Arrastra esta tarjeta a otra columna o utiliza el menú Mover.'),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);
     handle.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-linecap="round"/></svg>';
     handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));footer.append(handle);card.append(footer);return card;
@@ -349,7 +389,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       dirty=false;await chooseProject(p.id);await refresh();
     })); form.append(discardButton()); detail.append(form);
     sessionsBlock(detail, [...new Set([p.mainSessionId, ...projectLinks.map(l => l.sessionId)].filter((id): id is string => !!id))], p.mainSessionId);
-    linkBlock(detail, { projectId: p.id }); permissionsLink(detail,p.id);freeze();
+    linkBlock(detail, { projectId: p.id }); permissionsLink(detail,p.id);
+    detailRecordKey = JSON.stringify([p, projectLinks]); freeze();
   }
   function renderItem(item: PulsoItem, links: Link[], checkpoints: PulsoCheckpoint[], queryBindings: boolean) {
     detail.replaceChildren(); dirty = false; activeEditor = null; editBase = { revision: item.revision }; const base = editBase;
@@ -368,7 +409,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const checkpoint = el('form', '', 'pulso-form'); checkpoint.append(el('h3', 'Registrar checkpoint'), el('p', 'Cada registro se añade al historial. Los anteriores se conservan.', 'pulso-muted'));
     const brief = field('Qué quedó listo · hasta 4 000 caracteres', true, 4000); brief.input.required = true;
     const next = field('Siguiente acción · hasta 1 000 caracteres', true, 1000); next.input.required = true;
-    const session = select('Sesión del checkpoint', [['', 'Sin sesión'], ...sessionOptions()], options.currentSession()?.id ?? '');
+    const session = select('Sesión del checkpoint', [['', 'Sin sesión'], ...sessionOptions()]);
     checkpoint.append(brief.wrap, next.wrap, session.wrap);
     submit(checkpoint, 'Registrar checkpoint', () => write('checkpoint_create', {
       id: crypto.randomUUID(), itemId: item.id, expectedRevision: base.revision, brief: brief.input.value.trim(), nextAction: next.input.value.trim(), ...(session.input.value ? { sessionId: session.input.value } : {}),
@@ -377,7 +418,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const recent=[...checkpoints].sort(checkpointOrder).at(-1);const recoveryId=recent?.sessionId??links[0]?.sessionId??selectedProject?.mainSessionId;
     if(recoveryId)recoveryAction(recover,recoveryId,'Abrir sesión de la fase','Reanudar sesión de la fase');
     recover.append(el('p', 'Prepara el contexto, revísalo y cópialo. Tú decides dónde pegarlo.', 'pulso-muted'));
-    const composer = el('div'); composer.hidden = true;
+    const composer = el('div', '', 'pulso-context-composer'); composer.hidden = true;
     recover.append(button('Preparar contexto', () => { composer.hidden = false; }));
     const context = field('Contexto editable para continuar', true, 50000); context.input.value = pulsoContinuation(selectedProject, item, checkpoints);
     composer.append(context.wrap, button('Copiar contexto', () => copy(context.input.value)), discardButton()); watch(composer);
@@ -401,7 +442,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         const all=[...checkpoints,...(data.checkpoints??[])];const unique=[...new Map(all.map((point:PulsoCheckpoint)=>[point.id,point])).values()];renderItem(item,links,unique,false);
       }catch{say('No se pudieron consultar los puntos anteriores. Los datos se conservan.');}finally{busy=false;if(!disposed)freeze();}
     });history.append(more);}
-    detail.append(history); freeze();
+    detail.append(history);
+    detailItemLinks = links; detailItemCheckpoints = checkpoints;
+    detailRecordKey = JSON.stringify([item, links, checkpoints, selectedProject, checkpointHasMore]); freeze();
   }
   function setUndo(id: string, status: PulsoItem['status'], expectedRevision: number) {
     undoSlot.replaceChildren(el('span', 'Estado actualizado.'), button('Deshacer cambio de estado', () => write('item_update', { id, expectedRevision, status }, async data => {
@@ -411,6 +454,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function sessionsBlock(host: HTMLElement, ids: string[], recoveryId: string | null, rowRecoveryExcludeId?: string | null) {
     const section = el('section', '', 'pulso-section'); section.append(el('h3', 'Sesiones vinculadas'));
     if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Reanudar sesión principal', false);
+    const actionAboveId = rowRecoveryExcludeId ?? recoveryId;
     if (!ids.length) section.append(el('p', 'Sin sesiones vinculadas.', 'pulso-muted'));
     const known = options.sessions();
     const titles = new Map(ids.map(id => [id, known.find(s => s.id === id)?.title ?? id]));
@@ -421,9 +465,12 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const title = titles.get(id) ?? id;
       row.append(el('span', (titleCounts.get(title) ?? 0) > 1 ? `${title} · ${id.slice(-8)}` : title));
       const stateLabel=el('span','','pulso-muted');stateLabel.dataset.programSession=id;row.append(stateLabel);syncProgramLabels();
-      if (s && isLivePulsoSession(s)) row.append(button('Enfocar sesión viva', () => options.openSession(id)));
+      if (s && isLivePulsoSession(s)) {
+        if (id !== actionAboveId) row.append(button('Enfocar sesión viva', () => options.openSession(id)));
+      }
       else if (s && !['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status)) {
-        row.append(el('span', 'Estado por comprobar', 'pulso-muted'), button('Inspeccionar sesión', () => options.openSession(id)));
+        row.append(el('span', 'Estado por comprobar', 'pulso-muted'));
+        if (id !== actionAboveId) row.append(button('Inspeccionar sesión', () => options.openSession(id)));
       } else {
         row.append(el('span', 'Historial local · sesión finalizada o no disponible', 'pulso-muted'));
         if(s)row.append(button('Ver historial',()=>options.openSession(id)));
@@ -445,8 +492,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     })); section.append(discardButton()); host.append(section);
   }
   function permissionsLink(host:HTMLElement,projectId?:string){
-    const section=el('section','','pulso-section');section.append(el('h3','Acceso de agentes'),el('p','En Configuración, elige la sesión y este proyecto, concede acceso y copia el comando a la sesión del agente. Cada acceso conserva su alcance.','pulso-muted'));
-    section.append(button('Configurar permisos…',()=>{if(busy||dirty||failed)return;options.onOpenPermissions?.({...(projectId?{projectId}:{}),...(options.currentSession()?{sessionId:options.currentSession()!.id}:{})});},'quiet'));
+    const section=el('section','','pulso-section');section.append(el('h3','Acceso de agentes'),el('p',projectId?'En Configuración, elige la sesión que recibirá acceso a este proyecto. Después copia el comando y ejecútalo en esa sesión.':'En Configuración, elige una sesión y el alcance de su acceso. Después copia el comando y ejecútalo en esa sesión.','pulso-muted'));
+    section.append(button('Configurar permisos…',()=>{if(busy||dirty||failed)return;options.onOpenPermissions?.(projectId?{projectId}:{});},'quiet'));
     host.append(section);
   }
   function bindingFor(id:string,retry=false){
@@ -461,19 +508,27 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const next=await options.resumeSession!(id);started=true;bindings.delete(id);
       if(next&&scope)await request('link',{...scope,sessionId:next,requestId:`resume-link-${next}-${'itemId' in scope?'item':'project'}-${'itemId' in scope?scope.itemId:scope.projectId}`});
       if(!disposed)options.notice('Conversación abierta con su identidad guardada.');
-    }catch(error){
+    }catch{
       if(started)options.notice('La sesión se abrió; no se confirmó el vínculo con el plan. Puedes vincularla manualmente.');
-      else say(`No se pudo reanudar la sesión: ${error instanceof Error?error.message:String(error)}. El historial y el contexto guardado se conservan.`);
+      else say('No se pudo reanudar la conversación. Comprueba la conexión y reintenta. El historial y el contexto guardado se conservan.');
     }finally{busy=false;if(!disposed)freeze();}
   }
   function recoveryAction(host:HTMLElement,id:string,liveLabel:string,resumeLabel:string,primary=true){
-    const area=el('div','','pulso-recovery-action');host.append(area);
+    const area=el('div','','pulso-recovery-action');host.append(area);area.dataset.sessionId=id;
+    const region=host.classList.contains('pulso-project-recovery')?'board':'detail';
+    const restoreRecoveryFocus=()=>{
+      const pending=recoveryFocus;if(!pending||pending.id!==id||pending.region!==region)return;
+      if(pending.epoch!==selectionEpoch||pending.gen!==generation){clearRecoveryFocus();return;}
+      const target=area.querySelector<HTMLElement>('button')??area;
+      if(target===area)area.tabIndex=-1;
+      target.focus({preventScroll:true});if(document.activeElement===target)clearRecoveryFocus();
+    };
     const session=options.sessions().find(s=>s.id===id);
-    if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'quiet'));return;}
+    if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'quiet'));restoreRecoveryFocus();return;}
     if(session&&!['exited','stopped','released','failed','interrupted'].includes(session.status)){
-      area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'quiet'));return;
+      area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'quiet'));restoreRecoveryFocus();return;
     }
-    if(!session||!options.binding||!options.resumeSession){area.append(el('span','Usa el historial local o el contexto guardado para continuar.','pulso-muted'));return;}
+    if(!session||!options.binding||!options.resumeSession){area.append(el('span','Usa el historial local o el contexto guardado para continuar.','pulso-muted'));restoreRecoveryFocus();return;}
     async function check(retry=false){
       area.replaceChildren(el('span','Comprobando conversación guardada…','pulso-muted'));
       try{
@@ -487,10 +542,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!['exited','stopped','released','failed','interrupted'].includes(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
         else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
         else area.append(el('span',session?.kind==='codex'?'Codex: continúa con el historial local o el contexto de la fase.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
-        freeze();
+        freeze();restoreRecoveryFocus();
       }catch{
         if(disposed||!area.isConnected||!root.contains(area))return;
-        area.replaceChildren(el('span','No se pudo comprobar la conversación.','pulso-muted'),button('Reintentar comprobación',()=>check(true),'quiet'));freeze();
+        area.replaceChildren(el('span','No se pudo comprobar la conversación.','pulso-muted'),button('Reintentar comprobación',()=>check(true),'quiet'));freeze();restoreRecoveryFocus();
       }
     }
     void check();
@@ -503,7 +558,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function formatDate(value: Timestamp) { const n = time(value); return n ? new Date(n).toLocaleString('es') : String(value); }
   capture.onsubmit = e => {
     e.preventDefault();if(busy||failed||!capture.reportValidity())return;const title=captureTitle.input.value.trim();if(!title)return;
-    void write('project_create',{id:crypto.randomUUID(),title,...(originCheck.checked&&options.currentSession()?{mainSessionId:options.currentSession()!.id}:{})},async data=>{dirty=false;activeEditor=null;captureTitle.input.value='';projects=await page<PulsoProject>('projects','projects',{archived:false});await chooseProject(data.project.id);});
+    void write('project_create',{id:crypto.randomUUID(),title,...(originCheck.checked&&captureOrigin?{mainSessionId:captureOrigin.id}:{})},async data=>{dirty=false;activeEditor=null;captureTitle.input.value='';projects=await page<PulsoProject>('projects','projects',{archived:false});await chooseProject(data.project.id);});
   };
   watch(capture);
   async function refresh():Promise<void>{
@@ -526,8 +581,33 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const changed=await readBoard(selectedProject?.id??null,boardRevision);
       if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
       const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed||sessionsChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
-      if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem)await chooseItem(selectedItem,false);
-      else if((changed||sessionsChanged)&&drawerKind==='project'&&selectedProject){const data=await request('project',{id:selectedProject.id});if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='project')return;selectedProject=data.project;renderProject(false);}
+      if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem){
+        if(changed){
+          const data=await request('item',{id:selectedItem.id});
+          const projectRow=projects.rows.find(p=>p.id===data.item.projectId);
+          const project=data.item.projectId
+            ? projectRow?.revision===selectedProject?.revision ? selectedProject : (await request('project',{id:data.item.projectId})).project
+            : null;
+          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='item')return;
+          const freshCheckpoints=data.checkpoints??[];
+          const freshIds=new Set(freshCheckpoints.map((point:PulsoCheckpoint)=>point.id));
+          const checkpoints=[...freshCheckpoints,...detailItemCheckpoints.filter(point=>!freshIds.has(point.id))];
+          const hasMore=checkpointHasMore&&!!data.checkpointsHasMore;
+          const nextKey=JSON.stringify([data.item,data.links??[],checkpoints,project,hasMore]);
+          if(nextKey!==detailRecordKey||sessionsChanged){
+            selectedProject=project;selectedItem=data.item;checkpointHasMore=hasMore;checkpointCursor=Math.max(checkpointCursor,data.checkpointCursor??10,checkpoints.length);
+            preserveDetailRender(()=>renderItem(data.item,data.links??[],checkpoints,false));
+          }
+        }else preserveDetailRender(()=>renderItem(selectedItem!,detailItemLinks,detailItemCheckpoints,false));
+      }
+      else if((changed||sessionsChanged)&&drawerKind==='project'&&selectedProject){
+        if(changed){
+          const [data,links]=await Promise.all([request('project',{id:selectedProject.id}),request('links',{projectId:selectedProject.id})]);
+          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='project')return;
+          const nextKey=JSON.stringify([data.project,links.links??[]]);
+          if(nextKey!==detailRecordKey||sessionsChanged){selectedProject=data.project;projectLinks=links.links??[];preserveDetailRender(()=>renderProject(false));}
+        }else preserveDetailRender(()=>renderProject(false));
+      }
     }catch{if(available()&&gen===generation&&!failed)readError(()=>refresh());}})().finally(()=>{refreshing=null;});return refreshing;
   }
   function stop() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
@@ -537,7 +617,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (!available()) return;
       try {
         syncProgramLabels();if(!busy&&!refreshing&&!dirty&&!failed&&!dragging&&!navigating){
-          syncProgramLabels();const data=await request('revision');
+          const data=await request('revision');
           if(available()&&(data.revision!==boardRevision||shownSessions!==sessionSignature()||bindingContext!==(options.bindingCacheKey?.()??'')))await refresh();
         }
       } catch { if (available() && !failed) readError(() => refresh()); }
@@ -548,9 +628,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   document.addEventListener('visibilitychange', visibility);
   return {
     show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
-    hide() {if(disposed)return;visible=false;cancelActiveDrag?.();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
+    hide() {if(disposed)return;visible=false;cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
-    dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
+    dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

@@ -20,7 +20,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
     await page.addStyleTag({ content: styles }); await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.evaluate(() => {
       const w = window as any;
-      const f = w.f = { calls: [] as any[], themes: [] as string[], editable: true, available: true, hasAttention: true, attention: 0, notices: 0, copied: [] as string[],
+      const f = w.f = { calls: [] as any[], themes: [] as string[], editable: true, available: true, hasAttention: true, allowAttention: true, attention: 0, notices: 0, copied: [] as string[],
         hold: '', pending: null as any, fail: false, projectPages: null as any, failPolicies: false,
         sessions: [{ id: 's1', title: 'Synthetic Claude', kind: 'claude', cwd: '/synthetic/work', status: 'running' }, { id: 's2', title: 'Synthetic Codex', kind: 'codex', cwd: '/synthetic/two', status: 'starting' }, { id: 'old', title: 'Closed history', kind: 'codex', cwd: '/synthetic/old', status: 'exited' }],
         policies: [{ id: 'p1', policy: { provider: 'claude', cwd: '/synthetic/work', projectId: 'project1' } }, { id: 'p2', policy: { provider: 'codex', cwd: '/synthetic/two', projectId: 'missing-project' } }],
@@ -33,7 +33,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         read: async () => ({ schemaVersion: 1, maxConcurrentSessions: 2, maxSupportedSessions: 8 }),
         save: async (limit: number) => ({ schemaVersion: 1, maxConcurrentSessions: limit, maxSupportedSessions: 8 }),
         canEdit: () => f.editable, getTheme: () => 'system', setTheme: (t: string) => f.themes.push(t), onSaved: () => {}, version: '1.2.0',
-        notificationControls: f.controls, hasAttention: () => f.hasAttention, onOpenAttention: () => f.attention++,
+        notificationControls: f.controls, hasAttention: () => f.hasAttention, canOpenAttention: () => f.allowAttention, onOpenAttention: () => f.attention++,
         permissions: { available: () => f.available, sessions: () => f.sessions, request: async (op: string, args: any) => {
           f.calls.push([op, args]);
           if (f.hold === op) return new Promise(resolve => { f.pending = resolve; });
@@ -41,7 +41,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
           if (op === 'policies') return { policies: structuredClone(f.policies) };
           if (op === 'projects' && f.projectPages) return structuredClone(f.projectPages[args.cursor]);
           if (op === 'projects') return { projects: [{ id: 'project1', title: 'Synthetic project' }], hasMore: true };
-          if (op === 'grant') return { command: "jauria-pulso --handle '/synthetic/safe-handle'", token: 'secret-token', handle: 'secret-handle', guidance: 'secret-guidance' };
+          if (op === 'grant') return { ...(f.missingCommand ? {} : { command: "jauria-pulso --handle '/synthetic/safe-handle'" }), token: 'secret-token', handle: 'secret-handle', guidance: 'secret-guidance' };
           if (op === 'revoke_policy') f.policies = f.policies.filter((p: any) => p.id !== args.id);
           return {};
         } },
@@ -64,10 +64,13 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         assert.equal(await page.locator('form form').count(), 0);
         assert.equal(await page.getByLabel('Sesión que recibirá permiso').locator('option').count(), 3);
         assert.equal(await page.getByLabel('Alcance del permiso').inputValue(), '');
+        assert.equal(await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).isDisabled(), true);
         assert.equal(await page.getByRole('checkbox').isChecked(), false);
         assert.match(await page.locator('.settings-permissions').innerText(), /Synthetic project/);
         assert.match(await page.locator('.settings-permissions').innerText(), /missing-project/);
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
+        assert.equal(await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).isDisabled(), true);
+        await page.getByLabel('Alcance del permiso').selectOption('__own_projects__');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.find(c => c[0] === "grant")'), ['grant', { sessionId: 's1', canCreateProjects: true }]);
         assert.equal(await page.getByLabel('Comando de registro').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
@@ -87,14 +90,40 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         const page = await mounted(); await act(page, 'f.context = {projectId:"unlisted",sessionId:"s2"}; f.editable = false;'); await open(page);
         assert.equal(await page.getByLabel('Máximo de sesiones simultáneas').isDisabled(), true);
         assert.equal(await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).isDisabled(), true);
-        assert.equal(await page.getByLabel('Sesión que recibirá permiso').inputValue(), 's2');
+        assert.equal(await page.getByLabel('Sesión que recibirá permiso').inputValue(), '');
         await page.getByLabel('Apariencia').selectOption('dark');
         await page.getByLabel('Alcance del permiso').selectOption('project1');
+        await page.getByLabel('Sesión que recibirá permiso').selectOption('s2');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
         assert.equal(await page.getByLabel('Apariencia').inputValue(), 'dark'); assert.deepEqual(await act(page, 'return f.themes'), []);
         await act(page, 'f.sessions[1].status = "exited";');
         await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>('[id$="-session"]')?.querySelector('option[value="s2"]'));
         assert.equal(await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).isDisabled(), true);
+      });
+      await t.test('successful grant without a command does not claim there is one to copy', async () => {
+        const page = await mounted(); await act(page, 'f.missingCommand=true;'); await open(page);
+        await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
+        await page.getByLabel('Alcance del permiso').selectOption('project1');
+        await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
+        assert.equal(await page.getByLabel('Comando de registro').count(), 0);
+        assert.match(await page.locator('.settings-permissions [role="status"]').innerText(), /no devolvió un comando/);
+      });
+      await t.test('keyboard focus stays in Settings after grant, paging and policy revocation', async () => {
+        const page = await mounted();
+        await act(page, 'f.projectPages={0:{projects:[{id:"project1",title:"Synthetic project"}],hasMore:true,nextCursor:1},1:{projects:[{id:"project2",title:"Second project"}],hasMore:false,nextCursor:2}};');
+        await open(page);
+        await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
+        await page.getByLabel('Alcance del permiso').selectOption('project1');
+        const grant = page.getByRole('button', { name: 'Conceder acceso y ver comando' });
+        await grant.focus(); await page.keyboard.press('Enter'); await ready(page);
+        assert.equal(await page.getByRole('button', { name: 'Copiar comando de registro' }).evaluate(el => el === document.activeElement), true);
+        const more = page.getByRole('button', { name: 'Más proyectos' });
+        await more.focus(); await page.keyboard.press('Enter'); await ready(page);
+        assert.equal(await more.isVisible(), false);
+        assert.equal(await page.getByLabel('Alcance del permiso').evaluate(el => el === document.activeElement), true);
+        const revoke = page.getByRole('button', { name: 'Revocar permiso recordado' }).first();
+        await revoke.focus(); await page.keyboard.press('Enter'); await ready(page);
+        assert.equal(await page.locator('.settings-dialog').evaluate(el => el.contains(document.activeElement)), true);
       });
       await t.test('explicit project pages use server cursors, find context beyond 50, deduplicate and stop at exhaustion', async () => {
         const page = await mounted();
@@ -110,7 +139,9 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         assert.equal(await act(page, 'return f.calls.filter(c=>c[0]==="projects").length'), 1);
         await page.getByRole('button', {name:'Más proyectos',exact:true}).click(); await ready(page);
         assert.equal(await page.getByLabel('Alcance del permiso').inputValue(), 'target');
-        assert.equal(await page.getByLabel('Alcance del permiso').locator('option').count(), 52);
+        assert.equal(await page.getByLabel('Alcance del permiso').locator('option').count(), 53);
+        assert.equal(await page.getByRole('button', {name:'Conceder acceso y ver comando'}).isDisabled(), true);
+        await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
         assert.equal(await page.getByRole('button', {name:'Conceder acceso y ver comando'}).isEnabled(), true);
         assert.equal(await act(page, 'return f.calls.filter(c=>c[0]==="projects").length'), 2, 'never auto-fetch the next page');
         await page.getByRole('button', {name:'Más proyectos',exact:true}).click(); await ready(page);
@@ -135,7 +166,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
           assert.equal(await page.getByLabel('Alcance del permiso').inputValue(), 'project1');
           assert.equal(await page.getByRole('checkbox').isChecked(), true);
         }
-        assert.equal(await page.getByLabel('Alcance del permiso').locator('option').count(), 3);
+        assert.equal(await page.getByLabel('Alcance del permiso').locator('option').count(), 4);
         assert.deepEqual(await act(page, 'return f.calls.filter(c=>c[0]==="projects").map(c=>c[1].cursor)'), [0,1,1,1,1]);
         await page.getByRole('button', {name:'Conceder acceso y ver comando'}).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.find(c=>c[0]==="grant")[1]'), {sessionId:'s1',projectId:'project1',canCreateProjects:false,remember:true});
@@ -206,12 +237,13 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
       });
       await t.test('write guards Escape, public and forced close; returns focus to underlying Pulso; remember resets', async () => {
         const page = await mounted(); await open(page); await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
+        await page.getByLabel('Alcance del permiso').selectOption('__own_projects__');
         await page.getByRole('checkbox').check(); await act(page, 'f.hold = "grant";');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click();
         await page.keyboard.press('Escape'); await act(page, 'f.panel.close(); document.querySelector(".settings-dialog").close();');
         await page.waitForFunction(() => document.querySelector<HTMLDialogElement>('.settings-dialog')?.open);
         await act(page, 'f.hold = ""; f.pending({command:"safe-command"});'); await ready(page);
-        await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+        await page.getByRole('button', { name: /^Cerrar/ }).click();
         await page.waitForFunction(() => document.activeElement?.id === 'opener');
         assert.equal(await page.locator('#pulso[open]').count(), 1);
         await open(page); assert.equal(await page.getByRole('checkbox').isChecked(), false);
@@ -221,7 +253,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
           const page = await mounted();
           if (operation === 'policies') await act(page, 'f.hold = "policies";');
           await page.locator('#opener').click();
-          if (operation === 'grant') { await ready(page); await page.getByLabel('Sesión que recibirá permiso').selectOption('s1'); await act(page, 'f.hold = "grant";'); await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); }
+          if (operation === 'grant') { await ready(page); await page.getByLabel('Sesión que recibirá permiso').selectOption('s1'); await page.getByLabel('Alcance del permiso').selectOption('__own_projects__'); await act(page, 'f.hold = "grant";'); await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); }
           await page.waitForFunction(() => (window as any).f.pending !== null);
           await act(page, 'f.available = false; f.panel.dispose(); f.pending({command:"late-secret",policies:[]});');
           assert.equal(await page.locator('.settings-dialog').count(), 0);
@@ -231,11 +263,34 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         const page = await mounted(); await act(page, 'f.available = false;'); await open(page);
         assert.deepEqual(await act(page, 'return f.calls'), []);
       });
+      await t.test('reconnection keeps an issued command visible and blocked attention stays in Settings', async () => {
+        const page = await mounted(); await open(page);
+        await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
+        await page.getByLabel('Alcance del permiso').selectOption('project1');
+        await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
+        const command = page.getByLabel('Comando de registro');
+        const original = await command.inputValue();
+        await act(page, 'f.available = false;');
+        await page.waitForFunction(() => document.querySelector('.settings-permissions [role="status"]')?.textContent?.includes('Conexión temporalmente'));
+        assert.equal(await command.inputValue(), original);
+        await act(page, 'f.available = true;');
+        await page.waitForFunction(() => document.querySelector('.settings-permissions [role="status"]')?.textContent?.includes('Conexión restablecida'));
+        assert.equal(await command.inputValue(), original);
+        await act(page, 'f.allowAttention = false;');
+        await page.getByRole('button', { name: 'Ver sesiones que necesitan atención' }).click();
+        assert.equal(await page.locator('.settings-dialog[open]').count(), 1);
+        assert.equal(await act(page, 'return f.attention'), 0);
+        assert.match(await page.locator('.settings-dialog-status').innerText(), /Guarda o descarta/);
+        await act(page, 'f.allowAttention = true;');
+        await page.getByRole('button', { name: 'Ver sesiones que necesitan atención' }).click();
+        assert.equal(await page.locator('.settings-dialog[open]').count(), 0);
+        assert.equal(await act(page, 'return f.attention'), 1);
+      });
       await t.test('read closure fences stale results across reopen; drafts and notification node/listeners survive', async () => {
         const page = await mounted(); await open(page);
         await page.getByLabel('Máximo de sesiones simultáneas').fill('5'); await page.getByLabel('Apariencia').selectOption('light');
         await act(page, 'f.hold = "policies";'); await page.getByRole('button', { name: 'Actualizar permisos y proyectos' }).click();
-        await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+        await page.getByRole('button', { name: /^Cerrar/ }).click();
         await act(page, 'f.oldPending = f.pending; f.hold = "";'); await open(page);
         await act(page, 'f.oldPending({policies:[{id:"late",policy:{cwd:"late-cwd"}}]});');
         assert.doesNotMatch(await page.locator('.settings-permissions').innerText(), /late-cwd/);
@@ -265,6 +320,16 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
           await page.setViewportSize({ width: 760, height: 560 }); await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
           const bounds = await page.locator('.settings-dialog').evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, overflow: el.scrollWidth > el.clientWidth }; });
           assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.right <= 760 && bounds.bottom <= 560); assert.equal(bounds.overflow, false);
+          const layout = await page.locator('.settings-dialog').evaluate(dialog => {
+            const content = dialog.querySelector<HTMLElement>('.settings-dialog-content')!;
+            const footer = dialog.querySelector<HTMLElement>('.dialog-footer')!;
+            const before = footer.getBoundingClientRect();
+            const scrollable = content.scrollHeight > content.clientHeight;
+            content.scrollTop = content.scrollHeight;
+            const after = footer.getBoundingClientRect();
+            return { scrollable, footerStayed: before.top === after.top, footerVisible: after.bottom <= innerHeight && after.top >= 0 };
+          });
+          assert.deepEqual(layout, { scrollable: true, footerStayed: true, footerVisible: true });
           if (process.env.SETTINGS_PANEL_SCREENSHOTS === '1') await page.screenshot({ path: `/tmp/jauria-permissions-${engine.name()}-${theme}.png` });
         }
       });

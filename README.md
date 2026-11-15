@@ -56,7 +56,7 @@ Pulso 1.3.0 presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso,
 2. Usa **Añadir fase** dentro de cualquiera de las tres primeras columnas. En Pendientes, la acción es **Añadir pendiente**.
 3. Arrastra el agarre de una tarjeta a otra columna o usa el selector **Mover** con el teclado. Cambia el estado conservando el orden de fases; no hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
 4. **Abrir** en una tarjeta muestra el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
-5. **Plan y sesiones**, en la barra del tablero del proyecto, abre el plan opcional, la sesión principal y los vínculos; esos controles quedan fuera del tablero. Los permisos y los avisos de macOS se administran en **Configuración**. El tablero recuerda el último proyecto y ofrece **Continuar proyecto**, **Reanudar sesión principal** o **Volver a conversación reanudada**, según su estado.
+5. **Plan y sesiones**, en la barra del proyecto, abre el plan opcional, la sesión principal y los vínculos. Los permisos y los avisos de macOS se administran en **Configuración**. El tablero recuerda el último proyecto y ofrece **Abrir sesión principal**, **Reanudar sesión principal** o **Abrir conversación activa**, según su estado. Al configurar permisos, elige expresamente la sesión y el alcance; crear proyectos propios no es el valor inicial.
 
 Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos explícitos acotados por proyecto y políticas revocables; MCP, importación del Site y sincronización en la nube siguen pendientes.
 
@@ -119,7 +119,7 @@ Las dos primeras capturas muestran la aplicación en macOS con sesiones temporal
 
 ![Configuración de Jauria 1.3.0 con permisos de agentes y avisos globales](docs/screenshots/configuracion-1.3.0.png)
 
-*Configuración: apariencia, límite combinado de 1 a 8 sesiones e información de versión. Vista de prueba del componente.*
+*Configuración: apariencia, límite combinado de 1 a 8 sesiones, permisos y avisos. Vista sintética de la interfaz.*
 
 ![Pestañas Abiertas e Historial con apariencia de navegador](docs/screenshots/pestanas-1.0.0.png)
 

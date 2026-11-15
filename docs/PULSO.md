@@ -5,11 +5,11 @@ Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto repr
 ## Empezar desde una sesión
 
 1. Abre Claude Code o Codex como siempre, incluso desde tu carpeta personal y sin Git.
-2. Entra a Pulso y pulsa **Nuevo proyecto**. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
+2. Entra a Pulso y pulsa **Nuevo proyecto**. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. La casilla conserva la sesión que nombra aunque cambies de terminal antes de crear el proyecto. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
 3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
 4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o cambia el selector **Mover** con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
-5. Pulsa **Abrir** sobre una tarjeta para ver el drawer derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
-6. Abre **Plan y sesiones** en la barra del tablero del proyecto para editar el plan opcional, cambiar la sesión principal, vincular sesiones. Los permisos se administran en **Configuración → Permisos de agentes**; el detalle ofrece un enlace con el proyecto y la sesión seleccionados. Esos controles no ocupan las columnas. La principal no cambia automáticamente cuando termina.
+5. Pulsa el título de una tarjeta para ver el detalle derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
+6. Abre **Plan y sesiones** en la barra del proyecto para editar el plan opcional, cambiar la sesión principal y vincular sesiones. **Configurar permisos…** lleva a Configuración con el proyecto elegido; allí debes seleccionar expresamente la sesión que recibirá acceso. La principal no cambia automáticamente cuando termina.
 
 La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
 
@@ -27,7 +27,7 @@ Mientras Pulso está visible y sin borrador, error, escritura o arrastre en curs
 
 Al volver a Pulso se restaura el último tablero de este perfil. Solo se guarda su identificador: no se ejecutan agentes ni se restauran permisos al abrirlo. Si el proyecto fue archivado o ya no existe, se muestran los Pendientes.
 
-En la barra del proyecto, **Continuar proyecto** vuelve a su sesión viva. Si terminó y Jauria registró su identidad Claude, **Reanudar sesión principal** permite abrir esa misma conversación. Si la continuación ya está abierta, **Volver a conversación reanudada** la enfoca, incluso con todas las plazas ocupadas. Puedes cerrar el detalle para usar la acción de la barra.
+En la barra del proyecto, **Abrir sesión principal** vuelve a la sesión viva. Si terminó y Jauria registró su identidad Claude, **Reanudar sesión principal** intenta abrir esa misma conversación. Si la continuación ya está abierta, **Abrir conversación activa** la enfoca, incluso con todas las plazas ocupadas. Puedes cerrar el detalle para usar la acción de la barra.
 
 Desde una fase se prioriza la sesión de su último checkpoint; después su vínculo y finalmente la principal. Reanudar continúa el estado actual del proveedor, no rebobina hasta esa fase. Si no existe identidad registrada, consulta **Ver historial** o prepara el contexto para una sesión nueva. Una comprobación fallida muestra **Reintentar comprobación** y nunca inicia otra sesión automáticamente.
 
@@ -35,9 +35,9 @@ Desde una fase se prioriza la sesión de su último checkpoint; después su vín
 | --- | --- |
 | Enfocar sesión viva | Vuelve a la misma terminal y proceso. |
 | Ver historial | Consulta la salida local de una sesión terminada; no la reinicia. |
-| Continuar desde una fase | Prepara contexto editable a partir del plan, la fase y su último punto de continuidad. Puedes copiarlo y abrir otra sesión; Jauria no lo pega ni lo envía. |
+| Preparar contexto | Prepara texto editable a partir del plan, la fase y su último checkpoint. Puedes copiarlo y abrir otra sesión; Jauria no lo pega ni lo envía. |
 | Intentar reanudar conversación | Para una conversación Claude cuya identidad reservó Jauria, inicia la CLI con ese ID exacto. No garantiza que Claude haya conservado su historial. |
-| Volver a conversación reanudada | Enfoca la continuación administrada que ya está viva para esa misma identidad. |
+| Abrir conversación activa | Enfoca la continuación administrada que ya está viva para esa misma identidad. |
 
 La reanudación conserva metadatos de origen y añade un vínculo de la nueva sesión al proyecto o fase desde donde se solicitó. Si el vínculo falla después del inicio, la interfaz lo avisa y puedes añadirlo manualmente. La sesión principal original se conserva.
 
@@ -49,13 +49,13 @@ Los bloqueos existentes siguen vigentes: no se inicia otro escritor sobre un wor
 
 ## Guardar una fase
 
-En el drawer de la tarjeta despliega **Guardar avance** y registra qué quedó listo y la siguiente acción. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Pueden apuntar a una sesión concreta. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
+En el drawer de la tarjeta despliega **Guardar avance** y registra qué quedó listo y la siguiente acción. **Sesión del checkpoint** empieza en **Sin sesión**; elige una si quieres vincular ese avance. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
 
 Cambiar una fase a **Hecho** registra avance de agenda. No implica pruebas aprobadas, aceptación de código, merge ni modificación de Jira. Terminar una sesión o un turno tampoco completa una fase automáticamente.
 
 ## Permitir que los agentes registren planes
 
-El acceso empieza desactivado. Desde **Configuración → Permisos de agentes**, selecciona una sesión viva y el alcance del proyecto (o solo proyectos propios de la sesión) y pulsa **Permitir registrar planes**. Esto concede acceso al proyecto seleccionado y permite crear planes propios de esa sesión; no comparte toda tu agenda ni los pendientes independientes. Incluye actualizar fases y marcarlas Hecho.
+El acceso empieza desactivado. Desde **Configuración → Permisos de agentes**, selecciona una sesión viva y elige explícitamente un proyecto **o** la opción **Crear proyectos propios**. Pulsa **Conceder acceso y ver comando**. El permiso queda limitado al alcance elegido: permite actualizar sus fases y marcarlas Hecho, sin compartir toda tu agenda ni los pendientes independientes.
 
 La casilla **Recordar para futuras sesiones de esta herramienta en esta carpeta** empieza desmarcada. Puedes marcarla para guardar una política. Esa política solo se aplica al proveedor y a la ruta canónica elegidos. Cada sesión futura recibe una credencial nueva; detener una sesión invalida su acceso. Puedes gestionar y revocar los permisos recordados desde el mismo bloque de acceso.
 
@@ -102,7 +102,7 @@ El estado es cosmético y efímero en la vista viva: no escribe fases, checkpoin
 
 Las actualizaciones visuales se agrupan; las transiciones relevantes de sesiones no atendidas pueden producir avisos, con un límite de uno cada **5 segundos por sesión**. Una señal `done` indica lo declarado por el programa; no equivale a fase Hecho ni a pruebas aprobadas.
 
-Consulta [la revisión de Herdr y matriz de decisiones](HERDR_REVIEW.md) y [la guía de entrega 1.2.0](RELEASE_1.2.0.md). La validación final de esta versión sigue pendiente; los resultados de 1.1.0 son históricos.
+Consulta [la revisión de Herdr y matriz de decisiones](HERDR_REVIEW.md), [la entrega 1.3.0](RELEASE_1.3.0.md) y [su validación](PULSO_VALIDATION_1.3.0.md).
 
 ## Respaldo local
 

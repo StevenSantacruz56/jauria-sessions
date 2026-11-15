@@ -7,6 +7,7 @@ export type PermissionsOptions = {
 export type PermissionsContext = { projectId?: string; sessionId?: string };
 type Policy = { id: string; policy: { provider?: string; cwd?: string; projectId?: string; canCreateProjects?: boolean } };
 let instance = 0;
+const ownProjectsScope = '__own_projects__';
 
 /** Global management surface. Authorization remains bound by the runner to the
  * selected project (or own-project bootstrap), provider and canonical cwd.
@@ -28,7 +29,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   function option(value: string, title: string) { const node = el('option', title); node.value = value; return node; }
   const heading = el('h3', 'Permisos de agentes'); heading.tabIndex = -1; heading.id = prefix;
   host.setAttribute('aria-labelledby', prefix);
-  host.append(heading, el('p', 'Elige una sesión abierta y el alcance de sus datos en Pulso. Al conceder acceso aparecerá un comando para copiar en esa sesión; Jauria no lo ejecuta. El agente podrá consultar y modificar el proyecto elegido o los proyectos que cree. Los permisos nativos de Claude y Codex se conservan.', 'settings-dialog-help'));
+  host.append(heading, el('p', 'Elige una sesión y un proyecto, o permite crear proyectos propios. Conceder muestra un comando que tú copias y ejecutas en esa sesión. Claude y Codex conservan sus permisos nativos.', 'settings-dialog-help'));
   const session = select('Sesión que recibirá permiso', 'session');
   const scope = select('Alcance del permiso', 'scope');
   const rememberLabel = el('label', '', 'settings-permissions-check');
@@ -43,21 +44,40 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   const more = button('Más proyectos', () => { void readMoreProjects(); }); more.hidden = true;
   actions.append(grant, revoke, retry, more);
   const policies = el('div');
-  host.append(rememberLabel, el('p', 'Recordar es opcional. Solo se guarda al conceder el permiso. La lista inferior muestra permisos recordados; no enumera los accesos actuales de las sesiones.', 'settings-dialog-help'), actions, status, result, policies);
+  host.append(rememberLabel, el('p', 'Recordar es opcional y se guarda al conceder. Abajo solo aparecen permisos recordados.', 'settings-dialog-help'), actions, status, result, policies);
   let active = false, disposed = false, writing = false, reading = false, generation = 0;
+  let connectionInterrupted = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let projects: { id: string; title: string }[] = [], saved: Policy[] = [], loaded = false;
   let hasMoreProjects = false, projectCursor = 0;
   const live = () => options.sessions().filter(s => ['claude', 'codex'].includes(s.kind) && ['starting', 'running'].includes(s.status));
+  const validScope = (value: string) => value === ownProjectsScope || projects.some(project => project.id === value);
   const valid = (token: number) => !disposed && active && token === generation && options.available();
+  const focusedAction = () => document.activeElement instanceof HTMLButtonElement && host.contains(document.activeElement) ? document.activeElement : null;
+  function restoreAction(focused: HTMLButtonElement | null, preferred: HTMLElement) {
+    if (!focused || !active || disposed) return;
+    const current = document.activeElement;
+    if (current !== focused && current instanceof HTMLElement && host.contains(current)) return;
+    const usable = (node: HTMLElement) => node.isConnected && !node.hidden && !(node instanceof HTMLButtonElement && node.disabled);
+    const target = usable(preferred) ? preferred : usable(focused) ? focused : heading;
+    target.focus({ preventScroll: true });
+  }
   function sync() {
     const unavailable = !options.available();
     host.setAttribute('aria-busy', String(reading || writing));
     for (const control of Array.from(host.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select'))) control.disabled = writing || reading || unavailable;
-    grant.disabled ||= !loaded || !live().some(s => s.id === session.value) || !Array.from(scope.options).some(o => o.value === scope.value);
+    grant.disabled ||= !loaded || !live().some(s => s.id === session.value) || !validScope(scope.value);
     revoke.disabled ||= !live().some(s => s.id === session.value);
     more.hidden = !hasMoreProjects;
-    if (unavailable) { result.replaceChildren(); status.textContent = 'Pulso no está disponible en este perfil. Vuelve a abrir Configuración cuando esté conectado.'; }
+    if (unavailable) {
+      connectionInterrupted = true;
+      status.textContent = 'Conexión temporalmente no disponible. El comando mostrado se conserva; espera a reconectar.';
+    } else if (connectionInterrupted) {
+      connectionInterrupted = false;
+      status.textContent = result.querySelector('textarea')
+        ? 'Conexión restablecida. El comando anterior sigue visible; comprueba la sesión antes de usarlo.'
+        : 'Conexión restablecida. Pulsa Actualizar permisos y proyectos para comprobar el estado.';
+    }
     onBusyChange();
   }
   let sessionSignature = '';
@@ -71,7 +91,8 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     sync();
   }
   function renderPolicies() {
-    policies.replaceChildren(el('h4', 'Permisos recordados'));
+    const title = el('h4', 'Permisos recordados'); title.tabIndex = -1;
+    policies.replaceChildren(title);
     if (!saved.length) policies.append(el('p', 'No hay permisos recordados.', 'settings-dialog-help'));
     for (const entry of saved) {
       const p = entry.policy; const row = el('div', '', 'settings-permissions-policy');
@@ -92,13 +113,16 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     return { rows, hasMore, next };
   }
   function renderScopes(selected: string) {
-    scope.replaceChildren(option('', 'Crear proyectos propios'), ...projects.map(p => option(p.id, p.title)));
-    loaded = !selected || projects.some(p => p.id === selected);
-    if (!loaded) {
+    const placeholder = option('', 'Elegir alcance'); placeholder.disabled = true;
+    scope.replaceChildren(placeholder, option(ownProjectsScope, 'Crear proyectos propios'), ...projects.map(p => option(p.id, p.title)));
+    loaded = validScope(selected);
+    if (selected && !loaded) {
       const unknown = option(selected, `Proyecto no disponible: ${selected}`); unknown.disabled = true; scope.prepend(unknown);
       status.textContent = hasMoreProjects
         ? 'El proyecto solicitado no está entre los proyectos cargados. Pulsa Más proyectos para buscarlo o elige otro alcance antes de conceder permiso.'
         : 'El proyecto solicitado no está disponible en la lista. Elige otro alcance antes de conceder permiso.';
+    } else if (!selected) {
+      status.textContent = 'Elige un proyecto o la opción de crear proyectos propios antes de conceder acceso.';
     } else status.textContent = hasMoreProjects
       ? `Se muestran ${projects.length} proyectos. Pulsa Más proyectos para cargar hasta 50 más.`
       : `Se muestran todos los proyectos disponibles (${projects.length}).`;
@@ -106,6 +130,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   }
   async function read(context?: PermissionsContext) {
     if (!active || disposed || writing || reading || !options.available()) { sync(); return; }
+    const focused = focusedAction();
     const token = ++generation; reading = true; status.textContent = 'Consultando permisos y proyectos…'; sync();
     try {
       const [p, list] = await Promise.all([options.request('policies', {}), options.request('projects', { limit: 50, cursor: 0, archived: false })]);
@@ -119,10 +144,11 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       renderPolicies();
     } catch {
       if (valid(token)) { loaded = false; status.textContent = 'No se pudieron consultar los permisos y proyectos. Reintenta la consulta.'; }
-    } finally { if (!disposed && token === generation) { reading = false; sync(); } }
+    } finally { if (!disposed && token === generation) { reading = false; sync(); restoreAction(focused, scope); } }
   }
   async function readMoreProjects() {
     if (!active || disposed || writing || reading || !hasMoreProjects || !options.available()) return;
+    const focused = focusedAction();
     const token = ++generation, cursor = projectCursor, selected = scope.value;
     reading = true; status.textContent = 'Consultando más proyectos…'; sync();
     try {
@@ -134,17 +160,18 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       renderScopes(selected); renderPolicies();
     } catch {
       if (valid(token)) status.textContent = 'No se pudieron cargar más proyectos. El alcance elegido se conserva. Pulsa Más proyectos para reintentar.';
-    } finally { if (!disposed && token === generation) { reading = false; sync(); } }
+    } finally { if (!disposed && token === generation) { reading = false; sync(); restoreAction(focused, more.hidden ? scope : more); } }
   }
   async function write(op: 'grant' | 'revoke' | 'revoke_policy', id?: string) {
     if (!active || disposed || writing || reading || !options.available()) return;
     if (op !== 'revoke_policy' && !live().some(s => s.id === session.value)) { refreshSessions(); return; }
-    if (op === 'grant' && (!loaded || (scope.value && !projects.some(p => p.id === scope.value)))) return;
+    if (op === 'grant' && (!loaded || !validScope(scope.value))) return;
+    const focused = focusedAction();
     const token = ++generation; writing = true; result.replaceChildren(); status.textContent = 'Aplicando permiso…'; sync();
     const args = op === 'revoke_policy' ? { id } : op === 'revoke' ? { sessionId: session.value } : {
-      sessionId: session.value, ...(scope.value ? { projectId: scope.value } : {}), canCreateProjects: !scope.value, ...(remember.checked ? { remember: true } : {}),
+      sessionId: session.value, ...(scope.value === ownProjectsScope ? {} : { projectId: scope.value }), canCreateProjects: scope.value === ownProjectsScope, ...(remember.checked ? { remember: true } : {}),
     };
-    let completed = false;
+    let completed = false, hasCommand = false;
     try {
       const data = await options.request(op, args);
       if (!valid(token)) return;
@@ -155,12 +182,13 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
         // Only the bridge's safe command string is displayable. Never render
         // response objects, opaque handles, tokens, guidance or raw RPC errors.
         if (typeof data?.command === 'string' && data.command) {
+          hasCommand = true;
           const label = el('label', 'Comando de registro'); const command = el('textarea');
           command.id = `${prefix}-command`; label.htmlFor = command.id; command.readOnly = true; command.value = data.command;
           result.append(label, command, button('Copiar comando de registro', () => {
             void navigator.clipboard.writeText(command.value).then(() => { if (valid(token)) status.textContent = 'Copiado. Pégalo en la sesión elegida cuando estés listo.'; }, () => { if (valid(token)) status.textContent = 'No se pudo copiar. Selecciona y copia el comando de registro.'; });
           }));
-        }
+        } else status.textContent = 'Permiso concedido, pero el runner no devolvió un comando de registro. Consulta los permisos antes de volver a intentarlo.';
       } else status.textContent = op === 'revoke' ? 'Permiso de la sesión revocado.' : 'Permiso recordado revocado. Las futuras sesiones necesitarán autorización.';
       if (op !== 'revoke') {
         const response = await options.request('policies', {});
@@ -171,23 +199,33 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     } catch {
       if (valid(token)) status.textContent = completed
         ? (op === 'grant'
-          ? 'Permiso concedido. No se pudo actualizar la lista de permisos recordados. Copia el comando para usarlo; pulsa Actualizar permisos y proyectos para consultar la lista sin volver a conceder el permiso.'
+          ? hasCommand
+            ? 'Permiso concedido. No se pudo actualizar la lista de permisos recordados. Copia el comando para usarlo; pulsa Actualizar permisos y proyectos para consultar la lista sin volver a conceder el permiso.'
+            : 'Permiso concedido, pero no se recibió un comando ni se pudo actualizar la lista. Consulta los permisos antes de volver a intentarlo.'
           : 'Permiso recordado revocado. No se pudo actualizar la lista. Pulsa Actualizar permisos y proyectos para consultarla.')
         : 'No se pudo confirmar la operación. Consulta la lista antes de volver a intentarlo.';
     }
-    finally { if (!disposed && token === generation) { writing = false; sync(); } }
+    finally {
+      if (!disposed && token === generation) {
+        writing = false; sync();
+        const preferred = op === 'grant' ? result.querySelector<HTMLElement>('button') ?? grant
+          : op === 'revoke_policy' ? policies.querySelector<HTMLElement>('.settings-permissions-policy button') ?? policies.querySelector<HTMLElement>('h4') ?? heading
+          : revoke;
+        restoreAction(focused, preferred);
+      }
+    }
   }
   session.addEventListener('change', () => { remember.checked = false; result.replaceChildren(); refreshSessions(); });
-  scope.addEventListener('change', () => { loaded = !scope.value || projects.some(p => p.id === scope.value); remember.checked = false; result.replaceChildren(); sync(); });
+  scope.addEventListener('change', () => { loaded = validScope(scope.value); remember.checked = false; result.replaceChildren(); sync(); });
   return {
     get isBusy() { return writing; },
     open(context?: PermissionsContext) {
       if (disposed) return;
       if (active) { if (context) heading.focus(); return; }
-      active = true; loaded = false; remember.checked = false; saved = []; projects = []; hasMoreProjects = false; projectCursor = 0;
+      active = true; connectionInterrupted = false; loaded = false; remember.checked = false; saved = []; projects = []; hasMoreProjects = false; projectCursor = 0;
       sessionSignature = ''; session.replaceChildren(option('', 'Seleccionar sesión'));
-      result.replaceChildren(); policies.replaceChildren(); scope.replaceChildren(option('', 'Crear proyectos propios'));
-      refreshSessions(); if (context?.sessionId) session.value = live().some(s => s.id === context.sessionId) ? context.sessionId : '';
+      result.replaceChildren(); policies.replaceChildren(); scope.replaceChildren(option('', 'Elegir alcance'));
+      refreshSessions();
       timer = setInterval(refreshSessions, 1000); void read(context);
     },
     focus() { heading.focus(); heading.scrollIntoView({ block: 'start' }); },

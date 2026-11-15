@@ -54,7 +54,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         delayed: [] as any[], holdOps: [] as string[], calls: [] as any[], revision: 1, projects: [project('p1')], items: [item('i1', 'p1'), item('solo')], checkpoints: [] as any[], links: [] as any[],
         policies: [{ id: 'policy-1', policy: { projectId: 'p1', provider: 'claude', cwd: '/synthetic', canCreateProjects: true } }],
         sessions: [{ id: 'ended', title: 'Claude anterior', kind: 'claude', cwd: '/synthetic', status: 'exited' }, { id: 'live', title: 'Claude viva', kind: 'claude', cwd: '/synthetic', status: 'running' }, { id: 'attention', title: 'Sin confirmar', kind: 'claude', cwd: null, status: 'needs_attention' }],
-        permissionContexts: [] as any[], profile: null as string | null, storage: {} as Record<string, string>, bindingFailures: 0, failProjectReads: 0, cacheKey: 'synthetic-connection-1', bindingHeld: [] as any[], holdBinding: false,
+        permissionContexts: [] as any[], profile: null as string | null, storage: {} as Record<string, string>, bindingFailures: 0, failProjectReads: 0, cacheKey: 'synthetic-connection-1', bindingHeld: [] as any[], holdBinding: false, currentId: 'live',
         opened: [] as string[], created: [] as any[], notices: [] as string[], resumed: [] as string[], bindings: [] as string[], copied: [] as string[],
         receipts: new Map(), failWrite: false, failRead: false, timeoutAfterCommit: false, holdRead: false, held: [] as any[], bindingProvider: 'claude',
         project, item,
@@ -116,7 +116,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       };
       for (const [key, value] of Object.entries(f.storage)) localStorage.setItem(key, value as string);
       f.mount = () => f.panel = w.Pulso.mountPulsoPanel({
-        host: document.querySelector('#stage'), request: f.request, sessions: () => f.sessions, currentSession: () => f.sessions[1],
+        host: document.querySelector('#stage'), request: f.request, sessions: () => f.sessions, currentSession: () => f.sessions.find((s: any) => s.id === f.currentId) ?? null,
         openSession: (id: string) => f.opened.push(id), newSession: (cwd?: string) => f.created.push(cwd), notice: (text: string) => f.notices.push(text),
         persistenceKey: () => f.profile, bindingCacheKey: () => f.cacheKey,
         onOpenPermissions: (context: any) => f.permissionContexts.push(structuredClone(context)),
@@ -127,7 +127,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
           if (f.bindingFailures > 0) { f.bindingFailures--; throw new Error('synthetic binding unavailable'); }
           return data;
         },
-        resumeSession: async (id: string) => { f.resumed.push(id); },
+        resumeSession: async (id: string) => { f.resumed.push(id); if (f.resumeError) throw new Error('secret-runner-detail'); },
       });
       f.mount();
     }, setup);
@@ -163,6 +163,14 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByLabel('Nombre del proyecto').fill('Plan de la conversación');await p.getByRole('button',{name:'Crear proyecto',exact:true}).click();await idle(p);
         assert.equal(await run(p,'return f.calls.find(x=>x.op==="project_create").args.mainSessionId'),'live');
         assert.equal(await run(p,'return f.projects.find(p=>p.id==="p1").mainSessionId'),'ended');
+      });
+      await t.test('new project keeps the session named in its checked origin even if terminal selection changes', async () => {
+        const p = await mounted(); await p.getByRole('button', { name: 'Nuevo proyecto', exact: true }).click();
+        assert.match(await p.getByText(/Usar «Claude viva» como sesión principal/).innerText(), /Claude viva/);
+        await run(p, 'f.currentId="attention"');
+        await p.getByLabel('Nombre del proyecto').fill('Origen estable');
+        await p.getByRole('button', { name: 'Crear proyecto', exact: true }).click(); await idle(p);
+        assert.equal(await run(p, 'return f.calls.find(c=>c.op==="project_create").args.mainSessionId'), 'live');
       });
       await t.test('uncertain mutation keeps draft, freezes edits and manually reuses UUID/payload', async () => {
         const p = await mounted(); await itemDetail(p);
@@ -206,6 +214,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByLabel('Qué quedó listo ·').fill('Implementado'); await p.getByLabel('Siguiente acción ·').fill('Verificar');
         await p.getByRole('button', { name: 'Registrar checkpoint', exact: true }).click(); await idle(p);
         assert.equal(await run(p, 'return f.checkpoints.length'), 1);
+        assert.equal(await run(p, 'return f.calls.find(c=>c.op==="checkpoint_create").args.sessionId'), undefined);
         assert.match(await p.locator('.pulso-history').innerText(), /Implementado/);
         await p.getByRole('button', { name: 'Preparar contexto' }).click(); await p.getByLabel('Contexto editable para continuar').fill('Contexto revisado');
         await p.getByRole('button', { name: 'Copiar contexto', exact: true }).click();
@@ -240,12 +249,55 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         const call=await run(p,'return f.calls.find(c=>c.op==="checkpoint_history")');assert.deepEqual(call.args,{itemId:'i1',cursor:10,limit:10});
         await p.getByRole('button',{name:'Preparar contexto'}).click();assert.match(await p.getByLabel('Contexto editable para continuar').inputValue(),/Point 11/);
         assert.equal(await p.getByRole('button',{name:'Ver puntos anteriores',exact:true}).count(),0);
+        await run(p,'f.revision++; return f.panel.refresh()');
+        assert.equal(await p.locator('.pulso-history li').count(),12);
+        assert.equal(await p.getByRole('button',{name:'Ver puntos anteriores',exact:true}).count(),0);
+      });
+      await t.test('background refresh keeps open phase controls, focus and context without extra project reads', async () => {
+        const p = await mounted(); await itemDetail(p);
+        await p.getByText('Guardar avance', { exact: true }).click();
+        await p.getByRole('button', { name: 'Preparar contexto' }).click();
+        const context = p.getByLabel('Contexto editable para continuar'); await context.focus();
+        const before = await run(p, 'return f.calls.filter(c=>c.op==="project").length');
+        await run(p, 'f.revision++; return f.panel.refresh()');
+        assert.equal(await p.getByText('Guardar avance', { exact: true }).evaluate(el => (el.parentElement as HTMLDetailsElement).open), true);
+        assert.equal(await context.isVisible(), true);
+        assert.equal(await context.evaluate(el => el === document.activeElement), true);
+        assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="project").length'), before);
+        await run(p, 'f.sessions.push({id:"unrelated",title:"Otra terminal",kind:"terminal",cwd:"/other",status:"running"}); return f.panel.refresh()');
+        assert.equal(await context.isVisible(), true);
+        assert.equal(await context.evaluate(el => el === document.activeElement), true);
+        assert.doesNotMatch(await p.locator('.pulso-feedback').innerText(), /Consultando fase/);
+      });
+      await t.test('background refresh keeps an untouched quick-add and card move focus', async () => {
+        const p = await mounted(); await projectBoard(p);
+        const doing = p.getByRole('region', { name: 'En curso', exact: true });
+        await doing.getByRole('button', { name: 'Añadir fase', exact: true }).click();
+        const title = doing.getByLabel('Título de la fase', { exact: true });
+        assert.equal(await title.evaluate(el => el === document.activeElement), true);
+        await run(p, 'f.sessions.push({id:"unrelated",title:"Otra terminal",kind:"terminal",cwd:"/other",status:"running"}); return f.panel.refresh()');
+        assert.equal(await title.isVisible(), true);
+        assert.equal(await title.evaluate(el => el === document.activeElement), true);
+        await doing.getByRole('button', { name: 'Cancelar', exact: true }).click();
+        const move = p.getByLabel('Mover Fase i1', { exact: true }); await move.focus();
+        await run(p, 'f.sessions.push({id:"another",title:"Otra más",kind:"terminal",cwd:"/other",status:"running"}); return f.panel.refresh()');
+        assert.equal(await move.evaluate(el => el === document.activeElement), true);
+      });
+      await t.test('asynchronous recovery action regains keyboard focus after a session refresh', async () => {
+        const p = await mounted(); await itemDetail(p);
+        const resume = p.getByRole('dialog').getByRole('button', { name: 'Reanudar sesión de la fase', exact: true });
+        await resume.waitFor(); await resume.focus();
+        assert.equal(await resume.evaluate(el => el === document.activeElement), true, 'the recovery action receives focus before refresh');
+        await run(p, 'f.sessions.push({id:"unrelated",title:"Otra terminal",kind:"terminal",cwd:"/other",status:"running"}); return f.panel.refresh()');
+        await resume.waitFor();
+        const active = await run(p, 'return [document.activeElement?.tagName,document.activeElement?.className,document.activeElement?.textContent?.trim().slice(0,80)]');
+        assert.equal(await resume.evaluate(el => el === document.activeElement), true, JSON.stringify(active));
       });
       await t.test('history, live focus, uncertain inspection and Claude resume are separate; bindings do not poll', async () => {
         const p = await mounted('f.links=[{itemId:"i1",sessionId:"live"},{itemId:"i1",sessionId:"attention"}];'); await itemDetail(p);
         await p.getByRole('button', { name: 'Reanudar conversación' }).waitFor();
         assert.match(await p.locator('.pulso-detail').innerText(), /Historial local/);
-        await p.getByRole('button', { name: 'Enfocar sesión viva' }).click(); await p.getByRole('button', { name: 'Inspeccionar sesión' }).click();
+        await p.getByRole('button', { name: 'Abrir sesión de la fase' }).click(); await p.getByRole('button', { name: 'Inspeccionar sesión' }).click();
         await p.getByRole('button',{name:'Ver historial',exact:true}).click();
         await p.getByRole('button', { name: 'Reanudar conversación' }).click(); await idle(p);
         assert.deepEqual(await run(p, 'return f.opened'), ['live', 'attention', 'ended']); assert.deepEqual(await run(p, 'return f.resumed'), ['ended']);
@@ -262,6 +314,13 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.deepEqual(await run(p,'return f.opened'),['live']);assert.deepEqual(await run(p,'return f.resumed'),[]);
         assert.equal(await p.getByRole('button',{name:'Reanudar sesión principal',exact:true}).count(),0);
       });
+      await t.test('resume failure keeps history and does not display raw runner details', async () => {
+        const p = await mounted('f.resumeError=true;'); await projectBoard(p);
+        await p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Reanudar sesión principal', exact: true }).click();
+        await p.getByText(/No se pudo reanudar la conversación/).waitFor();
+        assert.doesNotMatch(await p.locator('.pulso-panel').innerText(), /secret-runner-detail/);
+        assert.deepEqual(await run(p, 'return f.resumed'), ['ended']);
+      });
       await t.test('same-titled histories have one conversation action and distinct local history links', async () => {
         const p = await mounted('f.sessions.push({id:"older",title:"Claude anterior",kind:"claude",cwd:"/synthetic",status:"exited"});f.links=[{projectId:"p1",sessionId:"older"}];f.activeNative="live";');
         await projectDetail(p);
@@ -275,18 +334,28 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       await t.test('a stopped session changes to history without a planning mutation or provider poll',async()=>{
         const p=await mounted('f.projects[0].mainSessionId="live"');
         await projectDetail(p);await idle(p);
-        assert.equal(await p.getByRole('dialog').getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),1);
+        assert.equal(await p.getByRole('dialog').getByRole('button',{name:'Abrir sesión principal',exact:true}).count(),1);
+        assert.equal(await p.getByRole('dialog').getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),0);
         await run(p,'f.sessions.find(s=>s.id==="live").status="exited"');
         await p.getByRole('button',{name:'Ver historial',exact:true}).waitFor({timeout:4000});
         assert.equal(await p.getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),0);
         assert.equal(await run(p,'return f.revision'),1);
+      });
+      await t.test('phase recovery shows one live-session action', async () => {
+        const p = await mounted('f.checkpoints=[{id:"cp-live",itemId:"i1",brief:"Avance",nextAction:"Seguir",sessionId:"live",actor:"fixture",createdAt:Date.parse("2026-11-14T12:00:00Z")}];');
+        await itemDetail(p);
+        const dialog = p.getByRole('dialog');
+        assert.equal(await dialog.getByRole('button', { name: 'Abrir sesión de la fase', exact: true }).count(), 1);
+        assert.equal(await dialog.getByRole('button', { name: 'Enfocar sesión viva', exact: true }).count(), 0);
+        await dialog.getByRole('button', { name: 'Abrir sesión de la fase', exact: true }).click();
+        assert.deepEqual(await run(p, 'return [f.opened,f.resumed]'), [['live'], []]);
       });
       await t.test('project permissions delegate context and expose no local authority controls', async () => {
         const p = await mounted(); await projectDetail(p);
         await p.getByRole('button', { name: 'Configurar permisos…', exact: true }).click();
         const contexts = await run(p, 'return f.permissionContexts');
         assert.equal(contexts.length, 1); assert.equal(contexts[0].projectId, 'p1');
-        assert.ok(!contexts[0].sessionId || ['ended', 'live'].includes(contexts[0].sessionId));
+        assert.equal(contexts[0].sessionId, undefined, 'the last terminal must not be preselected for a project grant');
         assert.equal(await p.getByLabel('Sesión que recibirá permiso').count(), 0);
         assert.equal(await p.getByRole('button', { name: /Conceder acceso y ver comando|Revocar permiso|Gestionar permisos recordados/ }).count(), 0);
         assert.equal(await p.getByLabel('Comando de registro', { exact: true }).count(), 0);

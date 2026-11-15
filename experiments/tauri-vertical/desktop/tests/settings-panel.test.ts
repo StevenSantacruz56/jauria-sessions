@@ -127,13 +127,16 @@ for (const engine of [chromium, webkit]) {
       await page.getByRole('button', { name: 'Reintentar consulta' }).click(); await ready(page);
       await page.getByLabel('Máximo de sesiones simultáneas').fill('7');
       await page.getByLabel('Apariencia').selectOption('light');
-      await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+      assert.match(await page.locator('.settings-dialog-status').innerText(), /Cambios sin guardar/);
+      assert.equal(await page.getByRole('button', { name: 'Cerrar y conservar borrador', exact: true }).count(), 1);
+      await page.getByRole('button', { name: 'Cerrar y conservar borrador', exact: true }).click();
       await action(page, 'f.readError = true;');
       await page.locator('#opener').click(); await ready(page);
       await action(page, 'f.readError = false; f.settings.maxSupportedSessions = 4; f.settings.warning = "Límite actualizado por el runner";');
       await page.getByRole('button', { name: 'Reintentar consulta' }).click(); await ready(page);
       assert.equal(await page.getByLabel('Máximo de sesiones simultáneas').inputValue(), '7');
       assert.equal(await page.getByLabel('Apariencia').inputValue(), 'light');
+      assert.match(await page.locator('.settings-dialog-status').innerText(), /Cambios sin guardar/);
       assert.equal(await page.getByLabel('Máximo de sesiones simultáneas').getAttribute('max'), '4');
       assert.match(await page.locator('dialog').innerText(), /Límite actualizado por el runner/);
       await page.getByRole('button', { name: 'Guardar', exact: true }).click();
@@ -238,7 +241,7 @@ for (const engine of [chromium, webkit]) {
         assert.ok(dimensions.right <= width && dimensions.bottom <= height);
         assert.equal(dimensions.overflow, false);
         assert.match(dimensions.font, /Inter/);
-        await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+        await page.getByRole('button', { name: /^Cerrar/ }).click();
       }
     });
   });

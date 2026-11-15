@@ -1,6 +1,6 @@
 # Validación local de Jauria 1.3.0
 
-Fecha: 2026-11-14. macOS Apple Silicon. Pruebas funcionales con perfiles y datos sintéticos; no se concedieron ni revocaron permisos en el perfil del usuario.
+Fecha inicial: 2026-11-14; revisión final: 2026-11-15. macOS Apple Silicon. Pruebas funcionales con perfiles y datos sintéticos; no se concedieron ni revocaron permisos en el perfil del usuario.
 
 ## Comprobaciones
 
@@ -32,9 +32,19 @@ La compilación TypeScript/Vite y el bundle Tauri release del paquete ajustado a
 
 La revisión de seguridad fue acotada al flujo de permisos: la interfaz no concede por sí sola y el runner exige sesión viva, proyecto existente o creación propia y política recordada ligada a proveedor y carpeta. No se hizo una auditoría de seguridad completa. La acción de avisos lee el estado de UI ya calculado y el detalle de proyecto deja de consultar el vínculo por cada fila histórica. No se repitió el benchmark de latencia para el paquete ajustado.
 
+### Revisión final de claridad, seguridad y fluidez
+
+Se instaló `design-taste-frontend` (Taste Skill 2.5.1) y se usaron sus criterios aplicables a una app: textos concretos, jerarquía, foco visible y verificación visual. La referencia local de Herdr mantuvo la navegación directa al agente, la separación entre vista y runner y los estados informados explícitamente por el programa. Claude Code hizo una revisión independiente de solo lectura y señaló una preselección de permisos que podía apuntar a la última terminal usada, el refresco disruptivo del detalle y la falta de señal para ajustes sin guardar.
+
+La entrega `Jauria-1.3.0-entrega-local.app` requiere elegir una sesión y un alcance antes de conceder acceso. Al abrir los permisos desde un proyecto se conserva el proyecto como contexto, pero no se preselecciona una terminal ajena; crear proyectos propios exige escoger esa opción. Configuración conserva encabezado y acciones visibles en la ventana mínima mientras el contenido se desplaza. Pulso evita reconstruir un detalle si su registro no cambió y, cuando debe actualizarlo, conserva el scroll, los desplegables, el contexto preparado y el foco. La continuación principal y la de fase muestran una sola acción por sesión. Los errores de reanudación no exponen el mensaje crudo del runner. Tras una reconexión, Configuración conserva visible un comando ya concedido y avisa que se compruebe la sesión; cerrar con cambios pendientes conserva el borrador de forma explícita. Un borrador de Pulso impide abrir los avisos sin cerrar Configuración.
+
+Pasaron TypeScript/Vite, el bundle Tauri release 1.3.0, Configuración/permisos 54/54, Pulso 129/129 y la shell integrada 12/12. Estas 195 entradas verifican los cambios afectados y no se suman a las 335 del paquete inicial. Los tests de permisos usaron respuestas sintéticas; no se concedió ni revocó un permiso real. La revisión de Claude Code dio lugar además a comprobaciones de selección estable de conversación, foco de recuperación, formularios abiertos durante el refresco y continuidad del comando tras reconectar. No se repitió el benchmark de PTY: la mejora de fluidez se observa en la prueba que evita consultas de proyecto y reconstrucción del detalle cuando no cambió.
+
+Computer Use abrió un paquete intermedio y observó Pulso en modo oscuro, Configuración con su scroll interno y pie fijo, foco al cerrar, navegación desde avisos a historial y scroll del terminal con retorno al final. Ese lanzamiento usó el perfil predeterminado (0 de 2 plazas ocupadas), no el perfil `jauria-tablero-preview-0v_rjw0y`. El paquete anterior sí había superado la recuperación exacta con ambas plazas ocupadas y la suite sintética afectada volvió a aprobar. En el intento de abrir la compilación posterior con `AW_VERTICAL_HOME` apuntando al perfil indicado, el proceso de la app arrancó y el runner existente conservó su PID, pero Computer Use devolvió `cgWindowNotFound` y no permitió inspeccionar la ventana. La entrega final incorpora después los últimos ajustes de texto y reconexión, comprobados en navegador y compilación, sin revisión visual nativa de esos cambios. No se iniciaron ni detuvieron sesiones ni se reinició el runner del usuario.
+
 ## Paquete local
 
-El DMG se montó en solo lectura: versión, ejecutable de interfaz y runner coinciden con el bundle final. SHA-256 del DMG: `2b0f1537c65c628643cfed2c4cb001ec02393e0f2fd9d15c2d3cf891c69c8c27` (consulta `SHA256SUMS` de la entrega para el valor definitivo). El archivo fuente correspondiente se adjunta a la entrega local tras el commit.
+El DMG de esta entrega, `Jauria-1.3.0-entrega-local.dmg`, se montó en solo lectura: contiene la app 1.3.0 y el ejecutable de interfaz coincide con el bundle construido (SHA-256 `f65b70b535ea481530279742662ba15705beb161c8f592761ad424eb67cc1faf`). SHA-256 del DMG: `088ad7130d17da1b088446721895680f7a77d7e8f66f622224248cd9ed5304ac`. El resultado anterior en `VALIDACION.json` corresponde al paquete inicial de la versión 1.3.0.
 
 ## Alcance
 
