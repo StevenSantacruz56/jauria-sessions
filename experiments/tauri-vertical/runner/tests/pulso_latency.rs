@@ -138,7 +138,7 @@ impl Load {
             let mut failures=0;
             while !worker_stop.load(Ordering::Acquire) {
                 let result = (|| -> io::Result<()> {
-                    client.request("items", json!({"projectId":"load-project","limit":100}))?;
+                    client.request("board", json!({"projectId":"load-project"}))?;
                     let updated = client.request("item_update", json!({"id":"load-000","requestId":format!("load-update-{sequence}"),"expectedRevision":revision,"note":format!("Synthetic write {sequence}")}))?;
                     revision = updated["item"]["revision"].clone();
                     worker_writes.fetch_add(1, Ordering::Release);
@@ -258,7 +258,7 @@ fn core_input_under_pulso_load_and_dedicated_slow_clients() {
         let mut revision = Value::Null;
         // Exactly 500 fixture items; timed load only updates, never grows the DB.
         for i in 0..500 {
-            let item = app.pulso.rpc("item_create", json!({"id":format!("load-{i:03}"),"requestId":format!("prepare-{i}"),"projectId":"load-project","title":format!("Fixture {i}"),"note":"x".repeat(512)}));
+            let item = app.pulso.rpc("item_create", json!({"id":format!("load-{i:03}"),"requestId":format!("prepare-{i}"),"projectId":"load-project","title":format!("Fixture {i}"),"status":(["todo","doing","waiting","done"][i%4]),"note":"x".repeat(512)}));
             if i == 0 { revision = item["item"]["revision"].clone(); }
         }
         for i in 0..sessions {

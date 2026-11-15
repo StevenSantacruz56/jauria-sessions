@@ -350,3 +350,84 @@ fn bounded_item_pages_status_position_and_explicit_ui_archive() {
     assert_eq!(app.pulso("items", json!({"projectId":"pages"}))["items"].as_array().unwrap().len(), 2);
     assert_eq!(app.pulso("project_update", json!({"id":"pages","requestId":"archive-pages","expectedRevision":project["revision"],"archived":true}))["project"]["archived"], true);
 }
+
+#[test]
+fn kanban_pages_count_exact_filters_and_reject_changed_snapshots() {
+    let app = Instance::new();
+    app.project("kanban");
+    app.project("hidden");
+    // Unrelated rows precede the visible rows, exercising SQL scope before LIMIT.
+    for n in 0..55 { app.item(&format!("hidden-{n}"), "hidden"); }
+    for n in 0..55 { app.item(&format!("todo-{n}"), "kanban"); }
+    for status in ["doing", "done"] {
+        app.pulso("item_create", json!({"id":status,"requestId":status,"projectId":"kanban","title":status,"status":status}));
+    }
+    app.pulso("item_create", json!({"id":"standalone","requestId":"standalone","title":"Standalone"}));
+    let archived = app.item("archived", "kanban");
+    app.pulso("item_update", json!({"id":"archived","requestId":"archive","expectedRevision":archived["revision"],"archived":true}));
+    let revision = app.pulso("revision", json!({}))["revision"].clone();
+    let first = app.pulso("items", json!({"projectId":"kanban","status":"todo","limit":50,"expectedSnapshotRevision":revision}));
+    assert_eq!(first["items"].as_array().unwrap().len(), 50);
+    assert_eq!(first["totalCount"], 55);
+    assert_eq!(first["hasMore"], true);
+    assert_eq!(first["nextCursor"], 50);
+    assert_eq!(first["revision"], revision);
+    let tail_args = json!({"projectId":"kanban","status":"todo","limit":50,"cursor":first["nextCursor"],"expectedSnapshotRevision":revision});
+    let tail = app.pulso("items", tail_args.clone());
+    assert_eq!(tail["items"].as_array().unwrap().len(), 5);
+    assert_eq!(tail["totalCount"], 55);
+    assert_eq!(tail["hasMore"], false);
+    assert!(tail["nextCursor"].is_null());
+    assert!(tail["items"].as_array().unwrap().iter().all(|row| first["items"].as_array().unwrap().iter().all(|old| old["id"] != row["id"])));
+    for (status, count) in [("doing", 1), ("waiting", 0), ("done", 1)] {
+        let page = app.pulso("items", json!({"projectId":"kanban","status":status,"limit":50,"expectedSnapshotRevision":revision}));
+        assert_eq!(page["totalCount"], count);
+        assert_eq!(page["items"].as_array().unwrap().len(), count as usize);
+    }
+    assert_eq!(app.pulso("items", json!({"projectId":"kanban"}))["totalCount"], 57);
+    assert_eq!(app.pulso("items", json!({"projectId":"kanban","archived":true,"status":"todo"}))["totalCount"], 1);
+    assert_eq!(app.pulso("items", json!({"projectId":null,"status":"todo"}))["totalCount"], 1);
+    for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!([]), json!({})] {
+        app.reject("items", json!({"expectedSnapshotRevision":value}));
+    }
+    for value in [json!(null), json!(1), json!("unknown"), json!("TODO")] {
+        app.reject("items", json!({"status":value}));
+    }
+    app.reject("projects", json!({"status":"todo"}));
+    app.reject("projects", json!({"expectedSnapshotRevision":revision}));
+    thread::scope(|scope| { scope.spawn(|| app.item("concurrent-create", "kanban")).join().unwrap(); });
+    let stale = app.request(true, "items", tail_args).unwrap();
+    assert_eq!(stale["ok"], false);
+    assert_eq!(stale["error"], "revision conflict");
+    let revision = app.pulso("revision", json!({}))["revision"].clone();
+    let original = app.pulso("item", json!({"id":"todo-0"}))["item"].clone();
+    let movement = json!({"id":"todo-0","requestId":"status-only-move","expectedRevision":original["revision"],"status":"doing"});
+    let moved = thread::scope(|scope| { scope.spawn(|| app.pulso("item_update", movement.clone())).join().unwrap() });
+    assert_eq!(moved["item"]["status"], "doing");
+    assert_eq!(moved["item"]["position"], original["position"]);
+    assert_eq!(app.pulso("item_update", movement.clone()), moved);
+    app.reject("item_update", json!({"id":"todo-0","requestId":"stale-move","expectedRevision":original["revision"],"status":"done"}));
+    app.reject("item_update", json!({"id":"todo-0","requestId":"status-only-move","expectedRevision":original["revision"],"status":"done"}));
+    assert_eq!(app.pulso("item", json!({"id":"todo-0"}))["item"], moved["item"]);
+    assert_eq!(app.request(true, "items", json!({"projectId":"kanban","status":"todo","cursor":50,"expectedSnapshotRevision":revision})).unwrap()["error"], "revision conflict");
+
+    app.start("kanban-agent");
+    let grant = app.pulso("grant", json!({"sessionId":"kanban-agent","projectId":"kanban","remember":false}));
+    let credential: Value = serde_json::from_slice(&fs::read(grant["handle"].as_str().unwrap()).unwrap()).unwrap();
+    let scoped_revision = app.agent(&credential, "revision", json!({}))["result"]["revision"].clone();
+    let scoped = app.agent(&credential, "items", json!({"status":"todo","limit":50,"expectedSnapshotRevision":scoped_revision}));
+    assert_eq!(scoped["ok"], true);
+    assert_eq!(scoped["result"]["totalCount"], 55);
+    assert_eq!(scoped["result"]["items"].as_array().unwrap().len(), 50);
+    assert!(scoped["result"]["items"].as_array().unwrap().iter().all(|row| row["projectId"] == "kanban"));
+    app.item("unrelated-change", "hidden");
+    let scoped_tail = app.agent(&credential, "items", json!({"status":"todo","cursor":50,"limit":50,"expectedSnapshotRevision":scoped_revision}));
+    assert_eq!(scoped_tail["ok"], true);
+    assert_eq!(scoped_tail["result"]["totalCount"], 55);
+    assert_eq!(scoped_tail["result"]["items"].as_array().unwrap().len(), 5);
+    assert_eq!(app.agent(&credential, "items", json!({"projectId":"hidden","status":"todo"}))["ok"], false);
+    assert_eq!(app.agent(&credential, "items", json!({"projectId":null,"status":"todo"}))["result"]["totalCount"], 0);
+    app.item("scoped-change", "kanban");
+    assert_eq!(app.agent(&credential, "items", json!({"status":"todo","cursor":50,"expectedSnapshotRevision":scoped_revision}))["error"], "revision conflict");
+    app.core("stop", json!({"id":"kanban-agent"}));
+}

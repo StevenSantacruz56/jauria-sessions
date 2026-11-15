@@ -18,7 +18,7 @@ One app to capture lightweight work, organize a complete plan as a project with 
 
 ## Operating Context
 
-A project has one explicitly chosen main session and optional sessions related to phases. Business projects do not require a Git repository and do not create worktrees. The existing Git project/task workflow remains separate.
+A project is a Trello-style board with four fixed workflow columns (to do, in progress, waiting, done), one explicitly chosen main session and optional sessions related to phases. Cards open a focused side drawer; creating and moving cards are board actions, not session launches. Business projects do not require a Git repository and do not create worktrees. The existing Git project/task workflow remains separate.
 
 ## Capabilities and Constraints
 
@@ -34,7 +34,8 @@ Existing Jauria source at 70e7c96 and Pulso Site source at 21b9f6fa8f5b65a2a9593
 
 ## Product Principles
 
-- Capture a title first; detail is optional.
+- Capture a title inline first; detail is optional and appears in the card drawer.
+- Moving a card between columns changes workflow state; it preserves the phase sequence and never starts a process.
 - Projects and phases retain explicit session references.
 - Status changes are attributed, reversible and independent of code acceptance.
 - Keep planning queries outside the terminal frame/input loop.

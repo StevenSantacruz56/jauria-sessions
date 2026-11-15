@@ -28,10 +28,11 @@ import { terminalTheme, terminalTypography } from './terminal-theme';
 import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
 import { shell, paneMarkup, icon } from './ui';
 import { mountPulsoPanel } from './pulso-panel';
+import { parseProgramStatus,ProgramStatusTracker } from './program-status';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
-type Session = { terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type Session = { programState?:string|null; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
+type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
@@ -97,6 +98,20 @@ let selectKey = '';
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
 const stopping = new Set<string>();
+const programStatuses=new ProgramStatusTracker();
+const programAlertAt=new Map<string,number>();
+const programAlertTimers=new Map<string,ReturnType<typeof setTimeout>>();
+function cancelProgramAlert(id:string){const timer=programAlertTimers.get(id);if(timer!==undefined)clearTimeout(timer);programAlertTimers.delete(id);}
+function reportProgramAttention(id:string,version:number){
+  const state=programStatuses.get(id);
+  if(!connected||disposed||replaying||version!==loopVersion||!['blocked','error','done'].includes(state??'')||!isLive(views.get(id)?.session??{status:'exited'} as Session)||isAttended(id))return;
+  const remaining=5000-(Date.now()-(programAlertAt.get(id)??-Infinity));
+  if(remaining>0){if(!programAlertTimers.has(id))programAlertTimers.set(id,setTimeout(()=>{programAlertTimers.delete(id);reportProgramAttention(id,version);},remaining));return;}
+  programAlertAt.set(id,Date.now());attention.signal(id,'program');scheduleProgramRefresh();
+}
+let programRefresh:ReturnType<typeof setTimeout>|undefined;
+function scheduleProgramRefresh(){if(programRefresh!==undefined)return;programRefresh=setTimeout(()=>{programRefresh=undefined;if(connected&&!disposed)refresh();},100);}
+function programLabel(id:string){const state=programStatuses.get(id);return state?({working:'Trabajando',blocked:'Solicita atención',error:'Error informado',done:'Turno finalizado',idle:'En espera'}[state]):'';}
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const newDialog = $<HTMLDialogElement>('#new-session-dialog');
 const stopDialog = $<HTMLDialogElement>('#stop-session-dialog');
@@ -246,8 +261,8 @@ function refresh() {
   const planning = taskScreen === 'pulso';
   $('#pulso-panel-host').hidden = !planning;
   $('#open-pulso').setAttribute('aria-pressed', String(planning));
-  $<HTMLButtonElement>('#open-pulso').disabled = !connected || runner?.pulsoVersion !== 1 || !runner?.pulsoAvailable;
-  $('#open-pulso').title = runner?.pulsoVersion !== 1 ? 'Pulso necesita un runner con proyectos y fases' : runner?.pulsoAvailable ? 'Planes y pendientes en este Mac' : 'Pulso no disponible; sus datos se conservan';
+  $<HTMLButtonElement>('#open-pulso').disabled = !connected || runner?.pulsoBoardVersion !== 1 || !runner?.pulsoAvailable;
+  $('#open-pulso').title = runner?.pulsoBoardVersion !== 1 ? 'El tablero necesita el runner actualizado; tus sesiones se conservan' : runner?.pulsoAvailable ? 'Planes y pendientes en este Mac' : 'Pulso no disponible; sus datos se conservan';
   if (planning !== pulsoShown) { pulsoShown = planning; if (planning) pulsoPanel?.show(); else pulsoPanel?.hide(); }
 
   if(handoffContext && $<HTMLTextAreaElement>('#handoff-context-text').value!==handoffContext){$<HTMLTextAreaElement>('#handoff-context-text').value=handoffContext;text('#handoff-context-status','');}
@@ -265,7 +280,7 @@ function refresh() {
   const historyWarnings = [...views.values()].filter(view => !isLocalHistoryLimit(streamMetadata(view.session)?.history) && ['limited','error','incomplete','unknown_tail'].includes(streamMetadata(view.session)?.history.state ?? '')).length;
   text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · límite de guardado local alcanzado':level ? ` · uso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
-  const sessions = [...views.values()].map(v => v.session);
+  const sessions = [...views.values()].map(v => ({...v.session,programState:programStatuses.get(v.session.id)}));
   const attended = activeView()?.session.id;
   // Viewing consumes transient activity even when no new focus event occurs
   // (for example, the currently focused process exits). Persistent causes stay.
@@ -403,7 +418,7 @@ function refresh() {
         button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
         (button.querySelector('.state-dot') as HTMLElement).dataset.state = alert ? 'attention' : s.status;
         button.querySelector('.session-item-title')!.textContent = s.title;
-        button.querySelector('.session-item-meta')!.textContent = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : statusLabel(s.status)}`;
+        button.querySelector('.session-item-meta')!.textContent = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : [statusLabel(s.status),programLabel(s.id)].filter(Boolean).join(' · ')}`;
         button.title = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
         button.addEventListener('click', () => selectSession(s.id)); section.append(button);
       }
@@ -473,7 +488,15 @@ function ensure(session: Session): View {
   });
   const signal = () => { if (!replaying && !streamReplaying(views.get(session.id)) && connected && inputVersion === loopVersion && !isAttended(session.id)) attention.signal(session.id, 'bell'); };
   const terminalAttention = attachTerminalAttention(term, signal);
-  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose(); } };
+  const programReport=term.parser.registerOscHandler(7501,data=>{
+    const state=parseProgramStatus(data);if(state===null)return true;
+    if(replaying||streamReplaying(views.get(session.id))||!connected||inputVersion!==loopVersion||!isLive(views.get(session.id)?.session??session))return true;
+    const result=programStatuses.set(session.id,state,!!isAttended(session.id));
+    if(state==='clear'||state==='working'||state==='idle'){attention.clearProgram(session.id);cancelProgramAlert(session.id);}
+    if(result.attention)reportProgramAttention(session.id,inputVersion);
+    if(result.changed)scheduleProgramRefresh();return true;
+  });
+  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose();programReport.dispose();programStatuses.clear(session.id);programAlertAt.delete(session.id);cancelProgramAlert(session.id);attention.clearProgram(session.id); } };
   term.options.disableStdin = replaying;
   views.set(session.id, view);configureConversation(view);
   return view;
@@ -482,7 +505,7 @@ function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   if (status.workspaceNotModified && runner && runner.generation === status.generation) status = { ...status, projects:runner.projects, tasks:runner.tasks };
   runner = status;
-  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session))stopping.delete(session.id);}
+  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);programAlertAt.delete(session.id);cancelProgramAlert(session.id);attention.clearProgram(session.id);}}
   refresh();
 }
 function scheduleResize(view: View) {
@@ -815,7 +838,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear(); stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();programStatuses.reset();programAlertAt.clear();for(const id of programAlertTimers.keys())cancelProgramAlert(id);if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1360,17 +1383,18 @@ void probeTools();
 pulsoPanel = mountPulsoPanel({
   host: $('#pulso-panel-host'),
   request: async (op, args) => {
-    if (!connected || runner?.pulsoVersion !== 1 || !runner.pulsoAvailable) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
+    if (!connected || runner?.pulsoBoardVersion !== 1 || !runner.pulsoAvailable) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
     const generation = runner.generation;
     const response = await invoke<{ok:boolean;result:unknown;error?:string}>('pulso_request', {op,args});
     if (!runner || runner.generation !== generation || disposed) throw new Error('La conexión cambió. Consulta el estado antes de continuar.');
     if (!response.ok) throw new Error(response.error ?? 'Pulso no confirmó la operación.');
     return response.result;
   },
-  sessions: () => [...views.values()].map(view => view.session),
+  sessions: () => [...views.values()].map(view => ({...view.session,programState:programStatuses.get(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
   newSession: cwd => openNew(cwd ?? null),
+  backToTerminal: () => {taskScreen='terminal';refresh();for(const pane of panes)if(pane.id)scheduleResize(views.get(pane.id)!);focusView(activeView());},
   notice: text => notice(text),
   binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
   resumeSession: async sourceId => {

@@ -11,7 +11,7 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
 
-**Versión actual: 1.1.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.1.0](docs/RELEASE_1.1.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
+**Versión actual: 1.2.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.2.0](docs/RELEASE_1.2.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
@@ -48,23 +48,27 @@ En **Configuración…** puedes elegir la apariencia y el máximo de sesiones. E
 
 Actualizar el código o reemplazar la app no actualiza un runner que ya está ejecutándose. Si Información → Diagnóstico indica un runner anterior, termina primero el trabajo activo y usa **Reiniciar runner…**. Las nuevas opciones de capacidad, renombrado y lanzamiento se habilitan con el runner actualizado; las preferencias nativas de permisos se aplican a sesiones nuevas.
 
-## Planes, fases y sesiones en una app
+## Pulso: un tablero por proyecto
 
-**Pulso · Proyectos y fases** reúne pendientes y planes dentro de Jauria. Un proyecto de trabajo o de negocio representa tu plan completo y conserva una sesión principal; sus fases pueden vincular otras sesiones y guardar puntos de continuidad. Solo necesitas un título para empezar, sin registrar un repositorio. Jira puede conservar el detalle del trabajo.
+Pulso 1.2.0 presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Cada proyecto tiene su pestaña; **Pendientes** es una pestaña fija para tarjetas sin proyecto, incluidas las terminadas. **Repositorios** conserva aparte el trabajo Git.
 
-Al crear un proyecto, la casilla de sesión principal viene marcada y captura la sesión actual si está disponible; puedes desmarcarla o cambiarla después. **Repositorios** mantiene aparte las carpetas y tareas Git.
+1. Pulsa **Nuevo proyecto**, escribe el nombre y confirma **Crear proyecto**. Si hay sesión actual, la casilla para usarla como principal aparece marcada; puedes desmarcarla. El proyecto se abre como pestaña de tablero.
+2. Usa **Añadir fase** dentro de cualquiera de las tres primeras columnas. En Pendientes, la acción es **Añadir pendiente**.
+3. Arrastra el agarre de una tarjeta a otra columna o usa el selector **Mover** con el teclado. Cambia el estado conservando el orden de fases; no hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
+4. **Abrir** en una tarjeta muestra el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
+5. **Plan y sesiones**, en la barra del tablero del proyecto, abre el plan opcional, la sesión principal, los vínculos y los permisos; esos controles quedan fuera del tablero.
 
-Al seleccionar una fase puedes enfocar su sesión viva, ver el historial o preparar contexto editable con el último checkpoint y la siguiente acción. Puedes copiarlo y abrir una sesión nueva vacía; no se envía al agente. El detalle muestra los últimos 10 checkpoints y **Ver puntos anteriores** carga otros 10. Las conversaciones Claude cuya identidad reservó Jauria permiten intentar reanudar por su ID exacto, sin garantizar historial del proveedor. Si existe una continuación viva, puedes volver a ella; la reanudación conserva metadatos de origen y añade el vínculo al plan. Codex conserva terminal, historial y contexto; la captura de su ID para reanudación nativa no está disponible.
+Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos explícitos acotados por proyecto y políticas revocables; MCP, importación del Site y sincronización en la nube siguen pendientes.
 
-Puedes conceder a una sesión acceso explícito para registrar planes y mover fases mediante la CLI local de Pulso. La casilla de recordar empieza desmarcada; puedes gestionar y revocar las políticas guardadas. El acceso no comparte toda tu agenda ni reemplaza los permisos nativos. La integración usa CLI; MCP queda pendiente. No hay importación automática del Site ni sincronización en la nube.
+Cuando un programa emite explícitamente **OSC 7501**, la vista viva puede mostrar su estado. Es una señal cosmética, no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión no hay estado de programa; el replay no genera estados ni avisos y la reconexión reinicia este estado efímero.
 
-Las consultas se paginan en SQL. Pulso tiene un presupuesto de 64 MiB lógicos/100.000 filas, más un margen de 1 MiB/2.000 filas solo para identidades de permisos y políticas, y un límite físico de 128 MiB para su propia base. Las lecturas continúan al alcanzar el presupuesto; no hay borrado automático ni exportación desde la interfaz. Consulta [la guía de Pulso y respaldo consistente de SQLite](docs/PULSO.md).
+El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md) y [la entrega 1.2.0](docs/RELEASE_1.2.0.md).
 
-La activación de la app instalada y las pruebas con el perfil real no se han realizado para 1.1.0. Los recuentos finales de pruebas y métricas quedan pendientes del cierre de validación.
+La entrega local **1.2.0** está compilada y su DMG verificado. Consulta [las pruebas y límites de validación](docs/PULSO_VALIDATION_1.2.0.md). La vista de ejemplo utiliza otro perfil; no se sustituyeron sesiones del perfil habitual ni se publicó este instalador.
 
-![Pulso · Jauria 1.1.0](docs/screenshots/pulso-1.1.0.png)
+![Pulso · Jauria 1.2.0](docs/screenshots/pulso-1.2.0.png)
 
-Pulso: un proyecto representa el plan completo, con fases y puntos para continuar. Captura sintética de la interfaz; no contiene datos de sesiones reales.
+Tablero de ejemplo en Jauria 1.2.0. Captura sintética: no contiene sesiones ni tareas reales.
 
 ## Sesiones, repositorios e historial
 

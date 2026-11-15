@@ -528,7 +528,7 @@ impl Shared {
 }
 fn operate(s: &mut store::Store, p: &mut store::Principal, op: &str, a: &Value) -> Result<Value> {
     match op {
-        "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
+        "board" | "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
             s.read(p, op, a)
         }
         "project_create" | "project_update" | "item_create" | "item_update" | "link"
@@ -633,6 +633,7 @@ fn public_error(e: &anyhow::Error) -> String {
         "session unavailable",
         "session is not live",
         "revision conflict",
+        "stale board snapshot",
         "requestId reused with different body",
         "not found or not authorized",
         "id already exists",
@@ -1268,6 +1269,16 @@ mod tests {
         assert!(f.agent(handle["token"].as_str().unwrap(),"project",json!({"id":"p"})).is_ok());
         f.ui("revoke_policy",json!({"id":grant["policyId"]})).unwrap();
         assert!(f.agent(handle["token"].as_str().unwrap(),"project",json!({"id":"p"})).is_err());
+    }
+
+    #[test]
+    fn board_endpoint_is_ui_only_and_does_not_expand_agent_scope() {
+        let f=Fixture::new();
+        f.ui("project_create",json!({"id":"board","requestId":"board","title":"Board"})).unwrap();
+        let token=f.grant();
+        assert_eq!(f.ui("board",json!({"projectId":"board"})).unwrap()["columns"]["todo"]["totalCount"],0);
+        assert!(f.agent(&token,"board",json!({"projectId":null})).is_err());
+        assert!(f.agent(&token,"board",json!({"projectId":"board"})).is_err());
     }
 
 }

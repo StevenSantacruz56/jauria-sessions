@@ -1,6 +1,6 @@
 import './pulso-panel.css';
 
-export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string };
+export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:string|null };
 type Timestamp = number | string;
 export type PulsoProject = { id: string; title: string; plan: string; mainSessionId: string | null; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp };
 export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null };
@@ -14,6 +14,7 @@ export type PulsoPanelOptions = {
   newSession: (cwd?: string) => void;
   currentSession: () => Session | null;
   notice: (text: string) => void;
+  backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
 };
@@ -55,34 +56,51 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   const root = el('section', '', 'pulso-panel'); root.hidden = true; root.setAttribute('aria-label', 'Pulso');
   const header = el('header', '', 'pulso-header'); const heading = el('div');
-  heading.append(el('h1', 'Pulso'), el('p', 'Planes, fases y un punto claro para continuar.', 'pulso-muted'));
-  header.append(heading, button('Actualizar', () => refresh()));
+  heading.append(el('h1', 'Pulso'), el('p', 'Tu trabajo, de una fase a la siguiente.', 'pulso-muted'));
+  const headerActions=el('div','','pulso-header-actions');
+  if(options.backToTerminal)headerActions.append(button('Volver a terminal',()=>options.backToTerminal!(),'quiet'));
+  headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'),button('Actualizar',()=>refresh(),'quiet'));
+  header.append(heading,headerActions);
   const feedback = el('div', '', 'pulso-feedback'); feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   const errors = el('div', '', 'pulso-error'); errors.hidden = true; errors.setAttribute('role', 'alert');
   const undoSlot = el('div', '', 'pulso-undo');
-  const layout = el('div', '', 'pulso-layout'); const outline = el('nav', '', 'pulso-outline'); outline.setAttribute('aria-label', 'Proyectos y pendientes');
-  const capture = el('form', '', 'pulso-capture');
-  const captureTitle = field('Captura rápida', false, 240); captureTitle.input.placeholder = '¿Qué sigue?'; captureTitle.input.required = true;
-  const captureKind = select('Guardar como', [['item', 'Pendiente independiente'], ['project', 'Proyecto']]);
-  const captureSave = el('button', 'Añadir', 'primary'); captureSave.type = 'submit';
-  const originLabel=el('label','','pulso-check');
-  const originCheck=el('input');originCheck.type='checkbox';originCheck.checked=true;
-  const originText=el('span');originLabel.append(originCheck,originText);originLabel.hidden=true;
-  function syncOrigin(){const session=options.currentSession();originLabel.hidden=captureKind.input.value!=='project'||!session;originText.textContent=session?`Usar «${session.title}» como sesión principal`:'';}
-  captureKind.input.addEventListener('change',syncOrigin);
+  const outline=el('nav','','pulso-tabs');outline.setAttribute('aria-label','Tableros de Pulso');
+  const projectList=el('div','','pulso-project-tabs');outline.append(projectList);
+  const toolbar=el('div','','pulso-board-toolbar');
+  const board=el('div','','pulso-board');board.setAttribute('aria-label','Tablero de trabajo');
+  const drawer=el('dialog','','pulso-drawer');drawer.setAttribute('aria-label','Detalle de Pulso');
+  const drawerHeader=el('header','','pulso-drawer-header');const drawerTitle=el('h2','Detalle');
+  const closeDetail=button('',()=>closeDrawer(),'quiet');closeDetail.setAttribute('aria-label','Cerrar detalle');closeDetail.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';drawerHeader.append(drawerTitle,closeDetail);
+  const drawerMessages=el('div','','pulso-drawer-messages');
+  const detail=el('section','','pulso-detail');detail.setAttribute('aria-label','Detalle de Pulso');drawer.append(drawerHeader,drawerMessages,detail);
+  drawer.addEventListener('cancel',event=>{event.preventDefault();closeDrawer();});
+  root.append(header,outline,feedback,errors,undoSlot,toolbar,board,drawer);options.host.append(root);
+  const capture=el('form','','pulso-capture');const captureTitle=field('Nombre del proyecto',false,240);captureTitle.input.required=true;captureTitle.input.placeholder='Por ejemplo: lanzar mi aplicación';
+  const originLabel=el('label','','pulso-check');const originCheck=el('input');originCheck.type='checkbox';originCheck.checked=true;
+  const originText=el('span');originLabel.append(originCheck,originText);
+  function syncOrigin(){const session=options.currentSession();originLabel.hidden=!session;originText.textContent=session?`Usar «${session.title}» como sesión principal`:'';}
+  capture.append(captureTitle.wrap,originLabel);const captureSave=el('button','Crear proyecto','primary');captureSave.type='submit';capture.append(captureSave,button('Cancelar',()=>{dirty=false;activeEditor=null;closeDrawer();},'quiet'));
   const grantPreferences=new Map<string,{sessionId:string;remember:boolean}>();
-  capture.append(captureTitle.wrap, captureKind.wrap, originLabel, captureSave);
-  const projectList = el('div'); const standalone = el('div');
-  outline.append(capture, el('h2', 'Proyectos'), projectList, el('h2', 'Pendientes independientes'), standalone);
-  const detail = el('section', '', 'pulso-detail'); detail.setAttribute('aria-label', 'Detalle de Pulso');
-  detail.append(el('h2', 'Elige un proyecto o una fase'), el('p', 'Captura un título para empezar. Después puedes añadir el plan y registrar checkpoints.', 'pulso-muted'));
-  layout.append(outline, detail); root.append(header, feedback, errors, undoSlot, layout); options.host.append(root);
   let disposed = false, visible = false, timer: ReturnType<typeof setTimeout> | undefined;
   let revision: unknown, refreshing: Promise<void> | null = null, refreshGeneration = 0, generation = 0, selectionEpoch = 0;
-  let projects: Page<PulsoProject> = { rows: [], hasMore: false }, pending: Page<PulsoItem> = { rows: [], hasMore: false };
+  let projects: Page<PulsoProject> = { rows: [], hasMore: false };
   let phases: Page<PulsoItem> = { rows: [], hasMore: false };
   let selectedProject: PulsoProject | null = null, selectedItem: PulsoItem | null = null;
   let checkpointHasMore=false, checkpointCursor=10;
+  type ColumnPage=Page<PulsoItem>&{totalCount:number};
+  const statuses=Object.keys(labels) as PulsoItem['status'][];
+  const emptyColumns=()=>Object.fromEntries(statuses.map(status=>[status,{rows:[],hasMore:false,totalCount:0}])) as unknown as Record<PulsoItem['status'],ColumnPage>;
+  let columns=emptyColumns(),boardRevision:unknown,boardScope:string|null|undefined;
+  let boardProject:PulsoProject|null=null,navigating=false;
+  let drawerRestore=false,dragging=false;let cancelActiveDrag:(()=>void)|null=null;
+  let drawerKind:'item'|'project'|'create'|null=null;
+  let intentionalCloses=0;let drawerFocus:HTMLElement|null=null;
+  drawer.addEventListener('focusin',event=>{if(event.target instanceof HTMLElement)drawerFocus=event.target;});
+  drawer.addEventListener('close',()=>{
+    if(intentionalCloses>0){intentionalCloses--;return;}
+    if(dirty||failed||busy){drawerRestore=true;queueMicrotask(()=>{if(available()&&!drawer.open&&drawerKind){const returnFocus=drawerFocus;openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;if(returnFocus?.isConnected)returnFocus.focus({preventScroll:true});}});}
+    else{hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;freeze();}
+  });
   const sessionSignature=()=>JSON.stringify(options.sessions().map(s=>[s.id,s.status,s.title]));
   let shownSessions='';
   let projectLinks: Link[] = [], dirty = false, busy = false, activeEditor: HTMLElement | null = null;
@@ -95,7 +113,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function freeze() {
     root.setAttribute('aria-busy', String(busy));
     for (const n of Array.from(root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button,input,select,textarea'))) {
-      n.disabled = busy || (!!failed && !errors.contains(n)) || (dirty && !!activeEditor && !activeEditor.contains(n) && !errors.contains(n));
+      n.disabled = busy || (navigating&&(board.contains(n)||toolbar.contains(n))) || (!!failed && !errors.contains(n)) || (dirty && !!activeEditor && !activeEditor.contains(n) && !errors.contains(n));
     }
   }
   async function request(op: string, args: Record<string, unknown> = {}) {
@@ -124,7 +142,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         button('Reintentar mismo cambio', () => mutate(m)),
         button('Consultar versión actual', () => inspectRevision(m)),
         button('Liberar borrador', () => {
-          failed = null; errors.hidden = true; freeze();
+          failed = null; errors.hidden = true;if(!drawer.open)renderLists();freeze();
           say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');
         }));
     } finally { busy = false; if (!disposed) freeze(); }
@@ -141,7 +159,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       const remote = el('pre', [record.title, record.status && labels[record.status as PulsoItem['status']], record.plan ?? record.note,
         ...(result.checkpoints ?? []).map((c: PulsoCheckpoint) => `${c.brief}\n${c.nextAction}`)].filter(Boolean).join('\n\n'), 'pulso-prose');
       errors.append(el('h3', `Versión actual · revisión ${record.revision}`), remote);
-      if (editBase && m.args.expectedRevision !== undefined) errors.append(button('Revisé los cambios; conservar mi borrador', () => {
+      if(!drawer.open)errors.append(button('Actualizar tablero',async()=>{failed=null;errors.hidden=true;try{await reloadBoard();}catch{readError(()=>refresh());}freeze();}));
+      if (drawer.open && editBase && m.args.expectedRevision !== undefined) errors.append(button('Revisé los cambios; conservar mi borrador', () => {
         if (editBase) editBase.revision = record.revision;
         failed = null; errors.hidden = true; freeze(); say('Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');
       }));
@@ -157,64 +176,115 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     if (data.hasMore && (!batch.length || cursor === previous?.cursor)) throw Error('Cursor no válido');
     return { rows, hasMore: !!data.hasMore, cursor };
   }
+  function openDrawer(kind:'item'|'project'|'create',title:string){drawerKind=kind;drawerTitle.textContent=title;drawerMessages.append(feedback,errors);if(!drawer.open&&available())drawer.showModal();}
+  function hideDrawer(){if(drawer.open){intentionalCloses++;drawer.close();}root.insertBefore(feedback,toolbar);root.insertBefore(errors,toolbar);}
+  function closeDrawer(){if(busy)return;if(dirty||failed){say('Guarda los cambios o descarta el borrador antes de cerrar.');return;}hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;}
+  function newProject(){if(dirty||failed||busy)return;selectionEpoch++;navigating=false;selectedProject=boardProject;selectedItem=null;detail.replaceChildren(capture);captureTitle.input.value='';syncOrigin();openDrawer('create','Nuevo proyecto');captureTitle.input.focus();}
   function renderLists() {
-    const focused = document.activeElement instanceof HTMLElement && outline.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
-    projectList.replaceChildren(); standalone.replaceChildren();
-    if (!projects.rows.length) projectList.append(el('p', 'Aún no hay proyectos. Crea uno con un título.', 'pulso-empty'));
-    for (const project of projects.rows) {
-      const b = button(project.title, () => chooseProject(project.id), 'pulso-row');
-      b.dataset.focusKey = `project-${project.id}`;
-      b.setAttribute('aria-current', String(selectedProject?.id === project.id)); projectList.append(b);
-      if (selectedProject?.id === project.id) {
-        const group = el('ol', '', 'pulso-phases');
-        for (const item of [...phases.rows].sort((a, b) => a.position - b.position || time(a.createdAt) - time(b.createdAt) || a.id.localeCompare(b.id))) {
-          const li = el('li'); li.append(itemButton(item)); group.append(li);
-        }
-        projectList.append(group);
-        if (!phases.rows.length) projectList.append(el('p', 'Sin fases todavía.', 'pulso-empty'));
-        if (phases.hasMore) projectList.append(button('Cargar más fases', () => loadMore('phases')));
+    const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
+    projectList.replaceChildren();
+    const pendingTab=button('Pendientes',()=>choosePending(),'pulso-tab');pendingTab.setAttribute('aria-current',String(!selectedProject));projectList.append(pendingTab);
+    for(const project of projects.rows){const b=button(project.title,()=>chooseProject(project.id),'pulso-tab');b.dataset.focusKey=`project-${project.id}`;b.setAttribute('aria-current',String(selectedProject?.id===project.id));projectList.append(b);}
+    if(projects.hasMore)projectList.append(button('Más proyectos',()=>loadMoreProjects(),'quiet'));
+    if(!dirty&&!failed&&!dragging)renderBoard();freeze();
+    if(focus&&available())Array.from(outline.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
+  }
+  function renderBoard(){
+    const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
+    const scrolls=new Map(Array.from(board.querySelectorAll<HTMLElement>('.pulso-cards')).map(n=>[n.dataset.status,n.scrollTop]));
+    toolbar.replaceChildren();const name=el('div');name.append(el('h2',selectedProject?.title??'Pendientes'));
+    const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
+    name.append(el('p',total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'} · arrastra entre columnas`:'Añade una tarjeta en la columna donde quieras empezar.','pulso-progress'));toolbar.append(name);
+    if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet'));
+    board.replaceChildren();
+    for(const status of statuses){
+      const column=el('section','','pulso-column');column.dataset.state=status;column.setAttribute('aria-label',labels[status]);
+      const h=el('header');h.append(el('h3',labels[status]),el('span',String(columns[status].totalCount),'pulso-count'));column.append(h);
+      const cards=el('div','','pulso-cards');cards.dataset.status=status;
+      for(const item of columns[status].rows)cards.append(itemCard(item));
+      if(!columns[status].rows.length)cards.append(el('p',status==='done'?'Lo que termines aparecerá aquí.':status==='waiting'?'Trabajo que necesita algo antes de seguir.':status==='doing'?'Pon aquí la fase en la que estás trabajando.':'Captura el siguiente paso.','pulso-empty'));
+      if(columns[status].hasMore)cards.append(button('Ver más tarjetas',()=>loadMoreColumn(status),'quiet'));
+      column.append(cards);
+      if(status!=='done'){
+        const add=el('form','','pulso-add-form');add.hidden=true;
+        const title=field(selectedProject?'Título de la fase':'Título del pendiente',false,240);title.input.required=true;title.input.placeholder='Escribe un título';
+        const trigger=button(selectedProject?'Añadir fase':'Añadir pendiente',()=>{if(busy||dirty||failed)return;add.hidden=false;trigger.hidden=true;title.input.focus();},'quiet pulso-add-trigger');
+        const cancel=button('Cancelar',()=>{dirty=false;activeEditor=null;add.hidden=true;trigger.hidden=false;title.input.value='';freeze();},'quiet');
+        add.append(title.wrap);submit(add,'Añadir tarjeta',()=>write('item_create',{id:crypto.randomUUID(),projectId:selectedProject?.id??null,title:title.input.value.trim(),status},async()=>{dirty=false;activeEditor=null;await reloadBoard();}));add.append(cancel);column.append(trigger,add);
       }
+      board.append(column);cards.scrollTop=scrolls.get(status)??0;
     }
-    if (projects.hasMore) projectList.append(button('Cargar más proyectos', () => loadMore('projects')));
-    const open = pending.rows.filter(i => i.status !== 'done');
-    if (!open.length) standalone.append(el('p', 'Sin pendientes en esta página.', 'pulso-empty'));
-    for (const item of open) standalone.append(itemButton(item));
-    if (pending.hasMore) standalone.append(button('Cargar más pendientes', () => loadMore('pending')));
-    freeze();
-    if (focused && available()) Array.from(outline.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n => n.dataset.focusKey === focused)?.focus({ preventScroll: true });
+    if(focus)Array.from(board.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
   }
-  function itemButton(item: PulsoItem) {
-    const b = button('', () => chooseItem(item), 'pulso-row pulso-item');
-    b.dataset.focusKey = `item-${item.id}`;
-    b.setAttribute('aria-current', String(selectedItem?.id === item.id));
-    const status = el('span', labels[item.status], 'pulso-state'); status.dataset.state = item.status;
-    b.append(el('span', item.title), status); return b;
+  function itemCard(item:PulsoItem){
+    const card=el('article','','pulso-card');card.dataset.itemId=item.id;card.dataset.state=item.status;
+    const open=button('',()=>chooseItem(item),'pulso-card-open');open.dataset.focusKey=`item-${item.id}`;open.setAttribute('aria-label',`Abrir ${item.title}`);
+    open.append(el('span',item.title,'pulso-card-title'));if(item.note)open.append(el('span',item.note,'pulso-card-note'));card.append(open);
+    const footer=el('div','','pulso-card-footer');
+    const move=select(`Mover ${item.title}`,Object.entries(labels),item.status);move.input.classList.add('pulso-card-move');move.input.onchange=()=>{void moveCard(item,move.input.value as PulsoItem['status']);};footer.append(move.input);
+    const handle=button('',()=>say('Arrastra esta tarjeta a otra columna o utiliza el menú Mover.'),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);
+    handle.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-linecap="round"/></svg>';
+    handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));footer.append(handle);card.append(footer);return card;
   }
-  async function loadMore(target: 'projects' | 'pending' | 'phases') {
-    if (busy || disposed) return;
-    busy = true; freeze(); const epoch = selectionEpoch, gen = generation;
-    try {
-      const old = target === 'projects' ? projects : target === 'pending' ? pending : phases;
-      const next = target === 'projects'
-        ? await page<PulsoProject>('projects', 'projects', { archived: false }, old as Page<PulsoProject>)
-        : await page<PulsoItem>('items', 'items', { projectId: target === 'pending' ? null : selectedProject?.id, archived: false }, old as Page<PulsoItem>);
-      if (disposed || gen !== generation || epoch !== selectionEpoch) return;
-      if (target === 'projects') projects = next as Page<PulsoProject>;
-      else if (target === 'pending') pending = next as Page<PulsoItem>; else phases = next as Page<PulsoItem>;
-      renderLists();
-    } catch { readError(() => loadMore(target)); }
-    finally { busy = false; if (!disposed) freeze(); }
+  function startDrag(event:PointerEvent,item:PulsoItem,card:HTMLElement,handle:HTMLElement){
+    if(event.button!==0||busy||dirty||failed)return;event.preventDefault();dragging=true;handle.setPointerCapture(event.pointerId);let target:PulsoItem['status']|null=null;card.classList.add('is-dragging');
+    const move=(e:PointerEvent)=>{for(const c of Array.from(board.querySelectorAll('.is-drop-target')))c.classList.remove('is-drop-target');const col=document.elementFromPoint(e.clientX,e.clientY)?.closest<HTMLElement>('.pulso-column');target=(col?.dataset.state as PulsoItem['status'])??null;col?.classList.add('is-drop-target');};
+    const finish=(e:PointerEvent)=>{cancelActiveDrag=null;document.removeEventListener('keydown',keyCancel);handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',cancel);handle.removeEventListener('lostpointercapture',cancel);if(handle.hasPointerCapture(e.pointerId))handle.releasePointerCapture(e.pointerId);card.classList.remove('is-dragging');for(const c of Array.from(board.querySelectorAll('.is-drop-target')))c.classList.remove('is-drop-target');dragging=false;if(target&&target!==item.status)void moveCard(item,target);else if(available()&&!dirty&&!failed)renderBoard();};
+    const cancel=(e:PointerEvent)=>{target=null;finish(e);};const keyCancel=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();cancel(event);}};cancelActiveDrag=()=>cancel(event);document.addEventListener('keydown',keyCancel);handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',cancel);handle.addEventListener('lostpointercapture',cancel);
+  }
+  async function moveCard(item:PulsoItem,status:PulsoItem['status']){
+    if(!available()||busy||dirty||failed||status===item.status)return;
+    say('Moviendo tarjeta…');await write('item_update',{id:item.id,status,expectedRevision:item.revision},async data=>{setUndo(item.id,item.status,data.item.revision);await reloadBoard();});
+  }
+  async function readBoard(projectId:string|null,ifRevision?:unknown){
+    const epoch=selectionEpoch,gen=generation;
+    const current=()=>available()&&!dragging&&epoch===selectionEpoch&&gen===generation&&(selectedProject?.id??null)===projectId;
+    const cachedRevision=boardScope===projectId?ifRevision:undefined;
+    const data=await request('board',{projectId,...(cachedRevision!==undefined?{ifRevision:cachedRevision}:{})});
+    if(!current()||(typeof boardRevision==='number'&&typeof data.revision==='number'&&data.revision<boardRevision))return false;
+    if(data.unchanged)return false;
+    const next=emptyColumns();
+    await Promise.all(statuses.map(async status=>{
+      const first=data.columns?.[status];if(!first||!Array.isArray(first.items))throw Error('Tablero no válido');
+      let page:ColumnPage={rows:first.items,hasMore:!!first.hasMore,cursor:first.nextCursor,totalCount:first.totalCount};
+      const retain=boardScope===projectId?columns[status].rows.length:0;
+      // Re-fetch the expanded prefix against one revision, never mix old pages
+      // with a fresh snapshot or collapse a reader's expanded column on polling.
+      while(page.hasMore&&page.rows.length<retain){
+        if(!current())return;
+        const size=Math.min(50,retain-page.rows.length);
+        const more=await request('items',{projectId,status,archived:false,limit:size,cursor:page.cursor,expectedSnapshotRevision:data.revision});
+        if(!Array.isArray(more.items)||!more.items.length)throw Error('Página no válida');
+        page={rows:[...page.rows,...more.items],hasMore:!!more.hasMore,cursor:more.nextCursor,totalCount:more.totalCount};
+      }
+      next[status]=page;
+    }));
+    if(!current()||(typeof boardRevision==='number'&&typeof data.revision==='number'&&data.revision<boardRevision))return false;
+    columns=next;boardRevision=data.revision;boardScope=projectId;boardProject=selectedProject;return true;
+  }
+  async function reloadBoard(){if(!available())return;if(!await readBoard(selectedProject?.id??null))return;if(!failed)errors.hidden=true;phases={rows:statuses.flatMap(s=>columns[s].rows),hasMore:false};renderLists();}
+  async function loadMoreColumn(status:PulsoItem['status']){
+    if(busy||dirty||failed)return;busy=true;freeze();const epoch=selectionEpoch,gen=generation,rev=boardRevision;
+    try{const next=await page<PulsoItem>('items','items',{projectId:selectedProject?.id??null,status,archived:false,expectedSnapshotRevision:rev},columns[status]);if(!available()||epoch!==selectionEpoch||gen!==generation||boardRevision!==rev)return;columns[status]={...next,totalCount:columns[status].totalCount};renderBoard();}
+    catch{if(available()&&epoch===selectionEpoch&&gen===generation){readError(()=>refresh());say('El tablero cambió o no se pudo leer esta página. Actualiza para ver las tarjetas vigentes.');}}finally{busy=false;freeze();}
+  }
+  async function loadMoreProjects(){if(busy||dirty||failed)return;busy=true;freeze();try{projects=await page<PulsoProject>('projects','projects',{archived:false},projects);renderLists();}catch{readError(()=>loadMoreProjects());}finally{busy=false;freeze();}}
+  async function choosePending(){
+    if(dirty||failed||busy)return;const epoch=++selectionEpoch;navigating=true;freeze();selectedProject=null;selectedItem=null;hideDrawer();drawerKind=null;
+    try{await reloadBoard();}catch{if(epoch===selectionEpoch&&available()){selectedProject=boardProject;renderLists();readError(()=>choosePending());}}
+    finally{if(epoch===selectionEpoch){navigating=false;freeze();}}
   }
   async function chooseProject(id: string, queryBindings = true) {
     if (!available()) return;
     if (dirty || failed) { say('Guarda tu borrador o pulsa «Descartar borrador» antes de cambiar de detalle.'); return; }
-    const epoch = ++selectionEpoch; const gen = generation; say('Consultando proyecto…');
+    const epoch = ++selectionEpoch; const gen = generation;navigating=true;freeze();say('Consultando proyecto…');
     try {
-      const [data, items, links] = await Promise.all([request('project', { id }), page<PulsoItem>('items', 'items', { projectId: id, archived: false }), request('links', { projectId: id })]);
+      const [data, links] = await Promise.all([request('project', { id }),request('links', { projectId: id })]);
       if (!available() || gen !== generation || epoch !== selectionEpoch || dirty || failed) return;
-      selectedProject = data.project; selectedItem = null; phases = items; projectLinks = links.links ?? [];
-      renderLists(); renderProject(queryBindings); say('');
-    } catch { if (epoch === selectionEpoch) readError(() => chooseProject(id)); }
+      selectedProject = data.project; selectedItem = null;projectLinks = links.links ?? [];
+      await readBoard(id);if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;hideDrawer();drawerKind=null;renderLists();if(!failed)errors.hidden=true;say('');
+    }catch{if(epoch===selectionEpoch&&available()){selectedProject=boardProject;renderLists();readError(()=>chooseProject(id));}}
+    finally{if(epoch===selectionEpoch){navigating=false;freeze();}}
   }
   async function chooseItem(item: PulsoItem, queryBindings = true) {
     if (!available()) return;
@@ -230,7 +300,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (project && phases.rows.some(i => i.projectId !== project!.id)) phases = { rows: [], hasMore: false };
       if (!project) phases = { rows: [], hasMore: false };
       renderLists(); checkpointHasMore=!!data.checkpointsHasMore;checkpointCursor=data.checkpointCursor??10;
-      renderItem(data.item, data.links ?? [], data.checkpoints ?? [], queryBindings); say('');
+      renderItem(data.item, data.links ?? [], data.checkpoints ?? [], queryBindings);openDrawer('item',item.projectId?'Detalle de la fase':'Detalle del pendiente'); say('');
     } catch { if (epoch === selectionEpoch) readError(() => chooseItem(item)); }
   }
   function watch(form: HTMLElement) {
@@ -269,13 +339,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     }
     form.append(title.wrap, planDetails, main.wrap);
     submit(form, 'Guardar proyecto', () => write('project_update', { id: p.id, expectedRevision: base.revision, title: title.input.value.trim(), plan: plan.input.value, mainSessionId: main.input.value || null }, async () => {
-      dirty = false; await chooseProject(p.id); await refresh();
+      dirty=false;await chooseProject(p.id);await refresh();
     })); form.append(discardButton()); detail.append(form);
-    const add = el('form', '', 'pulso-form'); add.append(el('h3', 'Añadir fase'));
-    const phase = field('Título de la fase', false, 240); phase.input.required = true; add.append(phase.wrap);
-    submit(add, 'Añadir fase', () => write('item_create', { id: crypto.randomUUID(), projectId: p.id, title: phase.input.value.trim() }, async () => {
-      dirty = false; await chooseProject(p.id);
-    })); add.append(discardButton()); detail.append(add);
     sessionsBlock(detail, [...new Set([p.mainSessionId, ...projectLinks.map(l => l.sessionId)].filter((id): id is string => !!id))], queryBindings);
     linkBlock(detail, { projectId: p.id }); grantBlock(detail, p.id); freeze();
   }
@@ -291,7 +356,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     form.append(title.wrap, status.wrap, note.wrap);
     submit(form, item.projectId ? 'Guardar fase' : 'Guardar pendiente', () => write('item_update', { id: item.id, expectedRevision: base.revision, title: title.input.value.trim(), note: note.input.value, status: status.input.value }, async data => {
       if (item.status !== data.item.status) setUndo(item.id, item.status, data.item.revision);
-      dirty = false; await chooseItem(data.item); await refresh();
+      dirty=false;await chooseItem(data.item);await reloadBoard();
     })); form.append(discardButton()); detail.append(form);
     const checkpoint = el('form', '', 'pulso-form'); checkpoint.append(el('h3', 'Registrar checkpoint'), el('p', 'Cada registro se añade al historial. Los anteriores se conservan.', 'pulso-muted'));
     const brief = field('Qué quedó listo · hasta 4 000 caracteres', true, 4000); brief.input.required = true;
@@ -300,7 +365,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     checkpoint.append(brief.wrap, next.wrap, session.wrap);
     submit(checkpoint, 'Registrar checkpoint', () => write('checkpoint_create', {
       id: crypto.randomUUID(), itemId: item.id, expectedRevision: base.revision, brief: brief.input.value.trim(), nextAction: next.input.value.trim(), ...(session.input.value ? { sessionId: session.input.value } : {}),
-    }, async data => { dirty = false; await chooseItem(data.item); })); checkpoint.append(discardButton()); detail.append(checkpoint);
+    }, async data => {dirty=false;await chooseItem(data.item);await reloadBoard();})); checkpoint.append(discardButton());const saveAdvance=el('details');saveAdvance.append(el('summary','Guardar avance'),checkpoint);detail.append(saveAdvance);
     const recover = el('section', '', 'pulso-section'); recover.append(el('h3', 'Continuar fase'));
     recover.append(el('p', 'Prepara el contexto, revísalo y cópialo. Tú decides dónde pegarlo.', 'pulso-muted'));
     const composer = el('div'); composer.hidden = true;
@@ -309,9 +374,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     composer.append(context.wrap, button('Copiar contexto', () => copy(context.input.value)), discardButton()); watch(composer);
     const known = options.sessions(); const source = known.find(s => s.id === selectedProject?.mainSessionId) ?? known.find(s => links.some(l => l.sessionId === s.id));
     composer.append(button('Abrir nueva sesión', () => options.newSession(source?.cwd ?? undefined)), el('p', 'Abre una sesión vacía. El contexto no se envía automáticamente.', 'pulso-muted'));
-    recover.append(composer); detail.append(recover);
+    recover.append(composer); detail.insertBefore(recover,form);
+    const latest=[...checkpoints].sort(checkpointOrder).at(-1);if(latest){const preview=el('section','','pulso-checkpoint-preview');preview.append(el('h3','Último avance'),el('p',latest.brief,'pulso-prose'),el('h4','Siguiente paso'),el('p',latest.nextAction,'pulso-prose'));detail.insertBefore(preview,recover);}
     sessionsBlock(detail, [...new Set([selectedProject?.mainSessionId, ...links.map(l => l.sessionId), ...checkpoints.map(c => c.sessionId)].filter((id): id is string => !!id))], queryBindings);
-    linkBlock(detail, { itemId: item.id }); grantBlock(detail, item.projectId ?? undefined);
+    const connections=el('details');connections.append(el('summary','Vincular sesiones y permisos'));linkBlock(connections, { itemId: item.id }); grantBlock(connections, item.projectId ?? undefined);detail.append(connections);
     const history = el('section', '', 'pulso-section'); history.append(el('h3', 'Historial de checkpoints'));
     if (!checkpoints.length) history.append(el('p', 'Todavía no hay checkpoints. Registra uno antes de dejar esta fase.', 'pulso-muted'));
     const entries = el('ol', '', 'pulso-history');
@@ -330,7 +396,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   function setUndo(id: string, status: PulsoItem['status'], expectedRevision: number) {
     undoSlot.replaceChildren(el('span', 'Estado actualizado.'), button('Deshacer cambio de estado', () => write('item_update', { id, expectedRevision, status }, async data => {
-      undoSlot.replaceChildren(); dirty = false; await chooseItem(data.item); await refresh();
+      undoSlot.replaceChildren();dirty=false;if(drawerKind==='item'&&selectedItem?.id===id)await chooseItem(data.item);await reloadBoard();
     })));
   }
   function sessionsBlock(host: HTMLElement, ids: string[], queryBindings: boolean) {
@@ -339,6 +405,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     for (const id of ids) {
       const s = options.sessions().find(s => s.id === id); const row = el('div', '', 'pulso-session');
       row.append(el('span', s?.title ?? id));
+      const stateLabel=el('span','','pulso-muted');stateLabel.dataset.programSession=id;row.append(stateLabel);syncProgramLabels();
       if (s && isLivePulsoSession(s)) row.append(button('Enfocar sesión viva', () => options.openSession(id)));
       else if (s && !['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status)) {
         row.append(el('span', 'Estado por comprobar', 'pulso-muted'), button('Inspeccionar sesión', () => options.openSession(id)));
@@ -367,7 +434,11 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       }
       section.append(row);
     }
-    host.append(section);
+    host.append(section);syncProgramLabels();
+  }
+  function syncProgramLabels(){
+    const sessions=new Map(options.sessions().map(s=>[s.id,s]));const text:Record<string,string>={working:'Trabajando',blocked:'Solicita atención',error:'Error informado',done:'Turno finalizado',idle:'En espera'};
+    for(const label of Array.from(detail.querySelectorAll<HTMLElement>('[data-program-session]'))){const state=sessions.get(label.dataset.programSession!)?.programState;label.textContent=state&&text[state]?`${text[state]} · informado por el programa`:'';}
   }
   function linkBlock(host: HTMLElement, scope: { itemId: string } | { projectId: string }) {
     const section = el('form', '', 'pulso-form'); const s = select('Vincular una sesión existente', [['', 'Seleccionar sesión'], ...sessionOptions()]); s.input.required = true;
@@ -446,33 +517,24 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   function formatDate(value: Timestamp) { const n = time(value); return n ? new Date(n).toLocaleString('es') : String(value); }
   capture.onsubmit = e => {
-    e.preventDefault(); if (busy || failed || !capture.reportValidity()) return;
-    const title = captureTitle.input.value.trim(); if (!title) { captureTitle.input.setCustomValidity('Escribe un título.'); captureTitle.input.reportValidity(); return; }
-    const project = captureKind.input.value === 'project';
-    void write(project ? 'project_create' : 'item_create', { id: crypto.randomUUID(), title, ...(project&&originCheck.checked&&options.currentSession()?{mainSessionId:options.currentSession()!.id}:{}) }, async () => {
-      captureTitle.input.value = ''; await refresh();
-    });
+    e.preventDefault();if(busy||failed||!capture.reportValidity())return;const title=captureTitle.input.value.trim();if(!title)return;
+    void write('project_create',{id:crypto.randomUUID(),title,...(originCheck.checked&&options.currentSession()?{mainSessionId:options.currentSession()!.id}:{})},async data=>{dirty=false;activeEditor=null;captureTitle.input.value='';projects=await page<PulsoProject>('projects','projects',{archived:false});await chooseProject(data.project.id);});
   };
-  captureTitle.input.addEventListener('input', () => captureTitle.input.setCustomValidity(''));
-  async function refresh(): Promise<void> {
-    if (!available()) return;
-    if (refreshing) return refreshGeneration === generation ? refreshing : refreshing.then(() => refresh());
-    const gen = generation, epoch = selectionEpoch; refreshGeneration = gen;
-    refreshing = (async () => {
-      try {
-        const nextRevision = (await request('revision')).revision;
-        const [ps, items] = await Promise.all([page<PulsoProject>('projects', 'projects', { archived: false }), page<PulsoItem>('items', 'items', { projectId: null, archived: false })]);
-        if (disposed || !available() || gen !== generation) return;
-        // List responses may contain plans; detail always comes from project{id}.
-        projects = { ...ps, rows: ps.rows.map(p => ({ ...p, plan: '' })) }; pending = items; revision = nextRevision;
-        shownSessions=sessionSignature(); renderLists(); if (!failed) errors.hidden = true;
-        if (dirty || failed) { say('Lista actualizada. Tu borrador se conserva.'); return; }
-        if (epoch !== selectionEpoch) return;
-        if (selectedItem) await chooseItem(selectedItem, false); else if (selectedProject) await chooseProject(selectedProject.id, false);
-        else say('');
-      } catch { if (!disposed && available() && gen === generation && !failed) readError(() => refresh()); }
-    })().finally(() => { refreshing = null; });
-    return refreshing;
+  watch(capture);
+  async function refresh():Promise<void>{
+    if(!available()||dragging||busy||navigating)return;if(refreshing)return refreshing;
+    const gen=generation,epoch=selectionEpoch;
+    refreshing=(async()=>{try{
+      const ps=await page<PulsoProject>('projects','projects',{archived:false});
+      if(!available()||gen!==generation||epoch!==selectionEpoch)return;
+      projects={...ps,rows:ps.rows.map(p=>({...p,plan:''}))};
+      if(dirty||failed){say('Tu borrador se conserva. Guarda o descarta antes de actualizar el detalle.');return;}
+      const changed=await readBoard(selectedProject?.id??null,boardRevision);
+      if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
+      const sessionsChanged=shownSessions!==sessionSignature();shownSessions=sessionSignature();revision=boardRevision;if(changed)renderLists();errors.hidden=true;syncProgramLabels();
+      if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem)await chooseItem(selectedItem,false);
+      else if((changed||sessionsChanged)&&drawerKind==='project'&&selectedProject){const data=await request('project',{id:selectedProject.id});if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='project')return;selectedProject=data.project;renderProject(false);}
+    }catch{if(available()&&gen===generation&&!failed)readError(()=>refresh());}})().finally(()=>{refreshing=null;});return refreshing;
   }
   function stop() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
   function schedule() {
@@ -480,9 +542,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     timer = setTimeout(async () => {
       if (!available()) return;
       try {
-        if (!busy && !refreshing) {
-          const data = await request('revision');
-          if (available() && (data.revision !== revision || shownSessions !== sessionSignature())) await refresh();
+        syncProgramLabels();if(!busy&&!refreshing&&!dirty&&!failed&&!dragging&&!navigating){
+          syncProgramLabels();const data=await request('revision');
+          if(available()&&(data.revision!==boardRevision||shownSessions!==sessionSignature()))await refresh();
         }
       } catch { if (available() && !failed) readError(() => refresh()); }
       finally { schedule(); }
@@ -491,9 +553,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function visibility() { stop(); if (available()) { void refresh(); schedule(); } }
   document.addEventListener('visibilitychange', visibility);
   return {
-    show() { if (disposed) return; syncOrigin(); visible = true; root.hidden = false; void refresh(); schedule(); },
-    hide() { if (disposed) return; visible = false; root.hidden = true; generation++; selectionEpoch++; stop(); },
+    show(){if(disposed)return;syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
+    hide() {if(disposed)return;visible=false;cancelActiveDrag?.();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
-    dispose() { if (disposed) return; disposed = true; visible = false; generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null; root.remove(); },
+    dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

@@ -6,6 +6,23 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 Sin cambios pendientes registrados.
 
+## [1.2.0] - 2026-11-14
+
+### Tablero de Pulso
+
+- Rediseño tras el rechazo del flujo de 1.1: pestañas por proyecto, Pendientes fija con terminados y cuatro columnas Por hacer / En curso / En espera / Hecho.
+- Nuevo proyecto con nombre y casilla de sesión actual; captura inline en las tres primeras columnas. Arrastre por agarre mediante eventos de puntero y selector Mover accesible por teclado para cambiar de columna conservando el orden de fases.
+- Abrir tarjeta muestra el drawer derecho con título, notas, estado, último checkpoint y siguiente paso; Guardar avance desplegable. Plan y sesiones reúne plan, principal, vínculos y permisos fuera del tablero. Abrir tarjeta no inicia un PTY; el contexto sigue siendo editable/copiable y la sesión nueva empieza vacía.
+- API board exclusiva de UI: snapshot atómico bajo mutex del servicio, 20 tarjetas iniciales por columna y contadores; items filtrado por status con páginas de 50 y expectedSnapshotRevision para rechazar offsets obsoletos. Sin polling oculto.
+- Estado explícito OSC 7501 pasivo: solo state raíz, payload hasta 1.024 bytes; working/blocked/error/done/idle/clear. Otros campos se ignoran, IDs de hijos y consultas se rechazan sin respuesta. Estado efímero solo en vista viva, replay silencioso, reset al reconectar y avisos agrupados con límite de uno cada 5 s por sesión. No instala hooks, cambia configuración ni escribe fases.
+- Revisión de fuentes Herdr fijadas por commit y matriz de decisiones, sin copiar código ni añadir dependencias Herdr. Se adoptan separación vista/runtime, estado explícito y retorno directo a sesión.
+
+### Alcance y validación
+
+- Sin reordenación dentro de columna, columnas personalizadas ni traslado entre proyectos. Mods JavaScript sin sandbox, SSH remoto, telemetría y reanudación automática se difieren.
+- Permisos CLI acotados y reanudación Claude mantienen los límites de 1.1; MCP y reanudación nativa Codex pendientes. GPL-3.0-only sin cambios.
+- Build release e instalador local verificados; [pruebas y límites registrados](docs/PULSO_VALIDATION_1.2.0.md). Perfil de ejemplo separado, sin sustituir sesiones habituales ni publicar el instalador.
+
 ## [1.1.0] - 2026-11-14
 
 ### Proyectos y continuidad
@@ -29,7 +46,7 @@ Sin cambios pendientes registrados.
 
 - Codex conserva terminal, historial local y contexto; la captura de identidad y reanudación nativa no está disponible. MCP e importación del Site Pulso siguen pendientes; no hay importación automática ni sincronización en la nube.
 - Instalador local; sin publicación de DMG ni reinicio de sesiones activas como efecto de esta entrega.
-- Recuentos finales de pruebas, métricas y verificación del paquete pendientes del cierre de validación por la tarea principal. No se ha activado la app instalada ni se ha probado el perfil real; los fixtures sintéticos no constituyen una auditoría integral.
+- Compilación release, pruebas, métricas y verificación del paquete local completadas para 1.1.0: [validación histórica](docs/PULSO_VALIDATION_1.1.0.md). No se activó la app instalada ni se probó el perfil real; los fixtures sintéticos no constituyen una auditoría integral.
 
 ## [1.0.1] - 2026-11-13
 
@@ -122,10 +139,14 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.2.0...HEAD
 [0.1.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v0.1.1
 [0.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/a32f414
 
 [1.0.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.0.0
 
 [1.0.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.0.1
+
+[1.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.1.0
+
+[1.2.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.2.0

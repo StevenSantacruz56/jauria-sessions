@@ -51,7 +51,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       const project = (id: string) => ({ id, title: `Proyecto ${id}`, plan: '<script>window.compromised=true</script>\nPlan completo', mainSessionId: 'ended', revision: 1, archived: false, createdAt: stamp, updatedAt: stamp });
       const item = (id: string, projectId: string | null = null) => ({ id, projectId, title: `Fase ${id}`, note: '', status: 'todo', position: 0, revision: 1, archived: false, createdAt: stamp, updatedAt: stamp });
       const f = w.fixture = {
-        calls: [] as any[], revision: 1, projects: [project('p1')], items: [item('i1', 'p1'), item('solo')], checkpoints: [] as any[], links: [] as any[],
+        delayed: [] as any[], holdOps: [] as string[], calls: [] as any[], revision: 1, projects: [project('p1')], items: [item('i1', 'p1'), item('solo')], checkpoints: [] as any[], links: [] as any[],
         policies: [{ id: 'policy-1', policy: { projectId: 'p1', provider: 'claude', cwd: '/synthetic', canCreateProjects: true } }],
         sessions: [{ id: 'ended', title: 'Claude anterior', kind: 'claude', cwd: '/synthetic', status: 'exited' }, { id: 'live', title: 'Claude viva', kind: 'claude', cwd: '/synthetic', status: 'running' }, { id: 'attention', title: 'Sin confirmar', kind: 'claude', cwd: null, status: 'needs_attention' }],
         opened: [] as string[], created: [] as any[], notices: [] as string[], resumed: [] as string[], bindings: [] as string[], copied: [] as string[],
@@ -62,16 +62,31 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { f.copied.push(text); } } });
       f.request = async (op: string, args: any) => {
         f.calls.push({ op, args: structuredClone(args) });
+        const deliver = async (snapshot: any) => {
+          const index = f.holdOps.indexOf(op);
+          if (index !== -1) { f.holdOps.splice(index, 1); await new Promise(resolve => f.delayed.push({ op, resolve })); if (f.rejectDelayed === op) throw 'delayed read failure'; }
+          return snapshot;
+        };
         if (f.holdRead && op === 'projects') await new Promise(resolve => f.held.push(resolve));
-        if (f.failRead && ['projects', 'items', 'revision'].includes(op)) throw 'offline';
+        if (f.failRead && ['projects', 'board', 'items', 'revision'].includes(op)) throw 'offline';
         if (op === 'revision') return { revision: f.revision };
+        if (op === 'board') {
+          if (args.ifRevision === f.revision) return { revision: f.revision, unchanged: true };
+          const snapshot = { revision: f.revision, columns: Object.fromEntries(['todo', 'doing', 'waiting', 'done'].map(status => {
+            const all = f.items.filter((i: any) => !i.archived && i.projectId === args.projectId && i.status === status);
+            return [status, { items: structuredClone(all.slice(0, 20)), totalCount: all.length, hasMore: all.length > 20, nextCursor: 20 }];
+          })) };
+          if (f.holdBoard === args.projectId) await new Promise(resolve => f.held.push(resolve));
+          return deliver(snapshot);
+        }
         if (op === 'projects' || op === 'items') {
-          const all = op === 'projects' ? f.projects : f.items.filter((i: any) => i.projectId === args.projectId);
+          if (op === 'items' && args.expectedSnapshotRevision !== f.revision) throw 'stale snapshot';
+          const all = op === 'projects' ? f.projects : f.items.filter((i: any) => !i.archived && i.projectId === args.projectId && (!args.status || i.status === args.status));
           const cursor = args.cursor ?? 0; if (typeof cursor !== 'number') throw 'numeric offset required';
           const rows = all.slice(cursor, cursor + args.limit);
-          return { [op]: structuredClone(rows), revision: f.revision, hasMore: all.length > cursor + rows.length };
+          return deliver({ [op]: structuredClone(rows), revision: f.revision, hasMore: all.length > cursor + rows.length, totalCount: all.length, ...(op === 'items' ? { nextCursor: cursor + rows.length } : {}) });
         }
-        if (op === 'project') return { project: structuredClone(f.projects.find((p: any) => p.id === args.id)) };
+        if (op === 'project') return deliver({ project: structuredClone(f.projects.find((p: any) => p.id === args.id)) });
         if (op === 'item') { const all=f.checkpoints.filter((c:any)=>c.itemId===args.id);return { item: structuredClone(f.items.find((i: any) => i.id === args.id)), links: structuredClone(f.links.filter((l: any) => l.itemId === args.id)), checkpoints: structuredClone(all.slice(-10)), checkpointsHasMore:all.length>10,checkpointCursor:10 }; }
         if(op==='checkpoint_history'){const all=[...f.checkpoints.filter((c:any)=>c.itemId===args.itemId)].reverse();const cursor=args.cursor??0;return{checkpoints:structuredClone(all.slice(cursor,cursor+args.limit)),hasMore:all.length>cursor+args.limit,nextCursor:cursor+args.limit};}
         if (op === 'links') return { links: structuredClone(f.links.filter((l: any) => l.projectId === args.projectId)) };
@@ -112,15 +127,17 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
     await test(`${engine.name()}: Pulso isolated stage`, async t => {
       const browser = await engine.launch(engine === chromium ? { channel: 'chrome' } : {}); t.after(() => browser.close());
       async function mounted(setup = '') { const p = await fixture(browser, setup); t.after(() => p.close()); return p; }
-      const projectDetail = async (p: Page) => { await p.getByRole('button', { name: 'Proyecto p1', exact: true }).click(); await p.getByLabel('Título del proyecto', { exact: true }).waitFor(); };
-      const itemDetail = async (p: Page) => { await projectDetail(p); await p.getByRole('button', { name: 'Fase i1 Por hacer', exact: true }).click(); await p.getByLabel('Título de la fase', { exact: true }).waitFor(); };
+      const projectBoard = async (p: Page) => { await p.getByRole('button', { name: 'Proyecto p1', exact: true }).click(); await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).waitFor(); };
+      const projectDetail = async (p: Page) => { await projectBoard(p); assert.equal(await p.locator('dialog[open]').count(), 0); await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).click(); await p.getByLabel('Título del proyecto', { exact: true }).waitFor(); };
+      const itemDetail = async (p: Page) => { await projectBoard(p); await p.getByRole('button', { name: 'Abrir Fase i1', exact: true }).click(); await p.getByRole('dialog').getByLabel('Título de la fase', { exact: true }).waitFor(); };
 
       await t.test('capture needs only title; plans are literal text, main session remains canonical', async () => {
         const p = await mounted();
-        assert.equal(await p.getByLabel('Captura rápida').getAttribute('maxlength'), '240');
-        await p.getByLabel('Captura rápida').fill('Comprar material'); await p.getByRole('button', { name: 'Añadir', exact: true }).click(); await idle(p);
+        await p.getByRole('region', { name: 'Por hacer', exact: true }).getByRole('button', { name: 'Añadir pendiente', exact: true }).click();
+        assert.equal(await p.getByRole('region', { name: 'Por hacer', exact: true }).getByLabel('Título del pendiente', { exact: true }).getAttribute('maxlength'), '240');
+        await p.getByRole('region', { name: 'Por hacer', exact: true }).getByLabel('Título del pendiente', { exact: true }).fill('Comprar material'); await p.getByRole('button', { name: 'Añadir tarjeta', exact: true }).click(); await idle(p);
         const calls = await run(p, 'return f.calls.filter(x=>x.op==="item_create")'); assert.equal(calls.length, 1);
-        assert.deepEqual(Object.keys(calls[0].args).sort(), ['id', 'requestId', 'title']);
+        assert.deepEqual(Object.keys(calls[0].args).sort(), ['id', 'projectId', 'requestId', 'status', 'title']);
         await projectDetail(p); assert.equal(await p.getByLabel('Sesión principal', { exact: true }).inputValue(), 'ended');
         await p.getByText('Plan completo (opcional)', { exact: true }).click();
         assert.match(await p.getByLabel('Plan completo ·').inputValue(), /<script>/); assert.equal(await run(p, 'return window.compromised'), undefined);
@@ -129,9 +146,10 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('a new plan can explicitly keep the selected conversation as its main session', async () => {
         const p=await mounted();
-        await p.getByLabel('Guardar como').selectOption('project');
+        await p.getByRole('button', { name: 'Nuevo proyecto', exact: true }).click();
+        assert.equal(await p.locator('dialog[open]').count(), 1);
         const origin=p.getByLabel(/Usar.*sesión principal/);assert.equal(await origin.isChecked(),true);
-        await p.getByLabel('Captura rápida').fill('Plan de la conversación');await p.getByRole('button',{name:'Añadir',exact:true}).click();await idle(p);
+        await p.getByLabel('Nombre del proyecto').fill('Plan de la conversación');await p.getByRole('button',{name:'Crear proyecto',exact:true}).click();await idle(p);
         assert.equal(await run(p,'return f.calls.find(x=>x.op==="project_create").args.mainSessionId'),'live');
         assert.equal(await run(p,'return f.projects.find(p=>p.id==="p1").mainSessionId'),'ended');
       });
@@ -146,7 +164,8 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('commit followed by timeout retries the original creation without duplicating it', async () => {
         const p = await mounted(); await run(p, 'f.timeoutAfterCommit=true');
-        await p.getByLabel('Captura rápida').fill('Captura única'); await p.getByRole('button', { name: 'Añadir', exact: true }).click();
+        await p.getByRole('region', { name: 'Por hacer', exact: true }).getByRole('button', { name: 'Añadir pendiente', exact: true }).click();
+        await p.getByRole('region', { name: 'Por hacer', exact: true }).getByLabel('Título del pendiente', { exact: true }).fill('Captura única'); await p.getByRole('button', { name: 'Añadir tarjeta', exact: true }).click();
         await p.getByRole('button', { name: 'Reintentar mismo cambio' }).click(); await idle(p);
         assert.equal(await run(p, 'return f.items.filter(x=>x.title==="Captura única").length'), 1);
         const calls = await run(p, 'return f.calls.filter(x=>x.op==="item_create")'); assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
@@ -154,6 +173,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       await t.test('undo uses inverse status and the resulting revision, never overwrites a concurrent edit', async () => {
         const p = await mounted(); await itemDetail(p); await p.getByLabel('Estado', { exact: true }).selectOption('done');
         await p.getByRole('button', { name: 'Guardar fase', exact: true }).click(); await idle(p);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
         await run(p, 'f.items[0].revision=99; f.items[0].note="Edición ajena";');
         await p.getByRole('button', { name: 'Deshacer cambio de estado' }).click(); await p.getByRole('button', { name: 'Consultar versión actual' }).waitFor();
         const calls = await run(p, 'return f.calls.filter(x=>x.op==="item_update")'); assert.equal(calls[1].args.status, 'todo'); assert.equal(calls[1].args.expectedRevision, 2);
@@ -171,6 +191,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('checkpoint appends; editable continuation copies only, opening a session passes only cwd', async () => {
         const p = await mounted(); await itemDetail(p);
+        await p.getByText('Guardar avance', { exact: true }).click();
         await p.getByLabel('Qué quedó listo ·').fill('Implementado'); await p.getByLabel('Siguiente acción ·').fill('Verificar');
         await p.getByRole('button', { name: 'Registrar checkpoint', exact: true }).click(); await idle(p);
         assert.equal(await run(p, 'return f.checkpoints.length'), 1);
@@ -180,6 +201,25 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByRole('button', { name: 'Abrir nueva sesión', exact: true }).click();
         assert.deepEqual(await run(p, 'return f.copied'), ['Contexto revisado']); assert.deepEqual(await run(p, 'return f.created'), ['/synthetic']);
         assert.equal((await run(p, 'return f.calls.filter(x=>/pty|input|turn/.test(x.op))')).length, 0);
+      });
+      await t.test('checkpoint save then immediate board move uses the fresh revision before polling', async () => {
+        const p = await mounted(); await itemDetail(p);
+        await p.getByText('Guardar avance', { exact: true }).click();
+        await p.getByLabel('Qué quedó listo ·').fill('Checkpoint antes de mover');
+        await p.getByLabel('Siguiente acción ·').fill('Continuar en curso');
+        await p.getByRole('button', { name: 'Registrar checkpoint', exact: true }).click(); await idle(p);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
+        await p.getByLabel('Mover Fase i1', { exact: true }).selectOption('doing'); await idle(p);
+        const calls = await run(p, 'return f.calls');
+        const checkpoint = calls.find((c: any) => c.op === 'checkpoint_create');
+        const moves = calls.filter((c: any) => c.op === 'item_update');
+        assert.equal(checkpoint.args.expectedRevision, 1);
+        assert.equal(moves.length, 1);
+        assert.deepEqual(moves[0].args, { id: 'i1', status: 'doing', expectedRevision: 2, requestId: moves[0].args.requestId });
+        assert.equal(calls.filter((c: any) => c.op === 'revision').length, 0, 'the move must use the checkpoint revision without waiting for the two-second poll');
+        await p.getByRole('region', { name: 'En curso', exact: true }).getByRole('button', { name: 'Abrir Fase i1', exact: true }).waitFor();
+        assert.equal(await p.locator('dialog[open]').count(), 0);
+        assert.deepEqual(await run(p, 'return [f.items.find(i=>i.id==="i1").revision,f.checkpoints.map(c=>c.brief)]'), [3, ['Checkpoint antes de mover']]);
       });
       await t.test('older continuity points load only on request while the latest context remains selected', async () => {
         const p=await mounted('f.checkpoints=Array.from({length:12},(_,i)=>({id:"cp"+i,itemId:"i1",brief:"Point "+i,nextAction:"Next",revision:i,actor:"fixture",createdAt:Date.parse("2026-11-14T12:00:00Z")}));');await itemDetail(p);
@@ -211,7 +251,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('a stopped session changes to history without a planning mutation or provider poll',async()=>{
         const p=await mounted('f.projects[0].mainSessionId="live"');
-        await p.getByRole('button',{name:'Proyecto p1',exact:true}).click();await idle(p);
+        await projectDetail(p);await idle(p);
         assert.equal(await p.getByRole('button',{name:'Enfocar sesión viva',exact:true}).count(),1);
         await run(p,'f.sessions.find(s=>s.id==="live").status="exited"');
         await p.getByRole('button',{name:'Ver historial',exact:true}).waitFor({timeout:4000});
@@ -236,9 +276,9 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('pages are bounded to 50 and numeric fallback offsets advance without duplicate rows', async () => {
         const p = await mounted('f.projects=Array.from({length:55},(_,i)=>f.project(i===0?"p1":"p"+(i+1)));');
-        assert.equal(await p.locator('.pulso-outline .pulso-row').count(), 51);
-        await p.getByRole('button', { name: 'Cargar más proyectos' }).click(); await idle(p);
-        assert.equal(await p.locator('.pulso-outline .pulso-row').count(), 56);
+        assert.equal(await p.locator('.pulso-project-tabs .pulso-tab').count(), 51);
+        await p.getByRole('button', { name: 'Más proyectos' }).click(); await idle(p);
+        assert.equal(await p.locator('.pulso-project-tabs .pulso-tab').count(), 56);
         const pages = await run(p, 'return f.calls.filter(x=>x.op==="projects")'); assert.equal(pages[1].args.cursor, 50); assert.equal(pages[1].args.limit, 50);
       });
       await t.test('remember requires opt-in; saved policies load and revoke only on explicit action', async () => {
@@ -258,6 +298,229 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.deepEqual(await run(p, 'return f.calls.find(x=>x.op==="revoke_policy").args'), { id: 'policy-1' });
         assert.match(await p.locator('.pulso-policies').innerText(), /No hay permisos recordados/);
       });
+      await t.test('fixed columns show standalone done cards; tabs select boards without opening a drawer', async () => {
+        const p=await mounted('f.items.push({...f.item("finished"),status:"done"});');
+        assert.deepEqual(await p.locator('.pulso-column').evaluateAll(ns=>ns.map(n=>[n.getAttribute('data-state'),n.getAttribute('aria-label')])),[['todo','Por hacer'],['doing','En curso'],['waiting','En espera'],['done','Hecho']]);
+        await p.getByRole('region',{name:'Hecho',exact:true}).getByRole('button',{name:'Abrir Fase finished',exact:true}).waitFor();
+        await projectBoard(p);assert.equal(await p.locator('dialog[open]').count(),0);
+        assert.equal(await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).count(),0);
+        await p.getByRole('button',{name:'Pendientes',exact:true}).click();await p.getByRole('button',{name:'Abrir Fase finished',exact:true}).waitFor();
+        assert.deepEqual(await run(p,'return f.calls.filter(c=>c.op==="board").map(c=>c.args.projectId)'),[null,'p1',null]);
+      });
+      await t.test('columns independently page beyond fifty including doing without hiding completed work', async () => {
+        const p=await mounted('f.items=[...Array.from({length:73},(_,i)=>f.item("todo"+i)),...Array.from({length:73},(_,i)=>({...f.item("doing"+i),status:"doing"})),{...f.item("done"),status:"done"}];');
+        for(const [label,status] of [['Por hacer','todo'],['En curso','doing']]){
+          const col=p.getByRole('region',{name:label,exact:true});assert.equal(await col.getByRole('button',{name:/^Abrir /}).count(),20);
+          for(const count of [70,73]){await col.getByRole('button',{name:'Ver más tarjetas',exact:true}).click();await idle(p);assert.equal(await col.getByRole('button',{name:/^Abrir /}).count(),count);}
+          const calls=await run(p,`return f.calls.filter(c=>c.op==="items"&&c.args.status==="${status}")`);
+          assert.deepEqual(calls.map((c:any)=>c.args.cursor),[20,70]);assert.ok(calls.every((c:any)=>c.args.expectedSnapshotRevision===1&&c.args.limit===50&&c.args.projectId===null));
+        }
+        assert.equal(await p.getByRole('region',{name:'Hecho',exact:true}).getByRole('button',{name:'Abrir Fase done',exact:true}).isVisible(),true);
+        assert.match(await p.locator('.pulso-progress').innerText(),/1 de 147/);
+      });
+      await t.test('stale snapshot keeps loaded cards and requests explicit refresh before paging', async () => {
+        const p=await mounted('f.items=Array.from({length:55},(_,i)=>f.item("page"+i));');await run(p,'f.revision++');
+        await p.getByRole('button',{name:'Ver más tarjetas',exact:true}).click();await idle(p);
+        assert.equal(await p.getByRole('button',{name:/^Abrir /}).count(),20);assert.match(await p.locator('.pulso-feedback').innerText(),/tablero cambió|Actualiza/);
+        await p.getByRole('button',{name:'Reintentar consulta',exact:true}).click();await idle(p);
+        assert.equal(await p.getByRole('alert').count(), 0, 'successful reload clears the stale-page error');
+        await p.getByRole('button',{name:'Ver más tarjetas',exact:true}).click();await idle(p);
+        assert.equal(await p.getByRole('button',{name:/^Abrir /}).count(),55);
+        assert.deepEqual(await run(p,'return f.calls.filter(c=>c.op==="items").map(c=>c.args.expectedSnapshotRevision)'),[1,2]);
+      });
+      await t.test('cross-column CAS move retries an uncertain committed receipt with identical payload', async () => {
+        const p=await mounted();await run(p,'f.timeoutAfterCommit=true');await p.getByLabel('Mover Fase solo',{exact:true}).selectOption('doing');
+        await p.getByRole('button',{name:'Reintentar mismo cambio',exact:true}).click();await idle(p);
+        const calls=await run(p,'return f.calls.filter(c=>c.op==="item_update")');assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);
+        assert.deepEqual(calls[0].args,{id:'solo',status:'doing',expectedRevision:1,requestId:calls[0].args.requestId});
+        assert.equal(await run(p,'return f.items.find(i=>i.id==="solo").revision'),2);
+        await p.getByRole('region',{name:'En curso',exact:true}).getByRole('button',{name:'Abrir Fase solo',exact:true}).waitFor();
+        assert.equal(await p.locator('dialog[open]').count(),0);
+        assert.deepEqual(await run(p,'return [f.opened,f.created,f.resumed,f.calls.filter(c=>/grant|link|pty|input|turn/.test(c.op))]'),[[],[],[],[]]);
+      });
+      await t.test('pointer grip moves to another column without launching sessions, sending input or granting access', async () => {
+        const p=await mounted();const grip=await p.getByRole('button',{name:'Arrastrar Fase solo',exact:true}).boundingBox();const target=await p.getByRole('region',{name:'En espera',exact:true}).boundingBox();assert.ok(grip&&target);
+        await p.mouse.move(grip.x+grip.width/2,grip.y+grip.height/2);await p.mouse.down();await p.mouse.move(target.x+target.width/2,target.y+100,{steps:12});await p.mouse.up();
+        await p.getByRole('region',{name:'En espera',exact:true}).getByRole('button',{name:'Abrir Fase solo',exact:true}).waitFor();
+        const calls=await run(p,'return f.calls.filter(c=>c.op==="item_update")');assert.equal(calls.length,1);assert.equal(calls[0].args.expectedRevision,1);assert.equal(calls[0].args.status,'waiting');
+        assert.equal(await p.locator('dialog[open]').count(),0);assert.deepEqual(await run(p,'return [f.opened,f.created,f.resumed,f.calls.filter(c=>/grant|link|pty|input|turn/.test(c.op))]'),[[],[],[],[]]);
+      });
+      await t.test('late project scope response cannot overwrite the newly selected pending board', async () => {
+        const p=await mounted('f.holdBoard="p1";');await p.getByRole('button',{name:'Proyecto p1',exact:true}).click();await p.waitForFunction(()=>(window as any).fixture.held.length===1);
+        await p.getByRole('button',{name:'Pendientes',exact:true}).click();await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).waitFor();
+        await run(p,'f.holdBoard=undefined;f.held.splice(0).forEach(resolve=>resolve())');await p.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        assert.equal(await p.getByRole('button',{name:'Pendientes',exact:true}).getAttribute('aria-current'),'true');assert.equal(await p.getByRole('button',{name:'Abrir Fase i1',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'Abrir Fase solo',exact:true}).count(),1);
+      });
+      for (const mode of ['dirty', 'failed']) await t.test(`native forced close preserves ${mode} drawer, refocuses and keeps recovery reachable`, async () => {
+        const p = await mounted(); await itemDetail(p);
+        const notes = p.getByRole('dialog').getByLabel('Notas', { exact: true });
+        await notes.fill('Borrador irremplazable'); await notes.focus();
+        await notes.evaluate((n: HTMLTextAreaElement) => n.setSelectionRange(4, 9));
+        if (mode === 'failed') {
+          await run(p, 'f.failWrite=true'); await p.getByRole('button', { name: 'Guardar fase', exact: true }).click();
+          await p.getByRole('button', { name: 'Reintentar mismo cambio', exact: true }).waitFor();
+        }
+        await p.keyboard.press('Escape'); await p.keyboard.press('Escape');
+        await p.locator('dialog[open]').waitFor();
+        await p.locator('dialog').evaluate((n: HTMLDialogElement) => n.close());
+        await p.waitForFunction(() => document.querySelector('dialog')?.matches(':modal'));
+        assert.equal(await notes.inputValue(), 'Borrador irremplazable');
+        assert.equal(await p.getByRole('dialog').evaluate(n => n.contains(document.activeElement)), true);
+        if (mode === 'failed') {
+          const retry = p.getByRole('dialog').getByRole('button', { name: 'Reintentar mismo cambio', exact: true });
+          assert.equal(await retry.isEnabled(), true); await run(p, 'f.failWrite=false'); await retry.click(); await idle(p);
+          const writes = await run(p, 'return f.calls.filter(c=>c.op==="item_update")'); assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]);
+        } else {
+          assert.equal(await notes.evaluate(n => n === document.activeElement), true);
+          assert.deepEqual(await notes.evaluate((n: HTMLTextAreaElement) => [n.selectionStart, n.selectionEnd]), [4, 9]);
+        }
+        assert.equal(await notes.inputValue(), 'Borrador irremplazable');
+      });
+      await t.test('project refresh already awaiting its record must preserve a newly started draft and caret', async () => {
+        const p = await mounted(); await projectDetail(p);
+        const title = p.getByRole('dialog').getByLabel('Título del proyecto', { exact: true });
+        await title.evaluate(n => { (window as any).fixture.originalProjectInput = n; });
+        await run(p, 'f.revision++;f.holdOps=["project"];f.pendingRefresh=f.panel.refresh();');
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'project'));
+        await title.fill('Mi nuevo título'); await title.focus(); await title.evaluate((n: HTMLInputElement) => n.setSelectionRange(3, 7));
+        await run(p, 'f.delayed.find(d=>d.op==="project").resolve();return f.pendingRefresh;');
+        assert.equal(await title.inputValue(), 'Mi nuevo título');
+        assert.equal(await title.evaluate(n => n === (window as any).fixture.originalProjectInput && n === document.activeElement), true);
+        assert.deepEqual(await title.evaluate((n: HTMLInputElement) => [n.selectionStart, n.selectionEnd]), [3, 7]);
+        await p.keyboard.press('Escape'); assert.equal(await p.locator('dialog[open]').count(), 1);
+      });
+      await t.test('older board response after a completed move cannot roll back the card or its CAS revision', async () => {
+        const p = await mounted();
+        await run(p, 'f.revision=2;f.holdOps=["board"];f.pendingRefresh=f.panel.refresh();');
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'board'));
+        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('doing'); await idle(p);
+        await run(p, 'f.delayed.find(d=>d.op==="board").resolve();return f.pendingRefresh;');
+        await p.getByRole('region', { name: 'En curso', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+        assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'doing');
+        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done'); await idle(p);
+        assert.deepEqual(await run(p, 'return f.calls.filter(c=>c.op==="item_update").map(c=>c.args.expectedRevision)'), [1, 3]);
+        await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+      });
+      await t.test('old pagination response arriving after a newer board cannot merge snapshot rows', async () => {
+        const p = await mounted('f.items=Array.from({length:55},(_,i)=>f.item("race"+i));');
+        // Begin refresh before pagination becomes busy; hold each response independently.
+        await run(p, 'f.holdOps=["projects","items"];f.pendingRefresh=f.panel.refresh();');
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'projects'));
+        await p.getByRole('button', { name: 'Ver más tarjetas', exact: true }).click();
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'items'));
+        await run(p, 'f.items[0].status="done";f.items[0].revision=++f.revision;f.delayed.find(d=>d.op==="projects").resolve();return f.pendingRefresh;');
+        await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase race0', exact: true }).waitFor();
+        await run(p, 'f.delayed.find(d=>d.op==="items").resolve();'); await idle(p);
+        assert.equal(await p.getByRole('region', { name: 'Por hacer', exact: true }).getByRole('button', { name: /^Abrir / }).count(), 20);
+        assert.equal(await p.getByRole('button', { name: 'Abrir Fase race0', exact: true }).count(), 1);
+        assert.match(await p.locator('.pulso-progress').innerText(), /1 de 55/);
+        assert.equal(await run(p, 'return f.calls.find(c=>c.op==="items").args.expectedSnapshotRevision'), 1);
+      });
+      await t.test('releasing an uncertain board move restores the selector and allows the same destination again', async () => {
+        const p = await mounted(); await run(p, 'f.failWrite=true');
+        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done');
+        await p.getByRole('button', { name: 'Liberar borrador', exact: true }).click();
+        assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'todo');
+        await run(p, 'f.failWrite=false'); await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done'); await idle(p);
+        const calls = await run(p, 'return f.calls.filter(c=>c.op==="item_update")'); assert.equal(calls.length, 2);
+        assert.notEqual(calls[0].args.requestId, calls[1].args.requestId); assert.equal(calls[1].args.expectedRevision, 1);
+        await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+      });
+      await t.test('remote revision refresh retains seventy loaded cards and their scroll without leaking counts across projects', async () => {
+        const p = await mounted('f.items=[...Array.from({length:90},(_,i)=>f.item("prefix"+i)),...Array.from({length:90},(_,i)=>f.item("project"+i,"p1"))];');
+        const todo = p.getByRole('region', { name: 'Por hacer', exact: true });
+        await todo.getByRole('button', { name: 'Ver más tarjetas', exact: true }).click(); await idle(p);
+        assert.equal(await todo.getByRole('button', { name: /^Abrir / }).count(), 70);
+        const cards = todo.locator('.pulso-cards');
+        const scroll = await cards.evaluate(n => { n.scrollTop = 500; return n.scrollTop; }); assert.ok(scroll > 0);
+        const ids = await todo.locator('.pulso-card').evaluateAll(ns => ns.map(n => n.getAttribute('data-item-id')));
+        const before = await run(p, 'return f.calls.length');
+        await run(p, 'f.items[12].title="Actualización remota";f.items[12].revision=++f.revision;return f.panel.refresh();');
+        assert.equal(await todo.getByRole('button', { name: /^Abrir / }).count(), 70);
+        assert.deepEqual(await todo.locator('.pulso-card').evaluateAll(ns => ns.map(n => n.getAttribute('data-item-id'))), ids);
+        assert.equal(await todo.getByRole('button', { name: 'Abrir Actualización remota', exact: true }).count(), 1);
+        assert.equal(await cards.evaluate(n => n.scrollTop), scroll);
+        const reads = await run(p, `return f.calls.slice(${before})`);
+        assert.deepEqual(reads.find((c: any) => c.op === 'board').args, { projectId: null, ifRevision: 1 });
+        const pages = reads.filter((c: any) => c.op === 'items'); assert.equal(pages.length, 1);
+        assert.deepEqual(pages[0].args, { projectId: null, status: 'todo', archived: false, limit: 50, cursor: 20, expectedSnapshotRevision: 2 });
+        await projectBoard(p);
+        assert.equal(await todo.getByRole('button', { name: /^Abrir / }).count(), 20, 'a different board starts with its own initial page');
+        assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="items"&&c.args.projectId==="p1").length'), 0);
+      });
+      await t.test('stale continuation halfway through expanded refresh retains every old column atomically', async () => {
+        const p = await mounted('f.items=[...Array.from({length:90},(_,i)=>f.item("atomic"+i)),...Array.from({length:90},(_,i)=>({...f.item("active"+i),status:"doing"}))];');
+        for (const name of ['Por hacer', 'En curso']) { await p.getByRole('region', { name, exact: true }).getByRole('button', { name: 'Ver más tarjetas', exact: true }).click(); await idle(p); }
+        const before = await p.locator('.pulso-column').evaluateAll(ns => ns.map(n => ({ state: n.getAttribute('data-state'), text: n.textContent })));
+        const cards = p.getByRole('region', { name: 'Por hacer', exact: true }).locator('.pulso-cards');
+        const scroll = await cards.evaluate(n => { n.scrollTop = 500; return n.scrollTop; }); assert.ok(scroll > 0);
+        await run(p, 'f.items[0].title="No mezclar esta versión";f.items[1].status="done";f.revision=2;f.holdOps=["board"];f.pendingRefresh=f.panel.refresh();');
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'board'));
+        // The initial snapshot was revision 2; subsequent prefix pages now reject it.
+        await run(p, 'f.revision=3;f.delayed.find(d=>d.op==="board").resolve();return f.pendingRefresh;');
+        assert.deepEqual(await p.locator('.pulso-column').evaluateAll(ns => ns.map(n => ({ state: n.getAttribute('data-state'), text: n.textContent }))), before);
+        assert.equal(await cards.evaluate(n => n.scrollTop), scroll);
+        assert.equal(await p.getByRole('alert').count(), 1);
+        assert.ok(await run(p, 'return f.calls.some(c=>c.op==="items"&&c.args.expectedSnapshotRevision===2)'));
+        await p.getByRole('button', { name: 'Reintentar consulta', exact: true }).click();
+        await p.getByRole('button', { name: 'Abrir No mezclar esta versión', exact: true }).waitFor();
+        assert.equal(await p.getByRole('alert').count(), 0);
+        for (const name of ['Por hacer', 'En curso']) assert.equal(await p.getByRole('region', { name, exact: true }).getByRole('button', { name: /^Abrir / }).count(), 70);
+        assert.equal(await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase atomic1', exact: true }).count(), 1);
+      });
+      await t.test('failed project navigation locks board controls and keeps inline creation in the committed project', async () => {
+        const p = await mounted('f.projects.push(f.project("p2"));'); await projectBoard(p);
+        await run(p, 'f.holdOps=["project"];f.rejectDelayed="project";');
+        await p.getByRole('button', { name: 'Proyecto p2', exact: true }).click();
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'project'));
+        assert.equal(await p.getByLabel('Mover Fase i1', { exact: true }).isDisabled(), true);
+        assert.equal(await p.getByRole('button', { name: 'Abrir Fase i1', exact: true }).isDisabled(), true);
+        assert.equal(await p.getByRole('button', { name: 'Plan y sesiones', exact: true }).isDisabled(), true);
+        const todo = p.getByRole('region', { name: 'Por hacer', exact: true });
+        assert.equal(await todo.getByRole('button', { name: 'Añadir fase', exact: true }).isDisabled(), true);
+        assert.equal(await p.getByRole('button', { name: 'Proyecto p1', exact: true }).isEnabled(), true, 'tabs remain available for a newer selection');
+        await run(p, 'f.delayed.find(d=>d.op==="project").resolve();');
+        await p.waitForFunction(() => !(document.querySelector('.pulso-add-trigger') as HTMLButtonElement)?.disabled);
+        assert.equal(await p.getByRole('alert').count(), 1);
+        assert.equal(await p.getByRole('button', { name: 'Proyecto p1', exact: true }).getAttribute('aria-current'), 'true');
+        await todo.getByRole('button', { name: 'Añadir fase', exact: true }).click();
+        await todo.getByLabel('Título de la fase', { exact: true }).fill('Crear en el proyecto confirmado');
+        await todo.getByRole('button', { name: 'Añadir tarjeta', exact: true }).click(); await idle(p);
+        const writes = await run(p, 'return f.calls.filter(c=>c.op==="item_create")');
+        assert.equal(writes.length, 1); assert.equal(writes[0].args.projectId, 'p1'); assert.equal(writes[0].args.status, 'todo');
+        await todo.getByRole('button', { name: 'Abrir Crear en el proyecto confirmado', exact: true }).waitFor();
+        assert.equal(await run(p, 'return f.items.some(i=>i.projectId==="p2"&&i.title==="Crear en el proyecto confirmado")'), false);
+      });
+      await t.test('hiding during project navigation reopens the committed board with usable controls', async () => {
+        const p = await mounted('f.projects.push(f.project("p2"));'); await projectBoard(p);
+        await run(p, 'f.holdOps=["project"];'); await p.getByRole('button', { name: 'Proyecto p2', exact: true }).click();
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'project'));
+        await run(p, 'f.panel.hide();f.panel.show();');
+        await p.waitForFunction(() => !(document.querySelector('[aria-label="Mover Fase i1"]') as HTMLSelectElement)?.disabled);
+        assert.equal(await p.getByRole('button', { name: 'Proyecto p1', exact: true }).getAttribute('aria-current'), 'true');
+        assert.equal(await p.getByLabel('Mover Fase i1', { exact: true }).isEnabled(), true);
+        await run(p, 'f.delayed.find(d=>d.op==="project").resolve();');
+        await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await p.getByRole('button', { name: 'Proyecto p1', exact: true }).getAttribute('aria-current'), 'true');
+        assert.equal(await p.getByRole('button', { name: 'Abrir Fase i1', exact: true }).isEnabled(), true);
+      });
+      await t.test('Escape and leaving Pulso cancel active pointer drags without a late mutation', async () => {
+        const p = await mounted();
+        for (const cancel of ['escape', 'hide']) {
+          const grip = await p.getByRole('button', { name: 'Arrastrar Fase solo', exact: true }).boundingBox();
+          const target = await p.getByRole('region', { name: 'En espera', exact: true }).boundingBox(); assert.ok(grip && target);
+          await p.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2); await p.mouse.down();
+          await p.mouse.move(target.x + target.width / 2, target.y + 100, { steps: 8 });
+          assert.equal(await p.locator('.is-dragging').count(), 1);
+          if (cancel === 'escape') await p.keyboard.press('Escape'); else await run(p, 'f.panel.hide();');
+          await p.mouse.up(); if (cancel === 'hide') await run(p, 'f.panel.show();');
+          await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+          assert.equal(await p.locator('.is-dragging,.is-drop-target').count(), 0);
+          assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'todo');
+          assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="item_update").length'), 0);
+        }
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
+      });
       await t.test('visible polling requests revision only; hidden/document hidden/dispose stop polling and fence late reads', async () => {
         const p = await mounted(); const initial = await run(p, 'return f.calls.length');
         await p.waitForTimeout(2150); const poll = await run(p, `return f.calls.slice(${initial})`); assert.deepEqual(poll.map((x: any) => x.op), ['revision']);
@@ -272,8 +535,11 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('dirty draft and caret survive revision refresh; compact layouts fit light and dark themes', async () => {
         const p = await mounted(); await itemDetail(p); const notes = p.getByLabel('Notas', { exact: true });
-        await notes.fill('No perder'); await notes.focus(); await run(p, 'f.revision++; return f.panel.refresh()');
+        await notes.fill('No perder'); await notes.focus(); await notes.evaluate((n: HTMLTextAreaElement) => n.setSelectionRange(2, 5)); await run(p, 'f.revision++; return f.panel.refresh()');
         assert.equal(await notes.inputValue(), 'No perder'); assert.equal(await notes.evaluate(n => n === document.activeElement), true);
+        assert.deepEqual(await notes.evaluate((n: HTMLTextAreaElement) => [n.selectionStart, n.selectionEnd]), [2, 5]);
+        await p.keyboard.press('Escape'); assert.equal(await p.locator('dialog[open]').count(), 1);
+        assert.equal(await notes.inputValue(), 'No perder');
         await p.getByRole('button', { name: 'Descartar borrador', exact: true }).first().click(); await idle(p);
         for (const [width, height, theme] of [[1120, 850, 'light'], [760, 640, 'dark'], [360, 600, 'light']] as const) {
           await p.setViewportSize({ width, height }); await p.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -282,6 +548,8 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
           assert.equal(await p.locator('.pulso-detail').evaluate(n => n.scrollWidth > n.clientWidth), false);
           if (process.env.PULSO_SCREENSHOTS && (width === 1120 || width === 360)) await p.screenshot({ path: `${process.env.PULSO_SCREENSHOTS}/pulso-${width}.png` });
         }
+        assert.equal(await p.getByRole('dialog').evaluate(n => n instanceof HTMLDialogElement && n.matches(':modal')), true);
+        await p.keyboard.press('Escape'); assert.equal(await p.locator('dialog[open]').count(), 0);
       });
     });
   }

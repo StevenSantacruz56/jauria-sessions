@@ -1,16 +1,27 @@
 # Pulso: proyectos, fases y continuidad
 
-Pulso es el espacio de planificación dentro de Jauria 1.1.0. Un proyecto representa un plan completo y puede vincular la sesión donde lo planteaste. Sus fases muestran qué está por hacer, en curso, en espera o hecho. Jira sigue siendo el lugar para especificaciones y seguimiento de equipo.
+Pulso es el espacio de planificación dentro de Jauria 1.2.0. Cada proyecto representa un plan completo y tiene una pestaña de tablero con cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Jira puede conservar las especificaciones y el seguimiento de equipo.
 
 ## Empezar desde una sesión
 
-1. Abre Claude Code o Codex como siempre. También puedes trabajar desde tu carpeta personal, sin Git.
-2. Entra a **Pulso · Proyectos y fases**. Captura un título y elige **Proyecto**.
-3. Al elegir **Proyecto**, si hay una sesión actual, aparece marcada **Usar «…» como sesión principal**. Déjala marcada para vincular esa conversación al crear el plan; desmárcala si no corresponde. Después puedes elegir o cambiar la principal en el detalle. El texto del plan es opcional; no necesitas repetir una especificación de Jira.
-4. Añade sus fases, en el orden del trabajo. Cada fase necesita solo un título y puede tener una nota breve.
-5. Vincula otras sesiones al proyecto o a una fase cuando participen. La principal no cambia automáticamente si termina.
+1. Abre Claude Code o Codex como siempre, incluso desde tu carpeta personal y sin Git.
+2. Entra a Pulso y pulsa **Nuevo proyecto**. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
+3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
+4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o cambia el selector **Mover** con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
+5. Pulsa **Abrir** sobre una tarjeta para ver el drawer derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
+6. Abre **Plan y sesiones** en la barra del tablero del proyecto para editar el plan opcional, cambiar la sesión principal, vincular sesiones y gestionar permisos. Esos controles no ocupan las columnas. La principal no cambia automáticamente cuando termina.
 
-Un **pendiente independiente** no necesita proyecto, repositorio ni sesión. El **proyecto de Pulso** organiza un plan de trabajo o de negocio; **Repositorios** organiza carpetas Git y tareas técnicas. Crear un plan no crea ramas ni worktrees. **Registrar repositorio… / Nueva tarea Git** conserva el flujo Git anterior.
+La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
+
+**Repositorios** organiza carpetas Git y tareas técnicas. Crear un proyecto de Pulso no crea ramas ni worktrees; **Registrar repositorio… / Nueva tarea Git** conserva el flujo Git anterior.
+
+## Lectura del tablero
+
+El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el mutex del servicio Pulso: revisión, las cuatro columnas, hasta 20 tarjetas iniciales por columna y sus contadores totales. No amplía el alcance del agente ni es una nueva operación disponible mediante su permiso CLI. `ifRevision` permite responder sin reconstruir columnas cuando no hay cambios.
+
+**Ver más tarjetas** usa `items` con `status`, `expectedSnapshotRevision` y páginas de hasta 50. El servicio comprueba revisión, cuenta y consulta bajo el mismo mutex. Rechaza una revisión obsoleta antes de usar el offset; consulta el tablero actual ante un conflicto para no mezclar páginas de revisiones diferentes. Los contadores incluyen las tarjetas aún no cargadas.
+
+Mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos. No consulta por tarjeta; la vista oculta o el documento oculto detienen ese polling. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
 
 ## Recuperar el trabajo
 
@@ -32,13 +43,13 @@ Los bloqueos existentes siguen vigentes: no se inicia otro escritor sobre un wor
 
 ## Guardar una fase
 
-En el detalle registra qué quedó listo y la siguiente acción. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Pueden apuntar a una sesión concreta. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
+En el drawer de la tarjeta despliega **Guardar avance** y registra qué quedó listo y la siguiente acción. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Pueden apuntar a una sesión concreta. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
 
 Cambiar una fase a **Hecho** registra avance de agenda. No implica pruebas aprobadas, aceptación de código, merge ni modificación de Jira. Terminar una sesión o un turno tampoco completa una fase automáticamente.
 
 ## Permitir que los agentes registren planes
 
-El acceso empieza desactivado. En el proyecto, selecciona una sesión viva y pulsa **Permitir registrar planes**. Esto concede acceso al proyecto seleccionado y permite crear planes propios de esa sesión; no comparte toda tu agenda ni los pendientes independientes. Incluye actualizar fases y marcarlas Hecho.
+El acceso empieza desactivado. Desde **Plan y sesiones** del proyecto, selecciona una sesión viva y pulsa **Permitir registrar planes**. Esto concede acceso al proyecto seleccionado y permite crear planes propios de esa sesión; no comparte toda tu agenda ni los pendientes independientes. Incluye actualizar fases y marcarlas Hecho.
 
 La casilla **Recordar para futuras sesiones de esta herramienta en esta carpeta** empieza desmarcada. Puedes marcarla para guardar una política. Esa política solo se aplica al proveedor y a la ruta canónica elegidos. Cada sesión futura recibe una credencial nueva; detener una sesión invalida su acceso. Puedes gestionar y revocar los permisos recordados desde el mismo bloque de acceso.
 
@@ -74,7 +85,18 @@ Si hay timeout, conserva el mismo `requestId`, ID y contenido al consultar/reint
 - Título: hasta 240 caracteres; nota: 1.000; plan: 32.000; resumen de continuidad: 4.000; siguiente acción: 1.000. Proyectos y fases se consultan con páginas acotadas en SQL; el plan completo se solicita solo al abrir el proyecto.
 - Pulso admite hasta **64 MiB lógicos o 100.000 filas**, contando registros, actividad y recibos, no solo tareas. Hay **1 MiB y 2.000 filas adicionales de margen para identidades de permisos y políticas**; no amplían la capacidad para planes. La base `pulso.sqlite` tiene además un límite físico de **128 MiB**, independiente del historial de terminal y del resto del perfil.
 - Al alcanzar el presupuesto, las lecturas continúan y se rechazan nuevos cambios que lo excedan. El margen de permisos no elimina el límite físico. No hay borrado automático ni interfaz de exportación para liberar espacio. Si el módulo no puede abrirse, las terminales siguen disponibles y los datos se conservan para revisión.
-- La vista consulta cambios cada dos segundos mientras está visible; no consulta por tarjeta ni introduce trabajo en el bucle de teclado/salida de las terminales.
+
+## Estado de programa explícito: OSC 7501
+
+La UI escucha pasivamente OSC 7501 en la salida de una sesión viva. El payload admite hasta **1.024 bytes UTF-8** y campos `clave=valor` separados por `:`. Solo interpreta el campo raíz `state`, con valores exactos `working`, `blocked`, `error`, `done`, `idle` o `clear`; este último borra la señal. No deduce estados a partir de texto, silencio o marca del agente.
+
+Campos como `msg`, `title` o `progress` se ignoran: no se muestran ni ejecutan. Registros dirigidos a hijos mediante `id` y consultas se descartan sin respuesta. Payloads ambiguos, estados duplicados o inválidos y caracteres de control se rechazan. Es un subconjunto explícito, no una implementación completa del protocolo Herdr.
+
+El estado es cosmético y efímero en la vista viva: no escribe fases, checkpoints ni estado persistido del runner. La reproducción del historial no aplica señales ni dispara avisos; al reconectar se reinicia el seguimiento. Si el agente no emite el protocolo, no aparece estado de programa. Jauria no instala hooks, responde al terminal ni modifica configuraciones para habilitarlo.
+
+Las actualizaciones visuales se agrupan; las transiciones relevantes de sesiones no atendidas pueden producir avisos, con un límite de uno cada **5 segundos por sesión**. Una señal `done` indica lo declarado por el programa; no equivale a fase Hecho ni a pruebas aprobadas.
+
+Consulta [la revisión de Herdr y matriz de decisiones](HERDR_REVIEW.md) y [la guía de entrega 1.2.0](RELEASE_1.2.0.md). La validación final de esta versión sigue pendiente; los resultados de 1.1.0 son históricos.
 
 ## Respaldo local
 
@@ -91,3 +113,5 @@ sqlite3 -readonly '/ruta/privada/pulso-respaldo.sqlite' 'PRAGMA quick_check;'
 Comprueba que el respaldo termine sin errores y que la verificación devuelva `ok`. Si falla o la base está ocupada, conserva el original y vuelve a intentarlo. Esta copia incluye solo Pulso; no incluye salida de terminal, reservas de identidad Claude ni historial del proveedor. No reemplaces la base de un runner activo para restaurarla; resuelve antes las sesiones y detén el runner mediante el flujo habitual. No hay restauración desde la interfaz.
 
 Una app nueva conectada a un runner antiguo muestra Pulso deshabilitado. Para activar el nuevo runner hay que resolver las sesiones activas por el flujo habitual; instalar o abrir la interfaz no autoriza detenerlas automáticamente.
+
+Las tarjetas muestran una vista previa de la nota (hasta 240 caracteres). Abrir el detalle carga la nota completa; mover una tarjeta no reescribe su nota. Al refrescar, las columnas ya ampliadas se recuperan en páginas de la misma revisión, conservando lo que tenías cargado.

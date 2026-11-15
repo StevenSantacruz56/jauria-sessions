@@ -1,65 +1,360 @@
-/* Pulso extends Jauría's workbench tokens; all rules stay inside its stage view. */
-.pulso-panel { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); color: var(--text); font: inherit; }
-.pulso-panel [hidden] { display: none !important; }
-.pulso-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
-.pulso-header h1 { font-family: 'Bricolage Grotesque', 'Inter', sans-serif; font-size: 24px; font-weight: 700; line-height: 1.2; }
+/* Pulso shares Jauría's Inter typography, yellow actions and appearance tokens. */
+.pulso-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+:where(.pulso-panel, .pulso-drawer) [hidden] { display: none !important; }
+:where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea, summary, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:where(.pulso-panel, .pulso-drawer) ::selection { background: var(--selected); color: var(--selected-text); }
+:where(.pulso-panel, .pulso-drawer) :where(input, textarea) { caret-color: var(--accent); }
+:where(.pulso-panel, .pulso-drawer) :where(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
+:where(.pulso-panel, .pulso-drawer) button { max-width: 100%; white-space: normal; }
+:where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea):disabled {
+  opacity: .48;
+  cursor: default;
+}
+:where(.pulso-panel, .pulso-drawer) svg { flex-shrink: 0; }
+:where(.pulso-tabs, .pulso-board, .pulso-cards, .pulso-detail, .pulso-error) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) transparent;
+  overscroll-behavior: contain;
+}
+:where(.pulso-tabs, .pulso-board, .pulso-cards, .pulso-detail, .pulso-error)::-webkit-scrollbar { width: 6px; height: 6px; }
+:where(.pulso-tabs, .pulso-board, .pulso-cards, .pulso-detail, .pulso-error)::-webkit-scrollbar-thumb {
+  background: var(--control-border);
+  border-radius: 6px;
+}
+
+.pulso-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 20px 24px 16px;
+}
+.pulso-header > div:first-child { min-width: 0; }
+.pulso-header h1 {
+  margin: 0;
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -.03em;
+}
 .pulso-header p { margin-top: 5px; }
-.pulso-muted, .pulso-empty { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pulso-header-actions, .pulso-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.pulso-muted, .pulso-empty, .pulso-progress {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.pulso-progress { margin-top: 6px; font-variant-numeric: tabular-nums; }
+.pulso-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 24px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scroll-padding-inline: 24px;
+}
+.pulso-tab {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 240px;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.pulso-tab[aria-current="true"] {
+  background: var(--chrome);
+  color: var(--text);
+  font-weight: 600;
+}
+.pulso-tab[aria-current="true"]::after {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  background: var(--accent);
+  content: "";
+}
+.pulso-board-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 20px 24px 16px;
+}
+.pulso-board-toolbar > div { min-width: 0; }
+.pulso-board-toolbar h2 { font-size: 17px; font-weight: 600; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.pulso-board-toolbar p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pulso-board-toolbar > div:last-child:not(:first-child) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/* A constrained flex chain keeps horizontal overflow in the board and vertical
+   overflow in each list, including when the host is only 640px wide. */
+.pulso-board {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 0;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 24px 24px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-padding-inline: 24px;
+}
+.pulso-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 240px;
+  min-width: 240px;
+  max-width: 320px;
+  min-height: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--chrome);
+}
+.pulso-column > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 12px;
+}
+.pulso-column h3 { min-width: 0; font-size: 12px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.pulso-count { color: var(--muted); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pulso-column[data-state="doing"] > header h3 { color: var(--working-text); }
+.pulso-column[data-state="waiting"] > header h3 { color: var(--warning); }
+.pulso-column[data-state="done"] > header h3 { color: var(--success); }
+.pulso-cards {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 2px 3px 8px;
+}
+.pulso-cards > * { flex-shrink: 0; }
+.pulso-empty { margin: 0; padding: 10px 6px 16px; }
+.pulso-card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.pulso-card:hover, .pulso-card:focus-within { border-color: var(--accent); }
+.pulso-card-open {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  padding: 13px 40px 12px 12px;
+  border: 0;
+  border-radius: 11px 11px 0 0;
+  background: transparent;
+  text-align: left;
+}
+.pulso-card-title { display: block; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.pulso-card-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  white-space: pre-line;
+}
+.pulso-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 0 12px 11px;
+}
+.pulso-card-footer small { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.pulso-card-move { max-width: 100%; min-height: 30px; padding: 4px 6px; font-size: 11px; }
+.pulso-card-handle {
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  width: 30px;
+  min-height: 32px;
+  padding: 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.pulso-card-handle svg { width: 16px; height: 16px; }
+.pulso-card-handle:active { cursor: grabbing; }
+.pulso-card.is-dragging { opacity: .5; border-style: dashed; border-color: var(--accent); }
+.pulso-column.is-drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--selected); }
+.pulso-add-trigger { flex: 0 0 auto; justify-content: flex-start; width: 100%; min-height: 36px; padding: 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: 12px; }
+.pulso-add-trigger:hover:not(:disabled) { color: var(--text); }
+.pulso-add-form { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; padding: 4px; min-width: 0; }
+.pulso-add-form input { flex: 1 0 100%; width: 100%; min-height: 36px; }
+.pulso-add-form button { font-size: 12px; }
+
+/* Persistent feedback participates in this view's layout; it must never cover
+   quick-add or an inline editor. Terminal geometry belongs to the hidden stage. */
 .pulso-feedback:empty, .pulso-undo:empty { display: none; }
-.pulso-feedback, .pulso-error, .pulso-undo { padding: 10px 24px; font-size: 12px; }
+.pulso-feedback, .pulso-error, .pulso-undo {
+  position: static;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  max-height: 25%;
+  margin: 0 24px 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .pulso-feedback { color: var(--muted); }
-.pulso-error { background: var(--error-bg); color: var(--error); max-height: 35%; overflow: auto; }
+.pulso-undo { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; background: var(--notice-bg); }
+.pulso-error { background: var(--error-bg); border-color: var(--error); color: var(--error); }
 .pulso-error button { margin: 8px 8px 0 0; }
-.pulso-undo { display: flex; align-items: center; gap: 12px; background: var(--notice-bg); }
-.pulso-layout { display: grid; grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); flex: 1; min-height: 0; }
-.pulso-outline, .pulso-detail { overflow: auto; min-width: 0; min-height: 0; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--control-border) transparent; }
-.pulso-outline { padding: 18px 12px 24px; background: var(--chrome); border-right: 1px solid var(--border); }
-.pulso-outline h2 { padding: 0 8px; margin: 26px 0 8px; font-size: 12px; font-weight: 600; }
-.pulso-capture { display: flex; flex-direction: column; gap: 8px; padding: 0 8px; }
+
+.pulso-empty-board { flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; padding: 40px 24px; }
+.pulso-empty-board h2 { max-width: 40ch; margin: 0 0 8px; font-size: 20px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; }
+.pulso-empty-board p { max-width: 60ch; color: var(--muted); line-height: 1.65; overflow-wrap: anywhere; }
+.pulso-empty-board .pulso-inline-actions { margin-top: 20px; }
+.pulso-capture { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 20px; }
+.pulso-capture input { width: 100%; }
 .pulso-capture .primary { align-self: flex-start; }
-.pulso-empty { padding: 10px 8px; }
-.pulso-row { width: 100%; min-width: 0; justify-content: flex-start; border-color: transparent; background: transparent; padding: 9px 8px; text-align: left; overflow-wrap: anywhere; }
-.pulso-row[aria-current="true"] { background: var(--selected); color: var(--selected-text); }
-.pulso-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; font-weight: 400; }
-.pulso-phases { margin: 3px 0 8px 14px; padding-left: 18px; font-size: 12px; }
-.pulso-phases li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
-.pulso-state { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.pulso-state[data-state="doing"] { color: var(--working-text); }
-.pulso-state[data-state="waiting"] { color: var(--warning); }
-.pulso-state[data-state="done"] { color: var(--success); }
-.pulso-detail { padding: 24px; }
-.pulso-detail > h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; overflow-wrap: anywhere; }
-.pulso-detail h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-.pulso-detail h4 { font-size: 12px; font-weight: 600; margin: 14px 0 4px; }
+
+/* Keep the native dialog's closed state intact; only an open drawer is flex. */
+.pulso-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(540px, 92vw);
+  max-width: 92vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  margin: 0 0 0 auto;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: inherit;
+}
+.pulso-drawer[open] { display: flex; flex-direction: column; }
+.pulso-drawer::backdrop { background: rgb(8 14 24 / 36%); }
+.pulso-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.pulso-drawer-header :where(h2, h3) { min-width: 0; font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.pulso-drawer-header > button { flex: 0 0 auto; width: 32px; min-height: 32px; padding: 7px; }
+.pulso-detail { flex: 1 1 0; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 20px 24px 32px; }
+.pulso-detail > h2 { margin-bottom: 12px; font-size: 20px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.pulso-detail h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.pulso-detail h4 { margin: 14px 0 4px; font-size: 12px; font-weight: 600; }
 .pulso-form, .pulso-section { max-width: 74ch; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
-.pulso-detail > .pulso-form:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
-.pulso-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-width: 0; font-size: 12px; font-weight: 500; }
-.pulso-field input, .pulso-field select, .pulso-field textarea { width: 100%; min-width: 0; font-weight: 400; }
-.pulso-field textarea { min-height: 110px; resize: vertical; padding: 9px 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; line-height: 1.6; caret-color: var(--accent); }
-.pulso-panel textarea::placeholder { color: var(--muted); opacity: 1; }
-.pulso-panel :where(button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.pulso-panel ::selection { background: var(--selected); color: var(--selected-text); }
-.pulso-panel button { max-width: 100%; white-space: normal; }
-.pulso-panel button:disabled, .pulso-panel textarea:disabled { opacity: .48; cursor: default; }
+.pulso-detail > .pulso-form:first-of-type { margin-top: 16px; padding-top: 0; border-top: 0; }
+.pulso-form > .pulso-muted, .pulso-section > .pulso-muted { margin-bottom: 12px; }
+.pulso-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-bottom: 12px; font-size: 12px; font-weight: 500; }
+.pulso-field :where(input, select, textarea) { width: 100%; min-width: 0; font-weight: 400; }
+.pulso-field textarea { min-height: 96px; resize: vertical; padding: 9px 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; line-height: 1.6; }
+.pulso-field textarea[aria-invalid="true"] { border-color: var(--error); }
 .pulso-form > button, .pulso-section button { margin: 4px 8px 4px 0; }
-.pulso-panel details { margin: 14px 0; }
-.pulso-panel summary { cursor: pointer; color: var(--text); padding: 8px 0; font-size: 12px; }
-.pulso-panel summary:hover { color: var(--accent); background: transparent; }
-.pulso-prose { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.65; max-width: 74ch; }
-.pulso-session { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 0; overflow-wrap: anywhere; }
-.pulso-session > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.pulso-check { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; max-width: 65ch; font-size: 12px; line-height: 1.6; cursor: pointer; }
+:where(.pulso-panel, .pulso-drawer) details { margin: 14px 0; }
+:where(.pulso-panel, .pulso-drawer) summary { padding: 8px 0; color: var(--text); font-size: 12px; cursor: pointer; }
+:where(.pulso-panel, .pulso-drawer) summary:hover { color: var(--accent); background: transparent; }
+.pulso-prose { max-width: 74ch; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; }
+.pulso-session { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 10px 0; overflow-wrap: anywhere; }
+.pulso-session > span { min-width: 0; overflow-wrap: anywhere; }
+.pulso-check { display: flex; align-items: flex-start; gap: 8px; max-width: 65ch; margin: 12px 0; font-size: 12px; font-weight: 400; line-height: 1.6; cursor: pointer; }
 .pulso-check input { flex: 0 0 auto; width: 15px; height: 15px; padding: 0; margin: 2px 0 0; accent-color: var(--accent); }
-.pulso-policy { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.pulso-policy { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .pulso-history { list-style: none; padding: 0; margin: 0; }
-.pulso-history li { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.pulso-history li { padding: 14px 0; border-bottom: 1px solid var(--border); }
 .pulso-history .pulso-muted { margin-bottom: 8px; font-variant-numeric: tabular-nums; }
-.pulso-breadcrumb { padding-left: 0; margin-bottom: 8px; color: var(--muted); }
-@media (max-width: 680px) {
-  .pulso-layout { display: flex; flex-direction: column; overflow: auto; }
-  .pulso-outline, .pulso-detail { overflow: visible; flex-shrink: 0; }
-  .pulso-outline { border-right: 0; border-bottom: 1px solid var(--border); }
-  .pulso-detail { padding: 20px 16px; }
-  .pulso-header { padding: 16px; align-items: flex-start; }
-  .pulso-feedback, .pulso-error, .pulso-undo { padding: 10px 16px; }
+.pulso-breadcrumb { justify-content: flex-start; padding-left: 0; margin-bottom: 8px; color: var(--muted); text-align: left; }
+.pulso-checkpoint-preview { margin: 0 0 20px; padding: 0 0 16px; border-bottom: 1px solid var(--border); }
+.pulso-checkpoint-preview .pulso-prose + h4 { margin-top: 12px; }
+
+@media (max-width: 760px) {
+  .pulso-header { align-items: flex-start; padding: 16px; }
+  .pulso-tabs { padding-inline: 16px; scroll-padding-inline: 16px; }
+  .pulso-board-toolbar { padding: 16px; }
+  .pulso-board { padding: 0 16px 16px; scroll-padding-inline: 16px; }
+  .pulso-column { flex-basis: 240px; }
+  .pulso-empty-board { padding: 28px 16px; }
+  .pulso-detail { padding: 20px 16px 28px; }
+  .pulso-feedback, .pulso-error, .pulso-undo { margin-inline:16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea, summary) { transition: none; }
 }

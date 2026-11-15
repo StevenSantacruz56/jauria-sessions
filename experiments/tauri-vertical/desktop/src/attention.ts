@@ -13,7 +13,8 @@ export class SessionAttention {
   private ended = new Set<string>();
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
-  signal(id: string, kind: 'output' | 'bell' | 'notification' | 'ended') {
+  clearProgram(id:string):boolean {const values=this.signals.get(id);const changed=values?.delete('program')??false;if(values&&!values.size)this.signals.delete(id);return changed;}
+  signal(id: string, kind: 'output' | 'bell' | 'notification' | 'ended' | 'program') {
     // A PTY emits spinner redraws, cursor moves and progress while working.
     // Raw output is not evidence that a person needs to attend the session.
     if (kind === 'output') return;

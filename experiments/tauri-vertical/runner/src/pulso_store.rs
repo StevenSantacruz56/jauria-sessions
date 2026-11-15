@@ -235,16 +235,55 @@ impl Store {
                 Ok(json!({"checkpoints":records,"hasMore":more,"nextCursor":if more{Some(cursor+size as u64)}else{None}}))
             }
 
+            "board" => {
+                fields(a, &["projectId", "ifRevision"])?;
+                ensure!(p.session.is_none(), "unauthorized");
+                let project = a.get("projectId").context("missing projectId")?;
+                ensure!(project.is_null() || project.is_string(), "invalid projectId");
+                if !project.is_null() { id(a, "projectId")?; }
+                let expected = a.get("ifRevision").map(|v| v.as_u64().context("invalid ifRevision")).transpose()?;
+                let revision = self.revision()?;
+                if expected == Some(revision) {
+                    return Ok(json!({"revision":revision,"unchanged":true}));
+                }
+                let mut columns = serde_json::Map::new();
+                for status in ["todo", "doing", "waiting", "done"] {
+                    let mut page = self.read(p, "items", &json!({"projectId":project,"status":status,"limit":20,"expectedSnapshotRevision":revision}))?;
+                    page.as_object_mut().unwrap().remove("revision");
+                    // Board cards carry previews, not full detail. Bound escaped JSON
+                    // even for legacy C0 notes; stored notes and other reads stay intact.
+                    for item in page["items"].as_array_mut().unwrap() {
+                        let preview = item["note"].as_str().and_then(|note| {
+                            note.char_indices().nth(240).map(|(end, _)| note[..end].to_owned())
+                        });
+                        if let Some(preview) = preview {
+                            item["note"] = json!(preview);
+                            item["noteTruncated"] = json!(true);
+                        }
+                    }
+                    columns.insert(status.into(), page);
+                }
+                Ok(json!({"revision":revision,"columns":columns}))
+            }
+
             "projects" | "items" => {
                 fields(
                     a,
                     if op == "projects" {
                         &["cursor", "limit", "archived"]
                     } else {
-                        &["projectId", "cursor", "limit", "archived"]
+                        &["projectId", "cursor", "limit", "archived", "status", "expectedSnapshotRevision"]
                     },
                 )?;
                 boolean(a, "archived")?;
+                if a.get("status").is_some() {
+                    status_ok(string(a, "status", 20, true)?)?;
+                }
+                let expected = a.get("expectedSnapshotRevision")
+                    .map(|v| v.as_u64().context("invalid expectedSnapshotRevision")).transpose()?;
+                // Service holds its state mutex across this check, count and page query.
+                let rev = self.read(p, "revision", &json!({}))?["revision"].clone();
+                ensure!(expected.is_none_or(|n| rev.as_u64() == Some(n)), "revision conflict");
                 let limit = limit(a, 50)?;
                 let cursor = match a.get("cursor") {
                     None => 0,
@@ -257,27 +296,41 @@ impl Store {
                         self.authorized(p, "project", &i)?;
                     }
                 }
-                let scope=serde_json::to_string(&p.projects)?;
                 let kind=if op=="projects"{"project"}else{"item"};
                 use rusqlite::types::Value as SqlValue;
-                let filtered=op=="items"&&a.get("projectId").is_some();
-                let filter=if filtered{"AND json_extract(body,'$.projectId') IS ?"}else{""};
+                let mut predicate = String::from("kind=? AND COALESCE(json_extract(body,'$.archived'),0)=?");
+                let mut parameters = vec![SqlValue::Text(kind.into()), SqlValue::Integer(i64::from(a["archived"].as_bool().unwrap_or(false)))];
+                if p.session.is_some() {
+                    predicate.push_str(if op=="projects" {
+                        " AND id IN (SELECT value FROM json_each(?))"
+                    } else {
+                        " AND json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?))"
+                    });
+                    parameters.push(SqlValue::Text(serde_json::to_string(&p.projects)?));
+                }
+                if op=="items" && a.get("projectId").is_some() {
+                    predicate.push_str(" AND json_extract(body,'$.projectId') IS ?");
+                    parameters.push(a["projectId"].as_str().map(|id|SqlValue::Text(id.into())).unwrap_or(SqlValue::Null));
+                }
+                if let Some(status) = a.get("status") {
+                    predicate.push_str(" AND json_extract(body,'$.status')=?");
+                    parameters.push(SqlValue::Text(status.as_str().unwrap().into()));
+                }
+                // Count in SQLite using exactly the same scope/filters, without fetching bodies.
+                let total: i64 = self.0.query_row(&format!("SELECT count(*) FROM docs WHERE {predicate}"), rusqlite::params_from_iter(parameters.iter()), |r| r.get(0))?;
+                let order = if op=="items" { "CAST(json_extract(body,'$.position') AS REAL)," } else { "" };
                 let sql=format!("SELECT CASE WHEN kind='project' THEN json_set(body,'$.plan','') ELSE body END FROM docs
-                    WHERE kind=? AND (? OR CASE WHEN kind='project' THEN id ELSE json_extract(body,'$.projectId') END IN (SELECT value FROM json_each(?)))
-                    AND COALESCE(json_extract(body,'$.archived'),0)=? {filter}
-                    ORDER BY CASE WHEN kind='item' THEN CAST(json_extract(body,'$.position') AS REAL) ELSE 0 END,CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ? OFFSET ?");
-                let mut parameters=vec![SqlValue::Text(kind.into()),SqlValue::Integer(i64::from(p.session.is_none())),SqlValue::Text(scope),SqlValue::Integer(i64::from(a["archived"].as_bool().unwrap_or(false)))];
-                if filtered{parameters.push(a["projectId"].as_str().map(|id|SqlValue::Text(id.into())).unwrap_or(SqlValue::Null));}
+                    WHERE {predicate} ORDER BY {order}CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ? OFFSET ?");
                 parameters.push(SqlValue::Integer((limit+1) as i64));parameters.push(SqlValue::Integer(i64::try_from(cursor)?));
                 let mut query=self.0.prepare(&sql)?;
                 let rows=query.query_map(rusqlite::params_from_iter(parameters),|r|r.get::<_,String>(0))?;
                 let mut values:Vec<Value>=rows.map(|r|Ok(serde_json::from_str(&r?)?)).collect::<Result<_>>()?;
                 let more=values.len()>limit;values.truncate(limit);
-                let rev = self.read(p, "revision", &json!({}))?["revision"].clone();
                 Ok(
-                    json!({if op=="projects"{"projects"}else{"items"}:values,"revision":rev,"hasMore":more,"nextCursor":if more{Some(cursor+limit)}else{None}}),
+                    json!({if op=="projects"{"projects"}else{"items"}:values,"totalCount":total,"revision":rev,"hasMore":more,"nextCursor":if more{Some(cursor+limit)}else{None}}),
                 )
             }
+
             "links" => {
                 fields(a, &["projectId"])?;
                 let i = id(a, "projectId")?;
@@ -681,6 +734,7 @@ fn configure_budget(c:&Connection)->Result<()> {
             }
         }
         c.execute_batch("CREATE INDEX IF NOT EXISTS pulso_docs_item ON docs(kind,json_extract(body,'$.itemId')); CREATE INDEX IF NOT EXISTS pulso_docs_project ON docs(kind,json_extract(body,'$.projectId'),json_extract(body,'$.archived'));
+            CREATE INDEX IF NOT EXISTS pulso_docs_kanban ON docs(kind,json_extract(body,'$.projectId'),COALESCE(json_extract(body,'$.archived'),0),json_extract(body,'$.status'),CAST(json_extract(body,'$.position') AS REAL),CAST(json_extract(body,'$.createdAt') AS INTEGER),id) WHERE kind='item';
             CREATE INDEX IF NOT EXISTS pulso_events_project ON events(json_extract(body,'$.projectId'),seq);
             CREATE INDEX IF NOT EXISTS pulso_events_item ON events(json_extract(body,'$.itemId'),seq);")?;
         Ok(())
@@ -692,6 +746,138 @@ fn configure_budget(c:&Connection)->Result<()> {
 #[cfg(test)]
 mod store_tests {
     use super::*;
+
+    #[test]
+    fn board_is_bounded_ui_snapshot_with_query_free_unchanged_columns() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        store.write(&mut ui, "project_create", &json!({"id":"p","requestId":"p","title":"Project"})).unwrap();
+        for status in ["todo", "doing", "waiting", "done"] {
+            for n in 0..21 {
+                let id = format!("{status}-{n}");
+                store.write(&mut ui, "item_create", &json!({"id":id,"requestId":id,"projectId":"p","status":status,"title":"🦊".repeat(240),"note":"🦊".repeat(1000)})).unwrap();
+            }
+        }
+        let revision = store.revision().unwrap();
+        let board = store.read(&ui, "board", &json!({"projectId":"p"})).unwrap();
+        assert_eq!(board["revision"], revision);
+        assert_eq!(board["columns"].as_object().unwrap().len(), 4);
+        for status in ["todo", "doing", "waiting", "done"] {
+            let column = &board["columns"][status];
+            assert_eq!(column["totalCount"], 21);
+            assert_eq!(column["items"].as_array().unwrap().len(), 20);
+            assert!(column["items"].as_array().unwrap().iter().all(|item| item["status"] == status));
+            assert!(column["items"].as_array().unwrap().iter().all(|item| item["note"] == "🦊".repeat(240) && item["noteTruncated"] == true));
+            assert_eq!(column["hasMore"], true);
+            assert_eq!(column["nextCursor"], 20);
+            let tail = store.read(&ui, "items", &json!({"projectId":"p","status":status,"limit":50,"cursor":column["nextCursor"],"expectedSnapshotRevision":revision})).unwrap();
+            assert_eq!(tail["items"].as_array().unwrap().len(), 1);
+            assert_eq!(tail["totalCount"], 21);
+        }
+        assert!(serde_json::to_vec(&json!({"ok":true,"result":board})).unwrap().len() < 512 * 1024);
+        assert_eq!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap(), json!({"revision":revision,"unchanged":true}));
+        assert!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision-1})).unwrap()["columns"].is_object());
+        assert_eq!(store.read(&ui, "board", &json!({"projectId":null})).unwrap()["columns"]["todo"]["totalCount"], 0);
+        let agent = Principal { session:Some("agent".into()), projects:HashSet::from(["p".into()]), ..Principal::ui() };
+        assert_eq!(store.read(&agent, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap_err().to_string(), "unauthorized");
+        for args in [json!({}), json!({"projectId":false}), json!({"projectId":"../bad"}), json!({"projectId":null,"status":"todo"})] {
+            assert!(store.read(&ui, "board", &args).is_err());
+        }
+        for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!([])] {
+            assert!(store.read(&ui, "board", &json!({"projectId":null,"ifRevision":value})).is_err());
+        }
+        let item = store.get("item", "todo-0").unwrap();
+        store.write(&mut ui, "item_update", &json!({"id":"todo-0","requestId":"move","expectedRevision":item["revision"],"status":"doing"})).unwrap();
+        let refreshed = store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap();
+        assert_eq!(refreshed["revision"], revision+1);
+        assert_eq!(refreshed["columns"]["todo"]["totalCount"], 20);
+        assert_eq!(refreshed["columns"]["doing"]["totalCount"], 22);
+        assert_eq!(store.get("item", "todo-0").unwrap()["position"], item["position"]);
+        // Dropping docs makes any count/page/authorization query fail. The shortcut
+        // must read only meta and still succeed.
+        store.0.execute_batch("DROP TABLE docs").unwrap();
+        assert_eq!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision+1})).unwrap(), json!({"revision":revision+1,"unchanged":true}));
+    }
+
+    #[test]
+    fn board_c0_note_previews_bound_payload_without_changing_full_notes() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        let title = "\u{0001}".repeat(240);
+        let note = "\u{0002}".repeat(1000);
+        store.write(&mut ui, "project_create", &json!({"id":"p","requestId":"p","title":"Project"})).unwrap();
+        for status in ["todo", "doing", "waiting", "done"] {
+            for n in 0..20 {
+                let id = format!("{status}-{n}");
+                store.write(&mut ui, "item_create", &json!({"id":id,"requestId":id,"projectId":"p","status":status,"title":title,"note":note})).unwrap();
+            }
+        }
+        let revision = store.revision().unwrap();
+        let board = store.read(&ui, "board", &json!({"projectId":"p"})).unwrap();
+        let wire = serde_json::to_vec(&json!({"ok":true,"result":board})).unwrap();
+        assert!(wire.len() + 1 <= 512 * 1024, "board envelope and newline: {} bytes", wire.len() + 1);
+        assert_eq!(store.revision().unwrap(), revision);
+        for status in ["todo", "doing", "waiting", "done"] {
+            let column = &board["columns"][status];
+            assert_eq!(column["totalCount"], 20);
+            assert_eq!(column["items"].as_array().unwrap().len(), 20);
+            assert_eq!(column["hasMore"], false);
+            assert!(column["nextCursor"].is_null());
+            for card in column["items"].as_array().unwrap() {
+                assert_eq!(card["title"], title);
+                assert_eq!(card["note"], "\u{0002}".repeat(240));
+                assert_eq!(card["noteTruncated"], true);
+                let detail = store.read(&ui, "item", &json!({"id":card["id"]})).unwrap();
+                assert_eq!(detail["item"]["note"], note);
+                assert!(detail["item"].get("noteTruncated").is_none());
+                assert_eq!(store.get("item", card["id"].as_str().unwrap()).unwrap()["note"], note);
+            }
+            let page = store.read(&ui, "items", &json!({"projectId":"p","status":status,"limit":50,"expectedSnapshotRevision":revision})).unwrap();
+            assert!(page["items"].as_array().unwrap().iter().all(|item| item["note"] == note && item.get("noteTruncated").is_none()));
+        }
+        let original = store.get("item", "todo-0").unwrap();
+        let moved = store.write(&mut ui, "item_update", &json!({"id":"todo-0","requestId":"move","expectedRevision":original["revision"],"status":"doing"})).unwrap();
+        assert_eq!(moved["item"]["note"], note);
+        assert_eq!(moved["item"]["title"], title);
+        assert_eq!(moved["item"]["position"], original["position"]);
+        assert_eq!(moved["item"]["status"], "doing");
+        assert!(moved["item"].get("noteTruncated").is_none());
+    }
+
+    #[test]
+    fn board_note_preview_counts_characters_at_exact_boundary() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        for length in [0, 239, 240, 241] {
+            let id = format!("note-{length}");
+            store.write(&mut ui, "item_create", &json!({"id":id,"requestId":id,"title":id,"note":"🦊".repeat(length)})).unwrap();
+        }
+        let board = store.read(&ui, "board", &json!({"projectId":null})).unwrap();
+        let cards = board["columns"]["todo"]["items"].as_array().unwrap();
+        for length in [0, 239, 240, 241] {
+            let card = cards.iter().find(|card| card["id"] == format!("note-{length}")).unwrap();
+            assert_eq!(card["note"], "🦊".repeat(length.min(240)));
+            if length > 240 { assert_eq!(card["noteTruncated"], true); }
+            else { assert!(card.get("noteTruncated").is_none()); }
+        }
+    }
+
+    #[test]
+    fn kanban_index_covers_project_status_count_and_order() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        for select in ["count(*)", "body"] {
+            let sql = format!("EXPLAIN QUERY PLAN SELECT {select} FROM docs WHERE kind=?
+                AND json_extract(body,'$.projectId') IS 'p'
+                AND COALESCE(json_extract(body,'$.archived'),0)=0
+                AND json_extract(body,'$.status')='todo'
+                ORDER BY CAST(json_extract(body,'$.position') AS REAL),CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT 51 OFFSET 20");
+            let mut q = store.0.prepare(&sql).unwrap();
+            let plan = q.query_map(["item"], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap().join("; ");
+            assert!(plan.contains("pulso_docs_kanban"), "{plan}");
+            assert!(!plan.contains("SCAN docs"), "{plan}");
+            assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        }
+    }
 
     fn budget(c: &Connection) -> (i64, i64) {
         c.query_row("SELECT bytes,rows FROM pulso_budget WHERE id=1", [], |r| {

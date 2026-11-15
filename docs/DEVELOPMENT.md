@@ -104,7 +104,7 @@ Desde `experiments/tauri-vertical/desktop`, con Chrome y Playwright WebKit insta
 
 ```sh
 PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/pulso-panel.test.ts
-node --test tests/browser/pulso-workbench.test.ts
+PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/browser/pulso-workbench.test.ts
 ```
 
 Los fixtures simulan solo la frontera nativa, sin datos personales ni proveedor. Cubren borradores, conflictos, reintentos, permisos, paginación y recuperación. La shell completa conserva xterm y posición de lectura. Para evitar recargas de Vite durante una regresión de terminal, no edites fuentes ni ejecutes varios servidores de estas suites sobre la misma caché al mismo tiempo.
@@ -117,3 +117,5 @@ cargo test --release --locked --test pulso_latency -- --ignored --nocapture
 ```
 
 El segundo comando mide 2/8 PTY, 500 fases y clientes lentos de Pulso en perfiles temporales. No contacta proveedores ni mide pintura de pantalla. La CLI `--pulso-client` acepta `-` para leer JSON por stdin y evitar poner el texto del plan en argumentos del shell. Consulta [el contrato de uso](PULSO.md) y [los resultados locales de 1.1.0](PULSO_VALIDATION_1.1.0.md).
+
+La versión 1.2.0 añade el tablero y los estados pasivos de programa. Consulta [la revisión de Herdr](HERDR_REVIEW.md) y [la validación de 1.2.0](PULSO_VALIDATION_1.2.0.md).

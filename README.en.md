@@ -4,7 +4,7 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-**Current version: 1.1.0.** Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Current version: 1.2.0.** Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -14,23 +14,27 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 - Register Git repositories and create a separate worktree for each parallel editing task. Jauria enforces one managed writer per worktree. Shell and provider settings determine filesystem and command permissions.
 - Inspect session state, optional attention notifications, provider usage when available, and observed CPU/RAM consumption.
 
-**Pulso** brings work or business plans, ordered phases and standalone pending items into the same app, separate from Git repositories. When creating a project, a checked box links the current session as its main session when available; you can uncheck it or change the main session later. Phases have optional session links and immutable checkpoints recording progress and the next action. The detail shows the latest 10 checkpoints; **Ver puntos anteriores** loads 10 more at a time.
+**Pulso 1.2.0** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones. Git repositories remain separate.
 
-Separate buttons focus a live session or view local history. You can edit and copy phase context, then open a new blank session; context is never sent automatically. Managed Claude conversations with a reserved identity support an exact-ID resume attempt, without guaranteeing provider history. Pulso can focus an existing live continuation and links a resumed session to the selected project/phase while retaining origin metadata. Codex remains in its terminal, with local history and copied context; native Codex identity capture/resume is unavailable.
+1. Choose **Nuevo proyecto**, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked. Creating the project opens its board tab.
+2. Add phases inline with **Añadir fase** in the first three columns (**Añadir pendiente** for standalone cards).
+3. Drag a card by its grip to another column, or use the keyboard-accessible **Mover** select. Moves change status while preserving phase order. Reordering within a column, custom columns and moves across projects are deferred.
+4. A card's **Abrir** action opens the right drawer; it does not start a PTY. Edit title, notes and status, read the latest checkpoint and next step, or expand **Guardar avance** to append an immutable checkpoint. History loads 10 at a time.
+5. **Plan y sesiones** in the project board toolbar opens the optional plan, main session, links and grants, keeping those controls off the board.
 
-Authorized agents can register and update work through a scoped local CLI. Access requires an explicit grant; the remember box starts unchecked, and saved policies can be managed and revoked. MCP is deferred. There is no automatic import from the earlier Pulso website or cloud sync.
+Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped grants and revocable policies. MCP, website import and cloud sync remain deferred.
 
-SQL queries return bounded pages. Pulso has a logical budget of 64 MiB/100,000 rows, plus 1 MiB/2,000 rows of headroom only for permission principals and policies, and a 128 MiB physical cap on its own database. Reads remain available at budget. There is no automatic deletion or export UI; the guide describes consistent SQLite backup, not raw copying of an open database.
+Explicit **OSC 7501** reports may display program status in the live view. This cosmetic signal never updates phases. Jauria installs no hooks and changes no agent configuration. Programs that do not emit it have no program status. Replay creates no status or alerts; reconnecting resets this ephemeral state.
 
-Installed-app activation and real-profile testing have not been performed for 1.1.0. Final test counts and metrics await the main task's validation closeout.
+The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), and [1.2.0 release notes](docs/RELEASE_1.2.0.md) (Spanish).
 
-Read the [Pulso guide](docs/PULSO.md) (Spanish) and [1.1.0 release notes](docs/RELEASE_1.1.0.md).
+The local **1.2.0** release is built and its DMG verified. See [validation results and limits](docs/PULSO_VALIDATION_1.2.0.md). The example uses a separate profile; existing sessions were preserved and the installer was not published.
 
-See the [screenshots and full usage guide](README.md#capturas).
+See the [screenshots and full usage guide](README.md#capturas). The current board is shown below.
 
-![Pulso · Jauria 1.1.0](docs/screenshots/pulso-1.1.0.png)
+![Pulso · Jauria 1.2.0](docs/screenshots/pulso-1.2.0.png)
 
-Pulso: a project holds a complete plan, with phases and continuity points. Synthetic interface screenshot; no real session data.
+Example board in Jauria 1.2.0. Synthetic screenshot: no real session or task data.
 
 ## Install and start
 
@@ -71,4 +75,4 @@ The default desktop build is optimized release mode and unsigned. Use `--debug` 
 
 ## Project status and security
 
-Read the [changelog](CHANGELOG.md), [1.1.0 notes](docs/RELEASE_1.1.0.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).
+Read the [changelog](CHANGELOG.md), [1.2.0 notes](docs/RELEASE_1.2.0.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).

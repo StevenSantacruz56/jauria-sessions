@@ -60,6 +60,12 @@ try {
     a.signal('claude', 'output'); assert.deepEqual(a.list(sessions), []);
     a.signal('claude', 'notification'); assert.equal(a.list(sessions)[0].unseen, true);
   });
+  test('program status clearing preserves independent bell and lifecycle alerts',()=>{
+    const a=new SessionAttention();const sessions=[session('s','needs_attention')];a.list(sessions);
+    a.signal('s','program');a.signal('s','bell');assert.equal(a.clearProgram('s'),true);
+    const remaining=a.list(sessions);assert.equal(remaining[0].keys.length,2);assert.equal(remaining[0].keys.some((key:string)=>key.endsWith('signal:bell')),true);
+    assert.equal(a.clearProgram('s'),false);assert.match(remaining[0].reason,/custodia/);
+  });
   test('focus consumes only activity; custody and permissions cannot be cleared by viewing output', async () => {
     const a = new SessionAttention(); const sessions = [session('s', 'needs_attention', 'app-server')]; a.list(sessions);
     await a.poll(sessions, async () => summary('s'), () => true); a.list(sessions);

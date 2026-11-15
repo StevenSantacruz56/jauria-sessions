@@ -242,7 +242,8 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
         "revision" => &[],
         "projects" => &["cursor","limit","archived"],
         "project" | "item" => &["id"],
-        "items" => &["projectId","cursor","limit","archived"],
+        "items" => &["projectId","cursor","limit","archived","status","expectedSnapshotRevision"],
+        "board" => &["projectId","ifRevision"],
         "links" => &["projectId"],
         "checkpoint_history" => &["itemId","cursor","limit"],
         "activity" => &["projectId","itemId","limit"],
@@ -260,6 +261,24 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
     };
     let object=args.as_object().ok_or("args debe ser objeto")?;
     if object.keys().any(|key|!fields.contains(&key.as_str())) { return Err("Argumento de Pulso no permitido".into()); }
+    if op == "items" {
+        if let Some(status) = args.get("status") {
+            if !status.as_str().is_some_and(|s| ["todo","doing","waiting","done"].contains(&s)) {
+                return Err("Estado de Pulso inválido".into());
+            }
+        }
+        if args.get("expectedSnapshotRevision").is_some_and(|v| v.as_u64().is_none()) {
+            return Err("Revisión de Pulso inválida".into());
+        }
+    }
+    if op == "board" {
+        if !args.get("projectId").is_some_and(|v| v.is_null() || v.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 80 && id != "." && id != ".." && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b)))) {
+            return Err("Proyecto de Pulso inválido".into());
+        }
+        if args.get("ifRevision").is_some_and(|v| v.as_u64().is_none()) {
+            return Err("Revisión de Pulso inválida".into());
+        }
+    }
     if serde_json::to_vec(args).map_err(error)?.len()>120*1024 { return Err("Petición de Pulso demasiado grande".into()); }
     Ok(())
 }
@@ -658,5 +677,40 @@ mod project_task_bridge_tests {
         let valid=json!({"streamMetrics":{"pages":0,"lastPageMs":0,"lastParseMs":0,"lastTransferMs":0,"lastYieldMs":0,"maxParseMs":0,"maxYieldMs":0,"visibility":"unknown","pageBytes":0}});
         assert!(validate_stream_metrics(&valid).is_ok());assert!(validate_stream_metrics(&json!({})).is_ok());
         for bad in [json!({"streamMetrics":{"extra":"private"}}),json!({"streamMetrics":{"visibility":"else"}}),json!({"streamMetrics":{"lastYieldMs":-1}}),json!({"streamMetrics":{"pages":1e30}})]{assert!(validate_stream_metrics(&bad).is_err());}
+    }
+}
+
+#[cfg(test)]
+mod pulso_board_bridge_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_bounded_kanban_reads_and_legacy_items() {
+        assert!(validate_pulso("items", &json!({"projectId":null,"limit":50,"cursor":20})).is_ok());
+        for status in ["todo", "doing", "waiting", "done"] {
+            assert!(validate_pulso("items", &json!({"status":status,"expectedSnapshotRevision":0})).is_ok());
+        }
+        for project in [json!(null), json!("project_1.2-3")] {
+            assert!(validate_pulso("board", &json!({"projectId":project})).is_ok());
+            assert!(validate_pulso("board", &json!({"projectId":project,"ifRevision":u64::MAX})).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_kanban_fields_types_and_states() {
+        for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!({}), json!([])] {
+            assert!(validate_pulso("items", &json!({"expectedSnapshotRevision":value})).is_err());
+            assert!(validate_pulso("board", &json!({"projectId":null,"ifRevision":value})).is_err());
+        }
+        for value in [json!(null), json!(1), json!(true), json!("unknown"), json!("TODO"), json!("")] {
+            assert!(validate_pulso("items", &json!({"status":value})).is_err());
+        }
+        for args in [json!({}), json!({"projectId":1}), json!({"projectId":"../bad"}),
+            json!({"projectId":null,"status":"todo"}), json!({"projectId":null,"limit":50})] {
+            assert!(validate_pulso("board", &args).is_err());
+        }
+        assert!(validate_pulso("projects", &json!({"status":"todo"})).is_err());
+        assert!(validate_pulso("projects", &json!({"expectedSnapshotRevision":0})).is_err());
+        assert!(validate_pulso("items", &json!({"status":"todo","extra":true})).is_err());
     }
 }
