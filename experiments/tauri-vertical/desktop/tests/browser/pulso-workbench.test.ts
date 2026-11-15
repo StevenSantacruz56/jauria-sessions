@@ -113,7 +113,7 @@ try{
       await install(page,'',{mainClosed:true,activeContinuation:true}); await page.goto(url);
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
-      const cta=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Continuar proyecto|Volver a conversación reanudada/}); await cta.click();
+      const cta=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Abrir sesión principal|Abrir conversación activa/}); await cta.click();
       await page.waitForFunction(()=>document.querySelector('.session-item[aria-current="true"]')?.textContent?.includes('Continuación sintética'));
       assert.equal(await page.locator('#pulso-panel-host').isVisible(),false);
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>/resume_native|^(start|input)$/.test(c.op))),[]);
@@ -144,7 +144,7 @@ try{
         await settings.getByRole('button',{name:'Cerrar',exact:true}).click();
         await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
         await page.setViewportSize({width:1440,height:1000});
-        await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Continuar proyecto',exact:true}).waitFor();
+        await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Abrir sesión principal',exact:true}).waitFor();
         await page.screenshot({path:`${docsDir}/pulso-1.3.0.png`,animations:'disabled'});
       }
     } finally {await browser.close();}

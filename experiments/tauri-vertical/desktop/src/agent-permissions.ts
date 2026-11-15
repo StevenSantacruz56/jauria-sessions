@@ -28,7 +28,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   function option(value: string, title: string) { const node = el('option', title); node.value = value; return node; }
   const heading = el('h3', 'Permisos de agentes'); heading.tabIndex = -1; heading.id = prefix;
   host.setAttribute('aria-labelledby', prefix);
-  host.append(heading, el('p', 'Gestiona aquí el acceso a Pulso. Cada permiso corresponde al proyecto elegido o a proyectos creados por la propia sesión. Los permisos nativos de Claude y Codex se conservan.', 'settings-dialog-help'));
+  host.append(heading, el('p', 'Elige una sesión abierta y el alcance de sus datos en Pulso. Al conceder acceso aparecerá un comando para copiar en esa sesión; Jauria no lo ejecuta. El agente podrá consultar y modificar el proyecto elegido o los proyectos que cree. Los permisos nativos de Claude y Codex se conservan.', 'settings-dialog-help'));
   const session = select('Sesión que recibirá permiso', 'session');
   const scope = select('Alcance del permiso', 'scope');
   const rememberLabel = el('label', '', 'settings-permissions-check');
@@ -37,7 +37,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   const status = el('p', '', 'settings-dialog-help'); status.setAttribute('role', 'status');
   const result = el('div', '', 'settings-permissions-result');
   const actions = el('div', '', 'settings-permissions-actions');
-  const grant = button('Permitir registrar planes', () => { void write('grant'); });
+  const grant = button('Conceder acceso y ver comando', () => { void write('grant'); });
   const revoke = button('Revocar permiso de la sesión', () => { void write('revoke'); });
   const retry = button('Actualizar permisos y proyectos', () => { void read(); });
   const more = button('Más proyectos', () => { void readMoreProjects(); }); more.hidden = true;

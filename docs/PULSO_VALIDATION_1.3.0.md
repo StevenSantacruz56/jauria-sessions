@@ -20,7 +20,17 @@ Benchmark release optativo aprobado con perfiles sintéticos de 2 y 8 sesiones, 
 
 Antes de la entrega se recuperó mediante la interfaz la conversación Claude «test» usando su identidad registrada, sin tocar la otra sesión viva. Se conservó la principal original y se enlazó la continuación. No se leyó ni copió el contenido de esa conversación a la documentación.
 
-La interfaz 1.3.0 se abrió contra el mismo runner 1.2.0 existente: ambas sesiones siguieron vivas y la generación del runner no cambió. El servicio de automatización de escritorio dejó de responder antes de comprobar visualmente la ventana final; esta comprobación nativa queda pendiente. Las capturas publicadas son sintéticas de la shell real en navegador, sin datos del usuario. Las pruebas de navegador no sustituyen esa comprobación nativa.
+La interfaz 1.3.0 se abrió contra el mismo runner 1.2.0 existente: ambas sesiones siguieron vivas y la generación del runner no cambió. En la primera sesión de validación, el servicio de automatización de escritorio dejó de responder antes de comprobar visualmente la ventana final. Las capturas publicadas son sintéticas de la shell real en navegador, sin datos del usuario.
+
+### Revisión nativa posterior y ajustes de claridad
+
+En una sesión nueva, Computer Use abrió el paquete original contra el perfil existente. El tablero de prueba enfocó la conversación Claude ya reanudada con las dos plazas ocupadas; el contador siguió en 2 de 2 y no apareció una sesión adicional. Se observaron Configuración con los permisos Pulso en una sola sección, alcance por proyecto o creación propia, recordar desmarcado, avisos de macOS desactivados, navegación Pulso/terminal, foco al abrir y cerrar diálogos y scroll del terminal con regreso al final. No se concedieron ni revocaron permisos ni se interrumpieron las sesiones.
+
+La revisión encontró problemas de claridad: el acceso a sesiones que necesitan atención cerraba Configuración aunque no hubiera ninguna; el detalle del proyecto repetía el enlace a la misma conversación activa en cada historial vinculado; y el botón de acceso a Pulso no anticipaba el paso de copiar un comando a la sesión elegida. El código y el paquete local `Jauria-1.3.0-ux-fixes.app` incluyen el estado vacío de avisos, una sola acción de apertura de la conversación, etiquetas distintas para historiales con el mismo título y una explicación del alcance y los pasos del permiso. Los botones de recuperación nombran la acción real: abrir una sesión viva o reanudar una conversación cerrada.
+
+La compilación TypeScript/Vite y el bundle Tauri release del paquete ajustado aprobaron. Las suites sintéticas afectadas no pudieron arrancar Chromium/WebKit ni el puerto local por restricciones de este entorno (`SIGABRT`/`EPERM`), antes de ejecutar sus casos. Computer Use rechazó abrir el paquete ajustado; su revisión visual nativa sigue pendiente. Los 335 casos aprobados arriba corresponden al paquete anterior y no se atribuyen a este ajuste.
+
+La revisión de seguridad fue acotada al flujo de permisos: la interfaz no concede por sí sola y el runner exige sesión viva, proyecto existente o creación propia y política recordada ligada a proveedor y carpeta. No se hizo una auditoría de seguridad completa. La acción de avisos lee el estado de UI ya calculado y el detalle de proyecto deja de consultar el vínculo por cada fila histórica. No se repitió el benchmark de latencia para el paquete ajustado.
 
 ## Paquete local
 

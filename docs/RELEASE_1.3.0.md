@@ -6,6 +6,8 @@ El tablero ofrece un acceso directo a la conversación principal y reutiliza una
 
 Configuración reúne permisos Pulso, políticas recordadas y revocación, apariencia, límite de sesiones y avisos nativos. Centralizar la interfaz no amplía autoridad: los permisos siguen sujetos a proyecto, proveedor y carpeta, con recordar desmarcado inicialmente. Los permisos nativos de Claude Code y Codex siguen a cargo de sus CLI.
 
+El ajuste local `Jauria-1.3.0-ux-fixes.app` aclara la recuperación: abrir una sesión viva y reanudar una conversación cerrada tienen etiquetas distintas. En el detalle del proyecto aparece una sola acción para la conversación activa y los historiales con el mismo título se distinguen por identificador. Configuración explica el alcance del acceso y el paso de copiar el comando a la sesión elegida. Cuando ninguna sesión necesita atención, lo indica y desactiva el acceso correspondiente. La compilación aprobó; la revisión nativa de este paquete ajustado y las suites de navegador afectadas siguen pendientes por restricciones del entorno, según [la validación](PULSO_VALIDATION_1.3.0.md).
+
 Se mantienen las decisiones de [la revisión de Herdr](HERDR_REVIEW.md): navegación directa, separación de vista y runtime y señales explícitas de estado. Sin mods JavaScript, SSH remoto ni reanudación automática.
 
 Consulta [el flujo de recuperación](PULSO.md#recuperar-el-trabajo) y [la instalación](INSTALLATION.md). Codex conserva continuidad por historial/contexto; la reanudación nativa de Codex no está incluida. La identidad exacta de Claude no garantiza que el proveedor conserve su historial.

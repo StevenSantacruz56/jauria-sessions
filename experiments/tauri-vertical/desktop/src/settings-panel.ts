@@ -12,6 +12,7 @@ type Options = {
   permissions?: PermissionsOptions;
   notificationControls?: HTMLElement;
   onOpenAttention?: () => void;
+  hasAttention?: () => boolean;
   read: () => Promise<AppSettings>;
   save: (limit: number) => Promise<AppSettings>;
   getTheme: () => string;
@@ -96,6 +97,7 @@ export function mountSettings(options: Options): {
   footer.append(closeButton, saveButton);
   const permissionsHost = node('section', '', 'settings-dialog-section settings-permissions');
   const notices = node('section', '', 'settings-dialog-section');
+  let refreshAttention = () => {};
   notices.append(node('h3', 'Avisos'));
   // Move the original controls, preserving IDs, state and listeners.
   if (options.notificationControls) {
@@ -104,11 +106,19 @@ export function mountSettings(options: Options): {
   }
   if (options.onOpenAttention) {
     const attention = node('button', 'Ver sesiones que necesitan atención', 'secondary'); attention.type = 'button';
+    const attentionEmpty = node('p', 'No hay sesiones que necesiten atención.', 'settings-dialog-help');
+    const syncAttention = () => {
+      const hasAttention = options.hasAttention?.() ?? true;
+      attention.disabled = busy || !!permissions?.isBusy || !hasAttention;
+      attentionEmpty.hidden = hasAttention;
+    };
     attention.addEventListener('click', () => {
       if (busy || permissions?.isBusy) return;
+      if (options.hasAttention && !options.hasAttention()) { refreshAttention(); return; }
       close(); options.onOpenAttention?.();
     });
-    notices.append(attention);
+    notices.append(attention, attentionEmpty);
+    refreshAttention = syncAttention;
   }
   form.append(heading, general, sessions);
   if (options.permissions) form.append(permissionsHost);
@@ -140,6 +150,7 @@ export function mountSettings(options: Options): {
     saveButton.textContent = busy && !readFailed ? 'Esperando…' : 'Guardar';
     retry.disabled = busy; retry.hidden = !readFailed;
     compatibility.hidden = editable;
+    refreshAttention();
   }
   function accept(settings: AppSettings): void {
     current = settings; loaded = true;

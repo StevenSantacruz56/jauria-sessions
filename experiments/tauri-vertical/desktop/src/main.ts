@@ -1255,6 +1255,7 @@ async function requestPulso(op: string, args: Record<string, unknown>) {
 const settingsPanel = mountSettings({
   permissions: { request: requestPulso, sessions: () => [...views.values()].map(view => view.session), available: () => connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable },
   notificationControls: $('#enable-native-notifications').closest<HTMLElement>('.settings-section')!,
+  hasAttention: () => !$('#attention-filter').hidden,
   onOpenAttention: () => {
     if(settingsPanel.isOpen)return;
     if(pulsoPanel && !pulsoPanel.prepareNavigation()){notice('Guarda o descarta el borrador antes de abrir los avisos.');return;}
