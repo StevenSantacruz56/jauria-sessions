@@ -385,7 +385,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     composer.append(button('Abrir nueva sesión', () => options.newSession(source?.cwd ?? undefined)), el('p', 'Abre una sesión vacía. El contexto no se envía automáticamente.', 'pulso-muted'));
     recover.append(composer); detail.insertBefore(recover,form);
     const latest=[...checkpoints].sort(checkpointOrder).at(-1);if(latest){const preview=el('section','','pulso-checkpoint-preview');preview.append(el('h3','Último avance'),el('p',latest.brief,'pulso-prose'),el('h4','Siguiente paso'),el('p',latest.nextAction,'pulso-prose'));detail.insertBefore(preview,recover);}
-    sessionsBlock(detail, [...new Set([selectedProject?.mainSessionId, ...links.map(l => l.sessionId), ...checkpoints.map(c => c.sessionId)].filter((id): id is string => !!id))], null);
+    sessionsBlock(detail, [...new Set([selectedProject?.mainSessionId, ...links.map(l => l.sessionId), ...checkpoints.map(c => c.sessionId)].filter((id): id is string => !!id))], null, recoveryId ?? null);
     const connections=el('details');connections.append(el('summary','Vincular otra sesión'));linkBlock(connections, { itemId: item.id });detail.append(connections);permissionsLink(detail,item.projectId??undefined);
     const history = el('section', '', 'pulso-section'); history.append(el('h3', 'Historial de checkpoints'));
     if (!checkpoints.length) history.append(el('p', 'Todavía no hay checkpoints. Registra uno antes de dejar esta fase.', 'pulso-muted'));
@@ -408,7 +408,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       undoSlot.replaceChildren();dirty=false;if(drawerKind==='item'&&selectedItem?.id===id)await chooseItem(data.item);await reloadBoard();
     })));
   }
-  function sessionsBlock(host: HTMLElement, ids: string[], recoveryId: string | null) {
+  function sessionsBlock(host: HTMLElement, ids: string[], recoveryId: string | null, rowRecoveryExcludeId?: string | null) {
     const section = el('section', '', 'pulso-section'); section.append(el('h3', 'Sesiones vinculadas'));
     if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Reanudar sesión principal', false);
     if (!ids.length) section.append(el('p', 'Sin sesiones vinculadas.', 'pulso-muted'));
@@ -427,6 +427,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       } else {
         row.append(el('span', 'Historial local · sesión finalizada o no disponible', 'pulso-muted'));
         if(s)row.append(button('Ver historial',()=>options.openSession(id)));
+        if (rowRecoveryExcludeId !== undefined && id !== rowRecoveryExcludeId)
+          recoveryAction(row, id, 'Abrir sesión vinculada', 'Reanudar conversación', false);
       }
       section.append(row);
     }

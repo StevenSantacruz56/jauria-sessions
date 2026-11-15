@@ -243,18 +243,18 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('history, live focus, uncertain inspection and Claude resume are separate; bindings do not poll', async () => {
         const p = await mounted('f.links=[{itemId:"i1",sessionId:"live"},{itemId:"i1",sessionId:"attention"}];'); await itemDetail(p);
-        await p.getByRole('button', { name: 'Reanudar sesión de la fase' }).waitFor();
+        await p.getByRole('button', { name: 'Reanudar conversación' }).waitFor();
         assert.match(await p.locator('.pulso-detail').innerText(), /Historial local/);
         await p.getByRole('button', { name: 'Enfocar sesión viva' }).click(); await p.getByRole('button', { name: 'Inspeccionar sesión' }).click();
         await p.getByRole('button',{name:'Ver historial',exact:true}).click();
-        await p.getByRole('button', { name: 'Reanudar sesión de la fase' }).click(); await idle(p);
+        await p.getByRole('button', { name: 'Reanudar conversación' }).click(); await idle(p);
         assert.deepEqual(await run(p, 'return f.opened'), ['live', 'attention', 'ended']); assert.deepEqual(await run(p, 'return f.resumed'), ['ended']);
         await run(p, 'f.revision++; return f.panel.refresh()');
         const count = await run(p, 'return f.bindings.length');
         await run(p, 'f.revision++; return f.panel.refresh()');
         assert.equal(await run(p, 'return f.bindings.length'), count, 'explicit resume may invalidate metadata once; later refreshes reuse it');
         const q = await mounted('f.bindingProvider="codex";'); await itemDetail(q);
-        assert.equal(await q.getByRole('button', { name: 'Reanudar sesión de la fase' }).count(), 0);
+        assert.equal(await q.getByRole('button', { name: 'Reanudar conversación' }).count(), 0);
       });
       await t.test('an exact live continuation opens without launching the conversation again',async()=>{
         const p=await mounted('f.activeNative="live";');await projectDetail(p);
