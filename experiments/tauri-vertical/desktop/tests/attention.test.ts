@@ -66,6 +66,22 @@ try {
     const remaining=a.list(sessions);assert.equal(remaining[0].keys.length,2);assert.equal(remaining[0].keys.some((key:string)=>key.endsWith('signal:bell')),true);
     assert.equal(a.clearProgram('s'),false);assert.match(remaining[0].reason,/custodia/);
   });
+  test('reported blocker persists until the program changes state; done survives idle until seen', () => {
+    const a = new SessionAttention();
+    const s = { ...session(), programState: null as 'working' | 'blocked' | 'idle' | null, programFinishedUnseen: false };
+    a.list([s]);
+    s.programState = 'blocked';
+    assert.match(a.list([s])[0].reason, /agente solicita atención/);
+    a.seeProgram(s.id);
+    assert.equal(a.list([s])[0].unseen, false);
+    s.programState = 'idle'; s.programFinishedUnseen = true;
+    assert.match(a.list([s])[0].reason, /terminó su turno/);
+    assert.equal(a.list([s])[0].unseen, true);
+    a.see(a.list([s]));
+    assert.equal(a.list([s])[0].unseen, false);
+    s.programFinishedUnseen = false;
+    assert.deepEqual(a.list([s]), []);
+  });
   test('focus consumes only activity; custody and permissions cannot be cleared by viewing output', async () => {
     const a = new SessionAttention(); const sessions = [session('s', 'needs_attention', 'app-server')]; a.list(sessions);
     await a.poll(sessions, async () => summary('s'), () => true); a.list(sessions);

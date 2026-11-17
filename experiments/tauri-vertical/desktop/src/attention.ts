@@ -1,5 +1,6 @@
 import { matchesSession, statusLabel, type WorkspaceSession } from './workspace';
-type Session = WorkspaceSession & { transport?: string; codex?: { generation: number } };
+import type { ProgramState } from './program-status';
+type Session = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
 type Observation = { generation: number; count: number; keys: string[]; stale: boolean };
 export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[] };
 
@@ -35,6 +36,8 @@ export class SessionAttention {
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');
       if (p?.count) add(`permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`, `${p.count} ${p.count === 1 ? 'permiso pendiente' : 'permisos pendientes'}${p.generation !== s.codex?.generation ? ' · generación anterior, caducado' : stale ? ' · sin confirmar' : ''}`);
+      if (s.programState === 'blocked' || s.programState === 'error') add('program:needs', s.programState === 'error' ? 'El agente informó un error' : 'El agente solicita atención');
+      if (s.programFinishedUnseen) add('program:done', 'El agente terminó su turno');
       for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
       for (const key of keys) next.add(key);
       // Initial lifecycle snapshot is quiet, but remains available in the list.
@@ -51,6 +54,7 @@ export class SessionAttention {
       this.signals.delete(item.id);
     }
   }
+  seeProgram(id: string) { this.seen.add(`${id}:program:needs`); }
   observeEnd(id: string, previous: string, status: string) {
     if (['running', 'starting'].includes(previous) && ['exited', 'stopped', 'failed'].includes(status) && !this.ended.has(id)) {
       this.ended.add(id); this.signal(id, 'ended');

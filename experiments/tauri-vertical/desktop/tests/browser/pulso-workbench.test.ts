@@ -256,11 +256,11 @@ try{
       assert.doesNotMatch(await session.innerText(),/Trabajando/,'incomplete OSC must not publish');
       await emit('te=working:msg=<img src=x onerror=alert(1)>:title=UNTRUSTED_PROGRAM_MESSAGE');await page.waitForTimeout(350);
       assert.doesNotMatch(await session.innerText(),/Trabajando/,'unfinished payload must not publish');
-      await emit('\x1b\\');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item-meta')).some(n=>n.textContent?.includes('Trabajando')));
+      await emit('\x1b\\');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item-state')).some(n=>n.textContent?.includes('Trabajando')));
       assert.doesNotMatch(await page.locator('body').innerText(),/UNTRUSTED_PROGRAM_MESSAGE|onerror=alert/);assert.equal(await page.locator('img[src="x"]').count(),0);
       await emit('\x1b]7501;state=blocked:id=child\x07\x1b]7501;state=?\x07\x1b]7501;state=done:state=blocked\x07\x1b]7501;state=done:msg='+ 'x'.repeat(1024)+'\x07');
       await page.waitForTimeout(650);assert.match(await session.innerText(),/Trabajando/);assert.doesNotMatch(await session.innerText(),/Solicita atención|Turno finalizado/);
-      await emit('\x1b]7501;state=clear\x07');await page.waitForFunction(()=>!Array.from(document.querySelectorAll('.session-item-meta')).some(n=>/Trabajando|Solicita atención|Turno finalizado/.test(n.textContent??'')));
+      await emit('\x1b]7501;state=clear\x07');await page.waitForFunction(()=>!Array.from(document.querySelectorAll('.session-item-state')).some(n=>/Trabajando|Solicita atención|Turno terminado/.test(n.textContent??'')));
       await page.locator('#open-pulso').click();await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
       await page.getByRole('region',{name:'En curso',exact:true}).getByRole('button',{name:'Abrir Validar la fluidez de las terminales',exact:true}).waitFor();
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.phase()),before);
@@ -277,7 +277,7 @@ try{
       await page.getByText('Guardar avance',{exact:true}).click();
       await page.getByLabel('Qué quedó listo ·').evaluate(n=>{(window as any).pulsoFixture.checkpointInput=n;});
       const reads=await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>['board','item','project'].includes(c.op)).length);
-      for(const [state,label] of [['working','Trabajando'],['idle','En espera']]){
+      for(const [state,label] of [['working','Trabajando'],['idle','Turno terminado']]){
         const polls=await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='revision').length);
         await page.evaluate(state=>(window as any).pulsoFixture.output(`\x1b]7501;state=${state}\x07`),state);
         await page.waitForFunction(label=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes(label)),label);
@@ -290,7 +290,7 @@ try{
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='item_update').length),0);assert.deepEqual(errors,[]);
     }finally{await browser.close();}
   });
-  await test(`${engine.name()}: a suppressed unattended blocked alert is delivered after the five-second cooldown`,async()=>{
+  await test(`${engine.name()}: a reported blocker stays visible and reappears after new work`,async()=>{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     try{
       await install(page);await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
@@ -298,13 +298,22 @@ try{
       const session=page.locator('.session-item').filter({hasText:'Plan sintético · Integración'});
       const emit=async(state:string)=>page.evaluate(state=>(window as any).pulsoFixture.output(`\x1b]7501;state=${state}\x07`),state);
       await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='true'));
-      const firstAlert=Date.now();assert.equal(await session.getAttribute('data-unseen'),'true');
-      await emit('working');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='false'));
-      await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes('Solicita atención')));
-      assert.equal(await session.getAttribute('data-attention'),'false','second blocked report is initially rate limited');
-      await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='true'),undefined,{timeout:6500});
-      assert.ok(Date.now()-firstAlert>=4500,'the deferred alert must respect the real five-second cooldown');
       assert.equal(await session.getAttribute('data-unseen'),'true');
+      await emit('working');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='false'));
+      await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes('Solicita atención')&&n.getAttribute('data-attention')==='true'));
+      assert.equal(await session.getAttribute('data-unseen'),'true');
+      await page.locator('#activity-filter').click();
+      await page.locator('.session-group[data-activity="needs"]').waitFor();
+      assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
+      const screenshotDir=process.env.PULSO_SCREENSHOT_DIR;
+      if(screenshotDir){await mkdir(screenshotDir,{recursive:true});await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-light.png`,animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-dark.png`,animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await emit('working');await page.locator('.session-group[data-activity="working"]').waitFor();
+      assert.equal(await session.getAttribute('data-attention'),'false');
+      if(screenshotDir)await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-working-light.png`,animations:'disabled'});
+      await emit('idle');await page.locator('.session-group[data-activity="finished"]').waitFor();
+      assert.match(await session.textContent() ?? '', /Turno terminado/);
+      await session.click();
+      assert.match(await session.textContent() ?? '', /En espera/);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='item_update').length),0);assert.deepEqual(errors,[]);
     }finally{await browser.close();}

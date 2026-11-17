@@ -25,3 +25,12 @@ test('focus, acknowledgement, permission failure and disposal cancel delayed not
   await failed.enableFromClick([]); assert.equal(failed.enabled, false);
   failed.update([item('no-permission')]); await tick(); assert.equal(sends, 0);
 });
+test('native notices describe the category without including session details', async () => {
+  const kinds: string[] = [];
+  const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: kind => { kinds.push(kind); } }, () => true, () => {}, 1);
+  await n.enableFromClick([]);
+  n.update([item('s:program:needs', {reason:'Sensitive project name'})]); await tick();
+  n.update([item('s:program:done')]); await tick();
+  n.update([item('s:signal:bell')]); await tick();
+  assert.deepEqual(kinds, ['needs', 'finished', 'notice']);
+});

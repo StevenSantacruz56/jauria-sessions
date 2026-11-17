@@ -1,5 +1,13 @@
 import type { Attention } from './attention';
-type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(): void };
+export type NativeNoticeKind = 'needs' | 'finished' | 'notice';
+type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(kind: NativeNoticeKind): void };
+
+function noticeKind(items: readonly Attention[]): NativeNoticeKind {
+  const keys = items.flatMap(item => item.keys);
+  if (keys.some(key => /:(?:program:needs|permissions:|state:|unconfirmed)/.test(key))) return 'needs';
+  if (keys.some(key => /:(?:program:done|signal:ended)/.test(key))) return 'finished';
+  return 'notice';
+}
 /** No permission checks or prompts until the user clicks Enable. No delivery receipt. */
 export class NativeAttention {
   enabled = false;
@@ -42,10 +50,10 @@ export class NativeAttention {
       if (!this.enabled || epoch !== this.epoch) return;
       if (!await this.api.granted()) { this.disable(); this.feedback('Permiso nativo no disponible. Los avisos dentro de Jauría siguen disponibles.'); return; }
       if (!this.enabled || epoch !== this.epoch) return;
-      // One generic notice per batch, no titles, paths, terminal output or permissions.
+      // One category-only notice per batch, no titles, paths, terminal output or permission details.
       const items = this.latest.filter(item => pending.has(item.id) && item.unseen && !item.stale && this.eligible(item.id) && item.keys.some(key => !this.delivered.has(key)));
       if (!items.length) return;
-      this.api.send();
+      this.api.send(noticeKind(items));
       for (const item of items) for (const key of item.keys) this.delivered.add(key);
     } catch { if (epoch === this.epoch) { this.disable(); this.feedback('No se pudo solicitar el aviso nativo. Los avisos dentro de Jauría siguen disponibles.'); } }
   }

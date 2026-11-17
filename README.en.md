@@ -4,7 +4,7 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-**Current source version: 1.3.0.** GitHub releases currently stop at 1.0.1; the 1.3.0 app and installer were prepared locally. Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Current source version: 1.3.1.** GitHub releases currently stop at 1.0.1; newer app bundles and installers are prepared locally. Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -32,11 +32,13 @@ Pulso is Jauria's local board for projects, phases, and progress checkpoints. It
 
 An already running Claude conversation will not load a newly registered MCP server. For that conversation, grant access and use **Copiar instrucciones para el agente** instead. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. This Claude Code server is separate from Claude Desktop connectors. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
 
-Explicit **OSC 7501** reports may display program status in the live view. This cosmetic signal never updates phases. Jauria installs no hooks and changes no agent configuration. Programs that do not emit it have no program status. Replay creates no status or alerts; reconnecting resets this ephemeral state.
+Explicit **OSC 7501** reports appear in the live view and **Actividad**. They never update phases or prove that work was validated. Jauria installs no hooks and changes no agent configuration. A running session with no report is labeled as progress not reported. Replay creates no status or alerts; reconnecting resets this ephemeral state.
 
-The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), and [1.3.0 release notes](docs/RELEASE_1.3.0.md) (Spanish).
+**Actividad** groups sessions by action needed, notices, finished turns, working and idle. It shows how long an agent has reported working. A finished turn stays pending through a later `idle` report until you open the session; `blocked` stays visible while reported. The header alert opens the relevant session, while marking an alert seen never approves a permission or resolves an error. Optional macOS notices use generic wording without session names or paths. See the [status rules and limits](docs/SESSION_ALERTS.md#actividad-y-avisos-desde-131) (Spanish).
 
-The local **1.3.0** release is built and its DMG verified. See [validation results and limits](docs/PULSO_VALIDATION_1.3.0.md). The example uses a separate profile; existing sessions were preserved and the installer was not published.
+The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), and [1.3.1 release notes](docs/RELEASE_1.3.1.md) (Spanish).
+
+The local **1.3.1** release is built and its DMG verified. See [this version's validation and limits](docs/RELEASE_1.3.1.md) and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md). The example uses a separate profile; existing sessions were preserved and the installer was not published.
 
 See the [screenshots and full usage guide](README.md#capturas). The current board is shown below.
 
@@ -46,7 +48,7 @@ Example board in Jauria 1.3.0. Synthetic screenshot: no real session or task dat
 
 ## Install and start
 
-GitHub releases currently contain **source code and documentation through 1.0.1**, with **no 1.3.0 DMG attachment**. The unsigned 1.3.0 installer remains local; access to repository content follows its GitHub visibility and permissions. A public, signed and notarized installer has not been distributed. See the [installation and update guide](docs/INSTALLATION.md).
+GitHub releases currently contain **source code and documentation through 1.0.1**, with **no 1.3.1 DMG attachment**. The unsigned 1.3.1 installer remains local; access to repository content follows its GitHub visibility and permissions. A public, signed and notarized installer has not been distributed. See the [installation and update guide](docs/INSTALLATION.md).
 
 Jauria itself does not require Rust or Node to run from an app bundle. Provider CLIs must be installed and authenticated separately. This release expects Codex at `/opt/homebrew/bin/codex` and Claude Code at `~/.local/bin/claude`; Terminal uses `/bin/zsh -il`.
 
@@ -83,4 +85,4 @@ The default desktop build is optimized release mode and unsigned. Use `--debug` 
 
 ## Project status and security
 
-Read the [changelog](CHANGELOG.md), [1.3.0 notes](docs/RELEASE_1.3.0.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).
+Read the [changelog](CHANGELOG.md), [1.3.1 notes](docs/RELEASE_1.3.1.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).

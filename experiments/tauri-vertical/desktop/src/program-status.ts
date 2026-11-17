@@ -69,6 +69,11 @@ export function parseProgramStatus(data: string): ProgramState | null {
 }
 
 type TrackedProgramState = Exclude<ProgramState, 'clear'>;
+type Tracked = { state: TrackedProgramState; since: number; finishedUnseen: boolean };
+
+export function programStateLabel(state: TrackedProgramState): string {
+  return ({ working: 'Trabajando', blocked: 'Solicita atención', error: 'Error informado', done: 'Turno finalizado', idle: 'En espera' })[state];
+}
 
 function isAlert(state: TrackedProgramState | null): boolean {
   return state === 'blocked' || state === 'error';
@@ -82,7 +87,7 @@ function isAlert(state: TrackedProgramState | null): boolean {
  */
 export class ProgramStatusTracker {
   readonly #limit: number;
-  readonly #states = new Map<string, TrackedProgramState>();
+  readonly #states = new Map<string, Tracked>();
 
   constructor(limit = 512) {
     if (!Number.isInteger(limit) || limit < 1) throw new RangeError('ProgramStatusTracker limit must be a positive integer');
@@ -93,23 +98,45 @@ export class ProgramStatusTracker {
     if (typeof id !== 'string' || !isProgramState(state)) return { changed: false, attention: false };
     if (state === 'clear') return { changed: this.#states.delete(id), attention: false };
 
-    const previous = this.#states.get(id) ?? null;
+    const previous = this.#states.get(id);
     // Delete + insert keeps Map order equal to "least recently reported first".
     this.#states.delete(id);
-    this.#states.set(id, state);
+    const changed = previous?.state !== state;
+    const finishesWork = (state === 'done' || state === 'idle') &&
+      (previous?.state === 'working' || previous?.state === 'blocked' || previous?.state === 'error');
+    const finishedUnseen = state === 'working' || isAlert(state) ? false
+      : (finishesWork && !attended) || (previous?.finishedUnseen ?? false);
+    this.#states.set(id, { state, since: changed ? Date.now() : previous.since, finishedUnseen });
     if (this.#states.size > this.#limit) {
       const oldest = this.#states.keys().next().value;
       if (oldest !== undefined) this.#states.delete(oldest);
     }
-    if (previous === state) return { changed: false, attention: false };
+    if (!changed) return { changed: false, attention: false };
 
-    const entersAlert = isAlert(state) && !isAlert(previous);
-    const finishesWork = state === 'done' && (previous === 'working' || isAlert(previous));
+    const entersAlert = isAlert(state) && !isAlert(previous?.state ?? null);
     return { changed: true, attention: !attended && (entersAlert || finishesWork) };
   }
 
   get(id: string): Exclude<ProgramState, 'clear'> | null {
-    return this.#states.get(id) ?? null;
+    return this.#states.get(id)?.state ?? null;
+  }
+
+  /** The last reported word is distinct from a finished turn the person has not seen. */
+  display(id: string): TrackedProgramState | null {
+    const tracked = this.#states.get(id);
+    if (!tracked) return null;
+    return tracked.state === 'blocked' || tracked.state === 'error' ? tracked.state
+      : tracked.finishedUnseen ? 'done' : tracked.state === 'done' ? 'idle' : tracked.state;
+  }
+
+  changedAt(id: string): number | null { return this.#states.get(id)?.since ?? null; }
+  finishedUnseen(id: string): boolean { return this.#states.get(id)?.finishedUnseen ?? false; }
+
+  markSeen(id: string): boolean {
+    const tracked = this.#states.get(id);
+    if (!tracked?.finishedUnseen) return false;
+    tracked.finishedUnseen = false;
+    return true;
   }
 
   clear(id: string): boolean {

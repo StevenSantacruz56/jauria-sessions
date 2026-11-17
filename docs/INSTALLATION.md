@@ -21,7 +21,7 @@ Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en
 
 Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Información → Diagnóstico → Comprobar CLI** si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
 
-Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio de código es público; eso no significa que exista un DMG 1.3.0 publicado. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
+Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio de código es público; eso no significa que exista un DMG 1.3.1 publicado. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
 
 ## Estado de firma de esta distribución
 

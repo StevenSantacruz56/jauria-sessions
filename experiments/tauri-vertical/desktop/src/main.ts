@@ -28,10 +28,11 @@ import { terminalTheme, terminalTypography } from './terminal-theme';
 import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
 import { shell, paneMarkup, icon } from './ui';
 import { mountPulsoPanel } from './pulso-panel';
-import { parseProgramStatus,ProgramStatusTracker } from './program-status';
+import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
+import { activitySections, sessionActivity } from './session-activity';
 import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
 
-type Session = { programState?:string|null; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
+type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
@@ -105,19 +106,10 @@ let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
 const stopping = new Set<string>();
 const programStatuses=new ProgramStatusTracker();
-const programAlertAt=new Map<string,number>();
-const programAlertTimers=new Map<string,ReturnType<typeof setTimeout>>();
-function cancelProgramAlert(id:string){const timer=programAlertTimers.get(id);if(timer!==undefined)clearTimeout(timer);programAlertTimers.delete(id);}
-function reportProgramAttention(id:string,version:number){
-  const state=programStatuses.get(id);
-  if(!connected||disposed||replaying||version!==loopVersion||!['blocked','error','done'].includes(state??'')||!isLive(views.get(id)?.session??{status:'exited'} as Session)||isAttended(id))return;
-  const remaining=5000-(Date.now()-(programAlertAt.get(id)??-Infinity));
-  if(remaining>0){if(!programAlertTimers.has(id))programAlertTimers.set(id,setTimeout(()=>{programAlertTimers.delete(id);reportProgramAttention(id,version);},remaining));return;}
-  programAlertAt.set(id,Date.now());attention.signal(id,'program');scheduleProgramRefresh();
-}
 let programRefresh:ReturnType<typeof setTimeout>|undefined;
 function scheduleProgramRefresh(){if(programRefresh!==undefined)return;programRefresh=setTimeout(()=>{programRefresh=undefined;if(connected&&!disposed)refresh();},100);}
-function programLabel(id:string){const state=programStatuses.get(id);return state?({working:'Trabajando',blocked:'Solicita atención',error:'Error informado',done:'Turno finalizado',idle:'En espera'}[state]):'';}
+function programLabel(id:string){const state=programStatuses.display(id);return state?programStateLabel(state):'';}
+function attentionSessions(): Session[] { return [...views.values()].map(v => ({...v.session, programState:programStatuses.get(v.session.id), programFinishedUnseen:programStatuses.finishedUnseen(v.session.id)})); }
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const newDialog = $<HTMLDialogElement>('#new-session-dialog');
 const stopDialog = $<HTMLDialogElement>('#stop-session-dialog');
@@ -125,7 +117,7 @@ let dialogReturn: HTMLElement | null = null;
 let newDialogVersion = 0;
 const nativeAttention = new NativeAttention({
   granted: isPermissionGranted, request: requestPermission,
-  send: () => sendNotification({ title: 'Jauría · Avisos de sesión', body: 'Hay actividad o un estado que revisar. Abre Jauría y consulta Avisos.' }),
+  send: kind => sendNotification({ title: kind === 'needs' ? 'Jauría · Necesita tu atención' : kind === 'finished' ? 'Jauría · Actividad finalizada' : 'Jauría · Aviso de sesión', body: 'Abre Jauría y consulta Actividad.' }),
 }, id => connected && !replaying && !isAttended(id), value => {
   text('#native-notification-status', value);
   text('#enable-native-notifications', nativeAttention.enabled ? 'Desactivar avisos de macOS' : 'Activar avisos de macOS…');
@@ -157,7 +149,8 @@ function setSessionDirectory(directory: string) {
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
 function selectSession(id: string) {
-  attention.see(attention.list([...views.values()].map(v => v.session)).filter(item => item.id === id));
+  attention.see(attention.list(attentionSessions()).filter(item => item.id === id));
+  programStatuses.markSeen(id); attention.seeProgram(id);
   taskScreen = 'terminal';
   const target = panes[focusedPane];
   const other = panes.find(p => p !== target && p.id === id);
@@ -286,7 +279,7 @@ function refresh() {
   const historyWarnings = [...views.values()].filter(view => !isLocalHistoryLimit(streamMetadata(view.session)?.history) && ['limited','error','incomplete','unknown_tail'].includes(streamMetadata(view.session)?.history.state ?? '')).length;
   text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · límite de guardado local alcanzado':level ? ` · uso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
-  const sessions = [...views.values()].map(v => ({...v.session,programState:programStatuses.get(v.session.id)}));
+  const sessions = attentionSessions();
   const attended = activeView()?.session.id;
   // Viewing consumes transient activity even when no new focus event occurs
   // (for example, the currently focused process exits). Persistent causes stay.
@@ -295,9 +288,12 @@ function refresh() {
   const unread = alerts.filter(item => item.unseen && !item.stale && !isAttended(item.id));
   dockBadge.setCount(connected && !replaying ? dockUnreadCount(unread) : 0);
   const alertById = new Map(alerts.map(item => [item.id, item]));
+  const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
   const unseen = unread.length;
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
-    ? alertById.has(s.id) && matchesSession(s, 'all', q) : matchesSession(s, f, q);
+    ? alertById.has(s.id) && matchesSession(s, 'all', q)
+    : f === 'activity' ? (isLive(s) || alertById.has(s.id)) && matchesSession(s, 'all', q)
+    : matchesSession(s, f, q);
   const count = (f: SessionFilter) => sessions.filter(s => matches(s, f, '')).length;
   $('#session-alerts').hidden = alerts.length === 0;
   const alertButton = $('#session-alerts');
@@ -306,8 +302,14 @@ function refresh() {
   alertButton.setAttribute('aria-label', alertLabel);
   text('#session-alerts-count', String(unseen)); $('#session-alerts-count').hidden = unseen === 0;
   $('#session-alerts').title = `${alertLabel}. ${alerts.length - unseen} ya vistas o atendidas.\n` + alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
-  $('#attention-banner').hidden = filter !== 'attention' || alerts.length === 0;
-  text('#attention-summary', `${alerts.length} ${alerts.length === 1 ? 'sesión requiere atención' : 'sesiones requieren atención'} · ${unseen} nuevas.${!connected || alerts.some(item => item.stale) ? ' Hay estados sin confirmar.' : ''}`);
+  const firstAlert = [...alerts].sort((a,b) => {
+    const priority = (id:string) => ({ needs: 0, notice: 1, finished: 2, working: 3, idle: 4, unreported: 5 })[activityById.get(id)?.kind ?? 'unreported'];
+    return priority(a.id)-priority(b.id) || Number(b.unseen)-Number(a.unseen);
+  })[0];
+  $('#attention-banner').hidden = !['attention','activity'].includes(filter) || !firstAlert;
+  text('#attention-summary', firstAlert ? `${views.get(firstAlert.id)?.session.title ?? 'Sesión'} · ${activityById.get(firstAlert.id)?.label ?? 'Aviso'}. ${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}; ${unseen} sin ver.` : 'Sin avisos nuevos.');
+  $('#open-attention-session').dataset.sessionId = firstAlert?.id ?? '';
+  $('#see-attention').hidden = unseen === 0;
   syncMessageRail();
   nativeAttention.update(alerts);
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
@@ -316,7 +318,9 @@ function refresh() {
   if (filter === 'attention' && count('attention') === 0) filter = 'open';
   text('#capacity', `${occupied} de ${sessionLimit()} plazas ocupadas`);
   text('#open-count', String(open)); text('#closed-count', String(count('closed')));
-  text('#attention-count', 'Requieren atención');
+  const workingCount = [...activityById.values()].filter(item => item.kind === 'working').length;
+  text('#activity-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'} · ${workingCount} en curso`);
+  text('#attention-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
   text('#session-total', `${open} abiertas · ${count('closed')} en historial`);
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter)));
@@ -357,9 +361,9 @@ function refresh() {
     const view = pane.id ? views.get(pane.id) : null;
     pane.root.hidden = pane === panes[1] && !split;
     pane.root.classList.toggle('is-focused', panes.indexOf(pane) === focusedPane);
-    pane.state.textContent = view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión';
+    pane.state.textContent = view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión';
     pane.state.title = pane.state.textContent ?? '';
-    pane.state.dataset.state = view?.session.status ?? '';
+    pane.state.dataset.state = view && isLive(view.session) ? programStatuses.display(view.session.id) ?? 'unreported' : view?.session.status ?? '';
     pane.cwd.textContent = view?.session.cwd ?? 'Sin carpeta de sesión';
     pane.cwd.title = view?.session.cwd ?? '';
     pane.size.textContent = view?.session.transport==='app-server' ? 'Conversación' : view ? `${view.term.cols} × ${view.term.rows}` : '—';
@@ -409,7 +413,13 @@ function refresh() {
   $<HTMLButtonElement>('#copy-session-id').disabled = !current;
   $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying;
   refreshTasks(sessions);
-  const groups = groupSessions(sessions.filter(s => matches(s, filter, query)));
+  const visibleSessions = sessions.filter(s => matches(s, filter, query));
+  $('.workspace-navigation').dataset.sessionView = filter === 'activity' || filter === 'attention' ? 'priority' : 'folders';
+  const groups = filter === 'activity'
+    ? activitySections.map(section => ({key: section.kind, path: null, name: section.label, kind: section.kind,
+      sessions: visibleSessions.filter(s => activityById.get(s.id)?.kind === section.kind)})).filter(group => group.sessions.length)
+    : groupSessions(visibleSessions).map(group => ({...group, kind: null}));
+  $('#session-list').setAttribute('aria-label', filter === 'activity' ? 'Actividad por prioridad' : filter === 'attention' ? 'Sesiones con avisos' : 'Sesiones por carpeta');
   // Keep the button itself mounted while status, output metadata or attention
   // changes. Replacing it between pointer down and up loses the user's click.
   const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.sessions.map(s => s.id)])]);
@@ -417,33 +427,41 @@ function refresh() {
     sidebarKey = key;
     const list = $('#session-list'); list.replaceChildren();
     for (const group of groups) {
-      const section = document.createElement('section'); section.className = 'session-group';
+      const section = document.createElement('section'); section.className = 'session-group'; if (group.kind) section.dataset.activity = group.kind;
       const heading = document.createElement('div'); heading.className = 'group-heading';
-      heading.innerHTML = icon('folder'); const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.path ?? group.name; section.append(heading);
+      if (group.kind) { const marker = document.createElement('span'); marker.className = 'activity-group-marker'; marker.dataset.activity = group.kind; heading.append(marker); }
+      else heading.innerHTML = icon('folder');
+      const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.path ?? group.name;
+      if (group.kind) { const count = document.createElement('span'); count.className = 'activity-group-count'; count.textContent = String(group.sessions.length); heading.append(count); }
+      section.append(heading);
       for (const s of group.sessions) {
         const button = document.createElement('button'); button.className = 'session-item'; button.dataset.sessionId = s.id;
-        button.innerHTML = `<span class="state-dot"></span><span class="session-item-copy"><span class="session-item-title"></span><span class="session-item-meta"></span></span>`;
+        button.innerHTML = `<span class="session-item-copy"><span class="session-item-title"></span><span class="session-item-state"><span class="state-dot"></span><span class="session-item-state-label"></span></span><span class="session-item-meta"></span></span>`;
         button.addEventListener('click', () => selectSession(s.id)); section.append(button);
       }
       list.append(section);
     }
     if (!list.children.length) {
       const empty = document.createElement('p'); empty.className = 'list-empty';
-      empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Sin avisos observados. Las terminales no tienen seguimiento de permisos.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
+      empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Sin avisos. Los agentes sin OSC 7501 no informan su progreso.' : filter === 'activity' ? 'Abre una sesión para ver su actividad. El progreso aparece cuando el agente lo informa.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
     }
   }
   const sessionById = new Map(sessions.map(session => [session.id, session]));
   for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('#session-list .session-item'))) {
     const s = sessionById.get(button.dataset.sessionId!)!;
     const alert = alertById.get(s.id);
+    const activity = activityById.get(s.id)!;
     const selected = taskScreen === 'terminal' && s.id === current?.id;
     button.dataset.selected = String(selected);
     button.setAttribute('aria-current', String(selected));
     button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
-    (button.querySelector('.state-dot') as HTMLElement).dataset.state = alert ? 'attention' : s.status;
+    button.dataset.activity = activity.kind;
+    (button.querySelector('.state-dot') as HTMLElement).dataset.state = activity.kind;
     const title = button.querySelector('.session-item-title')!;
     if (title.textContent !== s.title) title.textContent = s.title;
-    const meta = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : [statusLabel(s.status),programLabel(s.id)].filter(Boolean).join(' · ')}`;
+    const state = button.querySelector('.session-item-state-label')!;
+    if (state.textContent !== activity.label) state.textContent = activity.label;
+    const meta = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : activity.detail}`;
     const description = button.querySelector('.session-item-meta')!;
     if (description.textContent !== meta) description.textContent = meta;
     const tooltip = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
@@ -511,12 +529,12 @@ function ensure(session: Session): View {
   const programReport=term.parser.registerOscHandler(7501,data=>{
     const state=parseProgramStatus(data);if(state===null)return true;
     if(replaying||streamReplaying(views.get(session.id))||!connected||inputVersion!==loopVersion||!isLive(views.get(session.id)?.session??session))return true;
-    const result=programStatuses.set(session.id,state,!!isAttended(session.id));
-    if(state==='clear'||state==='working'||state==='idle'){attention.clearProgram(session.id);cancelProgramAlert(session.id);}
-    if(result.attention)reportProgramAttention(session.id,inputVersion);
+    const attended=isAttended(session.id);
+    const result=programStatuses.set(session.id,state,attended);
+    if(attended){programStatuses.markSeen(session.id);attention.seeProgram(session.id);}
     if(result.changed)scheduleProgramRefresh();return true;
   });
-  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose();programReport.dispose();programStatuses.clear(session.id);programAlertAt.delete(session.id);cancelProgramAlert(session.id);attention.clearProgram(session.id); } };
+  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose();programReport.dispose();programStatuses.clear(session.id);attention.clearProgram(session.id); } };
   term.options.disableStdin = replaying;
   views.set(session.id, view);configureConversation(view);
   return view;
@@ -525,7 +543,7 @@ function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   if (status.workspaceNotModified && runner && runner.generation === status.generation) status = { ...status, projects:runner.projects, tasks:runner.tasks };
   runner = status;
-  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);programAlertAt.delete(session.id);cancelProgramAlert(session.id);attention.clearProgram(session.id);}}
+  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);attention.clearProgram(session.id);}}
   refresh();
 }
 function scheduleResize(view: View) {
@@ -896,7 +914,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();programStatuses.reset();programAlertAt.clear();for(const id of programAlertTimers.keys())cancelProgramAlert(id);if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();programStatuses.reset();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1265,6 +1283,7 @@ document.addEventListener('close', refresh, true);
 function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && taskScreen === 'terminal' && activeView()?.session.id === id; }
 function showAttention() {
   filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = '';
+  $('.workspace-navigation').scrollTop = 0;
   $('.workspace-shell').classList.add('sidebar-open'); $('#sidebar-scrim').hidden = false;
   $('#toggle-sidebar').setAttribute('aria-expanded', 'true'); refresh();
   const previousFocus = document.activeElement;
@@ -1280,15 +1299,16 @@ $('#enable-native-notifications').addEventListener('click', async () => {
     nativeAttention.disable(); text('#enable-native-notifications', 'Activar avisos de macOS…'); text('#native-notification-status', 'Desactivadas. Los avisos dentro de Jauría siguen disponibles.'); return;
   }
   const button = $<HTMLButtonElement>('#enable-native-notifications'); button.disabled = true;
-  await nativeAttention.enableFromClick(attention.list([...views.values()].map(v => v.session))); button.disabled = false;
+  await nativeAttention.enableFromClick(attention.list(attentionSessions())); button.disabled = false;
 });
 window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
 window.addEventListener('beforeunload', () => { void dockBadge.dispose(); }, { once: true });
 $('#session-alerts').addEventListener('click', showAttention);
+$('#open-attention-session').addEventListener('click', () => { const id = $('#open-attention-session').dataset.sessionId; if (id && views.has(id)) selectSession(id); });
 $('#see-attention').addEventListener('click', () => {
-  attention.see(attention.list([...views.values()].map(v => v.session))); refresh(); ($('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
+  attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh(); ($('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
 });
-document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { if (button.dataset.filter === 'attention') showAttention(); else { filter = button.dataset.filter as SessionFilter; refresh(); } }));
+document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { if (button.dataset.filter === 'attention') showAttention(); else { filter = button.dataset.filter as SessionFilter; $('.workspace-navigation').scrollTop = 0; refresh(); } }));
 $('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
 const theme = $<HTMLSelectElement>('#theme-select');
 try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }
@@ -1466,7 +1486,7 @@ pulsoPanel = mountPulsoPanel({
   persistenceKey: () => profileDataDir,
   bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,
   onOpenPermissions: openPermissions,
-  sessions: () => [...views.values()].map(view => ({...view.session,programState:programStatuses.get(view.session.id)})),
+  sessions: () => [...views.values()].map(view => ({...view.session,programState:programStatuses.display(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
   newSession: cwd => openNew(cwd ?? null),

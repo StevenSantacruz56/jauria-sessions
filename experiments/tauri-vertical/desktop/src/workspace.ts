@@ -10,7 +10,7 @@ export type WorkspaceSession = {
   cols: number;
 };
 
-export type SessionFilter = 'all' | 'open' | 'attention' | 'closed';
+export type SessionFilter = 'all' | 'open' | 'activity' | 'attention' | 'closed';
 
 export function statusLabel(status: string): string {
   switch (status) {
@@ -51,6 +51,7 @@ function normalize(text: string): string {
 export function matchesSession(session: WorkspaceSession, filter: SessionFilter, query: string): boolean {
   const statuses: Record<Exclude<SessionFilter, 'all'>, readonly string[]> = {
     open: ['starting', 'running'],
+    activity: ['starting', 'running', 'needs_attention', 'failed', 'interrupted'],
     attention: ['needs_attention', 'failed', 'interrupted'],
     closed: ['exited', 'stopped', 'released'],
   };

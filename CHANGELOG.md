@@ -4,6 +4,17 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
+Sin cambios pendientes registrados.
+
+## [1.3.1] - 2026-11-17
+
+### Actividad y avisos de sesiones
+
+- Nueva vista **Actividad** ordenada por acción requerida, avisos, turnos terminados, trabajo en curso y espera. Cada sesión muestra un estado explícito; una terminal abierta sin OSC 7501 aparece como progreso no informado, sin fingir que está trabajando.
+- El estado `blocked` o `error` permanece visible hasta que cambia el reporte del programa. El fin de un turno `working → done/idle` queda pendiente hasta abrir la sesión, incluso si el programa emite `idle` después de `done`. Verlo no responde permisos ni modifica fases de Pulso.
+- La barra de avisos ofrece **Abrir sesión**; el tiempo de trabajo declarado aparece junto a la sesión. Los avisos nativos opcionales distinguen acción, fin y aviso con textos genéricos sin nombres ni rutas.
+- Revisión de Herdr y Claude documentada, junto con pruebas sintéticas de estados, permisos, geometría y navegación en Chromium y WebKit. No se añaden hooks, telemetría ni procesos remotos.
+
 ### Documentación y verificación
 
 - README y guía de Pulso actualizados: MCP local disponible en 1.3.0, registro opcional por proveedor, sesión nueva y permiso explícito por proyecto; se aclara la diferencia con Claude Desktop y el uso de la CLI en sesiones existentes.
@@ -153,7 +164,8 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/861bd59...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/StevenSantacruz56/jauria-sessions/tree/v1.3.1
 [1.3.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/861bd59
 [0.1.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v0.1.1
 [0.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/a32f414

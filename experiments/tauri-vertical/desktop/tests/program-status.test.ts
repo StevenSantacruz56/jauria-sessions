@@ -98,6 +98,39 @@ test('attended sessions keep state for display but never alert', () => {
   assert.deepEqual(t.set('a', 'done', true), { changed: true, attention: false });
 });
 
+test('working to idle is a finished turn until viewed, even after a later idle report', () => {
+  const t = new ProgramStatusTracker();
+  t.set('a', 'working', false);
+  const started = t.changedAt('a');
+  assert.deepEqual(t.set('a', 'working', false), { changed: false, attention: false });
+  assert.equal(t.changedAt('a'), started, 'repeated progress does not reset elapsed time');
+  assert.deepEqual(t.set('a', 'idle', false), { changed: true, attention: true });
+  assert.equal(t.get('a'), 'idle');
+  assert.equal(t.display('a'), 'done');
+  assert.equal(t.finishedUnseen('a'), true);
+  t.set('a', 'done', false);
+  t.set('a', 'idle', false);
+  assert.equal(t.display('a'), 'done');
+  assert.equal(t.markSeen('a'), true);
+  assert.equal(t.display('a'), 'idle');
+  assert.equal(t.markSeen('a'), false);
+  t.set('a', 'done', false);
+  assert.equal(t.display('a'), 'idle', 'a repeated done without new work is already seen');
+});
+
+test('blocked is a persistent reported state and new work clears a finished turn', () => {
+  const t = new ProgramStatusTracker();
+  t.set('a', 'working', false);
+  assert.deepEqual(t.set('a', 'blocked', true), { changed: true, attention: false });
+  assert.equal(t.display('a'), 'blocked', 'attended does not hide the state');
+  assert.deepEqual(t.set('a', 'blocked', false), { changed: false, attention: false });
+  t.set('a', 'done', false);
+  assert.equal(t.display('a'), 'done');
+  t.set('a', 'working', false);
+  assert.equal(t.display('a'), 'working');
+  assert.equal(t.finishedUnseen('a'), false);
+});
+
 test('tracker clear removes state; clear and reset are idempotent', () => {
   const t = new ProgramStatusTracker();
   t.set('a', 'blocked', false); t.set('b', 'working', false);

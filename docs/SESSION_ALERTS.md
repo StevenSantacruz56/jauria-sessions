@@ -63,3 +63,13 @@ Notification and connection messages share an always-present 50 px rail. Showing
 ## Activity is not an unread alert
 
 Raw PTY output, including progress redraws, never enters the attention ledger. The legacy output signal is explicitly ignored at the model boundary as well as omitted from the renderer callback. BEL, supported OSC notifications, process termination, observed lifecycle incidents and structured pending permissions keep their existing semantics. The global header distinguishes new alerts from already-seen pending causes; seeing a pending permission does not approve or resolve it.
+
+## Actividad y avisos desde 1.3.1
+
+Esta sección describe el comportamiento actual. Los apartados anteriores documentan el MVP histórico y sus cifras de prueba, no la nueva versión.
+
+- **Actividad** siempre está disponible en la barra lateral. Ordena las sesiones observadas por acción requerida, avisos explícitos, turnos o procesos terminados, trabajo declarado, espera y progreso no informado. En esta vista se oculta temporalmente la navegación de repositorios para dejar espacio a las sesiones; los filtros **Abiertas** e **Historial** la conservan.
+- `running` describe un proceso abierto, no trabajo activo. Solo OSC 7501 raíz `working` se muestra como **Trabajando**, con tiempo observado en esta ventana. Sin reporte, la sesión queda **Abierta · progreso no informado**. Los reportes de hijos, preguntas y campos de texto siguen ignorados; no se inspecciona salida cruda ni se infiere un porcentaje.
+- `blocked/error` constituye una causa persistente mientras el programa lo declara. `working → done/idle` produce un fin no visto que persiste si después llega `idle`; abrir la sesión lo marca visto. Un reporte nuevo de `working` borra ese fin pendiente. Ver la sesión no responde permisos ni repara un fallo. El estado reportado y el visto se pierden al reconectar o cerrar la interfaz.
+- La barra de avisos muestra la causa prioritaria y **Abrir sesión**, sin cambiar la altura reservada al terminal. **Marcar vistos** afecta solo a la presentación; las causas persistentes permanecen hasta que su fuente cambia. La notificación nativa opcional usa una de tres categorías genéricas: atención, actividad finalizada o aviso. Nunca contiene títulos, rutas, salida ni detalles de permisos. Su entrega sigue sin recibo y el clic en macOS no abre automáticamente la sesión.
+- La implementación está en `program-status.ts`, `attention.ts`, `session-activity.ts` y `main.ts`. La revisión con Claude y el contraste con Herdr están en [HERDR_REVIEW.md](HERDR_REVIEW.md#actividad-y-avisos-en-131). Las pruebas usan sesiones sintéticas y el xterm real en Chromium/WebKit; no prueban notificaciones del sistema ni proveedores reales.

@@ -11,7 +11,7 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
 
-**Versión del código: 1.3.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.3.0](docs/RELEASE_1.3.0.md). Las releases publicadas en GitHub llegan hasta 1.0.1; la app y el instalador 1.3.0 se prepararon localmente, sin firma Developer ID ni notarización.
+**Versión del código: 1.3.1 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.3.1](docs/RELEASE_1.3.1.md). Las releases publicadas en GitHub llegan hasta 1.0.1; los instaladores recientes se preparan localmente, sin firma Developer ID ni notarización.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
@@ -66,11 +66,11 @@ Pulso es el tablero local de proyectos, fases y avances de Jauria. El MCP `jauri
 
 Una conversación de Claude ya abierta no carga el MCP añadido después de iniciarse. Para continuar allí, concede acceso a esa sesión y usa **Copiar instrucciones para el agente**: el comando local funciona sin MCP. Ese texto incluye la ruta del permiso privado, pero no su token; compártelo únicamente en la conversación elegida. El MCP de Claude Code es distinto de los conectores de Claude Desktop. [Alcance y seguridad](docs/PULSO.md#privacidad-permisos-y-límites).
 
-Cuando un programa emite explícitamente **OSC 7501**, la vista viva puede mostrar su estado. Es una señal cosmética, no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión no hay estado de programa; el replay no genera estados ni avisos y la reconexión reinicia este estado efímero.
+Cuando un programa emite explícitamente **OSC 7501**, la vista viva y **Actividad** muestran su estado. Esta señal no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión, la sesión aparece como **progreso no informado**, aunque su proceso siga abierto; el replay no genera estados ni avisos y la reconexión reinicia este estado efímero.
 
-El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md) y [la entrega 1.3.0](docs/RELEASE_1.3.0.md).
+El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md) y [la entrega 1.3.1](docs/RELEASE_1.3.1.md).
 
-La entrega local **1.3.0** está compilada y su DMG verificado. Consulta [las pruebas y límites de validación](docs/PULSO_VALIDATION_1.3.0.md). La vista de ejemplo utiliza otro perfil; no se sustituyeron sesiones del perfil habitual ni se publicó este instalador.
+La entrega local **1.3.1** está compilada y su DMG verificado. Consulta [las pruebas y límites de esta versión](docs/RELEASE_1.3.1.md) y [las pruebas anteriores de Pulso](docs/PULSO_VALIDATION_1.3.0.md). La vista de ejemplo utiliza otro perfil; no se sustituyeron sesiones del perfil habitual ni se publicó este instalador.
 
 ![Pulso · Jauria 1.3.0](docs/screenshots/pulso-1.3.0.png)
 
@@ -87,7 +87,13 @@ Jauria admite un solo escritor administrado por worktree Git: no abras dos sesio
 
 **Historial local parcial** indica que Jauria dejó de guardar salida al alcanzar su límite local. La sesión sigue funcionando y puedes escribir, interrumpirla o terminarla. La salida nueva puede faltar al reconectar. Este estado no indica que hayas agotado la cuota de Claude o Codex.
 
-Los avisos nuevos se concentran en la campana de la barra superior. Su contador y el Dock muestran los avisos sin ver; al abrir la vista puedes consultarlos y marcar los avisos como vistos. Ver un aviso no resuelve un fallo ni concede permisos.
+**Actividad** ordena las sesiones por acción requerida, avisos, turnos terminados, trabajo en curso y espera. La fila y la cabecera del terminal muestran el estado declarado por el agente; mientras trabaja se indica desde cuándo lo informa. Una sesión abierta sin reporte queda marcada como progreso no informado. **Avisos** reúne las causas pendientes y permite abrir la sesión desde la barra superior. La campana y el Dock cuentan avisos sin ver. El fin de un turno sigue pendiente aunque el agente pase a `idle`, hasta que abres la sesión; un bloqueo permanece visible mientras el agente lo declare. Marcar visto no resuelve un fallo ni concede permisos. Los avisos de macOS siguen siendo opcionales y usan textos sin nombres ni rutas. Consulta [las reglas y límites](docs/SESSION_ALERTS.md#actividad-y-avisos-desde-131).
+
+![Actividad con una sesión que solicita atención y otra sin progreso informado](docs/screenshots/actividad-1.3.1-aviso.png)
+
+![Actividad con una sesión que informa trabajo en curso](docs/screenshots/actividad-1.3.1-en-curso.png)
+
+*Capturas sintéticas de la interfaz: no contienen proyectos, sesiones ni rutas reales.*
 
 ## Preguntas frecuentes
 
@@ -149,7 +155,7 @@ Para sesiones reales, instala y autentica las CLI por separado. El backend actua
 
 La instalación para otros usuarios se prepara como un archivo **`.dmg` para Apple Silicon**: abre la imagen y arrastra **Jauria** a **Aplicaciones**. Jauria no requiere instalar Rust ni Node para abrir la app; las CLI de los proveedores y su acceso se preparan por separado. Consulta [la guía de instalación](docs/INSTALLATION.md).
 
-Las releases actuales de GitHub contienen **código y documentación hasta 1.0.1**; el DMG 1.3.0 se conserva como **instalador local**, sin adjuntarlo a una release. Cada paquete usa su versión en el nombre: `Jauria_<versión>_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. No hay un DMG 1.3.0 descargable desde GitHub en esta entrega. El repositorio de código es público. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
+Las releases actuales de GitHub contienen **código y documentación hasta 1.0.1**; el DMG 1.3.1 se conserva como **instalador local**, sin adjuntarlo a una release. Cada paquete usa su versión en el nombre: `Jauria_<versión>_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. No hay un DMG 1.3.1 descargable desde GitHub en esta entrega. El repositorio de código es público. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
 
 ## Compilar y abrir
 

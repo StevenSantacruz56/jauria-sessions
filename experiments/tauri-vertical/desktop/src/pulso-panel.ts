@@ -1,7 +1,8 @@
 import './pulso-panel.css';
 import { readLastBoard,saveLastBoard } from './board-preferences';
+import { programStateLabel, type ProgramState } from './program-status';
 
-export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:string|null };
+export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:ProgramState|null };
 type Timestamp = number | string;
 export type PulsoProject = { id: string; title: string; plan: string; mainSessionId: string | null; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp };
 export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null };
@@ -482,8 +483,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     host.append(section);syncProgramLabels();
   }
   function syncProgramLabels(){
-    const sessions=new Map(options.sessions().map(s=>[s.id,s]));const text:Record<string,string>={working:'Trabajando',blocked:'Solicita atención',error:'Error informado',done:'Turno finalizado',idle:'En espera'};
-    for(const label of Array.from(detail.querySelectorAll<HTMLElement>('[data-program-session]'))){const state=sessions.get(label.dataset.programSession!)?.programState;label.textContent=state&&text[state]?`${text[state]} · informado por el programa`:'';}
+    const sessions=new Map(options.sessions().map(s=>[s.id,s]));
+    for(const label of Array.from(detail.querySelectorAll<HTMLElement>('[data-program-session]'))){const state=sessions.get(label.dataset.programSession!)?.programState;label.textContent=state&&state!=='clear'?`${programStateLabel(state)} · informado por el programa`:'';}
   }
   function linkBlock(host: HTMLElement, scope: { itemId: string } | { projectId: string }) {
     const section = el('form', '', 'pulso-form'); const s = select('Vincular una sesión existente', [['', 'Seleccionar sesión'], ...sessionOptions()]); s.input.required = true;
