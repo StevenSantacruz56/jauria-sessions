@@ -27,5 +27,9 @@ poll.activity(); poll.output();
 assert.equal(poll.delay(true), 12, 'output cannot shorten the typing window');
 now = 3702;
 await poll.wait(true); // Timed idle wait also clears its wake callback.
+const backgroundPage = poll.wait(true);
+poll.wakeUp();
+await backgroundPage;
+assert.equal(poll.isTyping(true), false, 'backfill wake does not pretend to be keyboard activity');
 poll.activity();
 console.log('PASS interactive polling: immediate wake, bounded activity window, background/idle backoff');

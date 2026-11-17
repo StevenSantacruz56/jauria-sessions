@@ -64,6 +64,11 @@ let runner: RunnerStatus | null = null;
 let loopVersion = 0;
 let activeLoop: Promise<void> = Promise.resolve();
 const interactivePoll = new InteractivePoll();
+const backgroundNative = new Map<string, Promise<void>>();
+const lastBackgroundNative = new Map<string, number>();
+const nativeApplying = new Map<string, Promise<{more:boolean;changed:boolean}>>();
+const nativeForegroundEpoch = new Map<string, number>();
+let backgroundNativeError: unknown;
 let lastEvidence = 0;
 const streamMetrics = {pages:0,lastPageMs:0,lastParseMs:0,lastTransferMs:0,lastYieldMs:0,maxParseMs:0,maxYieldMs:0,visibility:'unknown',pageBytes:0};
 let statusAt = 0;
@@ -625,28 +630,26 @@ async function consumeNative(view: View, generation: string, frames: TerminalFra
     refresh();
   }
 }
-async function pollNative(version: number): Promise<boolean> {
-  let more = false;
-  let changed = false;
-  const focused = activeView()?.session.id;
-  const priority = (view: View) => view.session.id === focused ? 0
-    : panes.some((pane, index) => pane.id === view.session.id && (index === 0 || split)) ? 1 : 2;
-  const ordered = [...views.values()].sort((a, b) => priority(a) - priority(b));
-  for (const view of ordered) {
-    const metadata = view.session.terminalStream;
-    // Only status-owned current runtime sessions have an in-memory live ring.
-    if (view.archivedOnly || !metadata || metadata.generation !== runner?.generation || view.session.transport === 'app-server') continue;
-    const after = view.stream?.lastFrame ?? 0;
-    const page = await request<TerminalLive | TerminalArchivedOnly>('terminal_live', { id:view.session.id, after, limit:64 });
-    if (version !== loopVersion || disposed) return false;
+async function pollNativeView(view: View, version: number, stale = () => false): Promise<{more:boolean;changed:boolean}> {
+  const metadata = view.session.terminalStream;
+  // Only status-owned current runtime sessions have an in-memory live ring.
+  if (view.archivedOnly || !metadata || metadata.generation !== runner?.generation || view.session.transport === 'app-server') return {more:false,changed:false};
+  const after = view.stream?.lastFrame ?? 0;
+  const page = await request<TerminalLive | TerminalArchivedOnly>('terminal_live', { id:view.session.id, after, limit:64 });
+  if (version !== loopVersion || disposed || !connected || stale()) return {more:false,changed:false};
+  // Two requests may overlap when a stalled background session gains focus.
+  // Only one response at a time may enter its xterm parser.
+  const previous = nativeApplying.get(view.session.id);
+  if (previous) await previous;
+  if (version !== loopVersion || disposed || !connected || stale()) return {more:false,changed:false};
+  const apply = async (): Promise<{more:boolean;changed:boolean}> => {
     if (page.generation !== metadata.generation) throw new Error('Terminal generation changed');
     if (page.archivedOnly === true) {
       if (page.sessionId !== view.session.id) throw new Error('Invalid archived terminal session');
       view.archivedOnly = true; view.liveReady = true;
       ensure(view.session);
       if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
-      changed = true;
-      continue;
+      return {more:false,changed:true};
     }
     if (page.session.id !== view.session.id ||
         (page.session.terminalStream && page.session.terminalStream.generation !== page.generation)) throw new Error('Terminal generation changed');
@@ -654,14 +657,17 @@ async function pollNative(version: number): Promise<boolean> {
         page.firstFrame < 1 || page.firstFrame > page.lastFrame + 1 || page.durableFrame > page.lastFrame ||
         typeof page.hasMore !== 'boolean' || !page.history ||
         page.frames.some(frame => frame.index > page.lastFrame) || (page.hasMore && page.frames.length === 0)) throw new Error('Invalid terminal snapshot');
+    // PTY ids never restart. A late background snapshot cannot reopen a
+    // session already marked closed by a newer status response.
+    const session = !isLive(view.session) && isLive(page.session)
+      ? {...page.session, status:view.session.status} : page.session;
     if (deferTerminalGap(after, page.gap, page.durableFrame, page.history, !archiveUnavailable)) {
       if (!view.catchup) { $('#notice').hidden = true; $('#notice').dataset.persistent = 'true'; }
       view.catchup = true;
       view.catchupThrough = page.gap!.lastFrame;
-      ensure({...page.session, terminalStream:{generation:page.generation, history:page.history}});
+      ensure({...session, terminalStream:{generation:page.generation, history:page.history}});
       if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
-      changed = true;
-      continue;
+      return {more:false,changed:true};
     }
     const wasReady = view.liveReady;
     const previousStatus = view.session.status;
@@ -675,23 +681,57 @@ async function pollNative(version: number): Promise<boolean> {
       if ((view.stream?.lastFrame ?? 0) >= view.liveReplayThrough!) view.liveReady = true;
     }
     if (liveFrames.length || !historical) await consumeNative(view, page.generation, liveFrames, false, historical ? null : page.gap);
-    if (version !== loopVersion) return false;
-    if (!historical) attention.observeEnd(view.session.id, view.session.status, page.session.status);
-    ensure({ ...page.session, terminalStream:{ generation:page.generation, history:page.history } });
+    if (version !== loopVersion) return {more:false,changed:false};
+    if (!historical) attention.observeEnd(view.session.id, view.session.status, session.status);
+    ensure({ ...session, terminalStream:{ generation:page.generation, history:page.history } });
     if ((view.stream?.lastFrame ?? 0) >= (view.liveReplayThrough ?? 0)) view.liveReady = true;
     if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
     if (!isLive(view.session)) stopping.delete(view.session.id);
-    changed ||= wasReady !== view.liveReady || previousStatus !== view.session.status || previousHistory !== JSON.stringify(page.history) ||
+    const changed = wasReady !== view.liveReady || previousStatus !== view.session.status || previousHistory !== JSON.stringify(page.history) ||
       !!page.gap || page.frames.some(frame => frame.index > after && frame.kind !== 'output');
     if (!wasReady && view.liveReady) scheduleResize(view);
-    more ||= page.hasMore;
+    return {more:page.hasMore,changed};
+  };
+  const applying = apply();
+  nativeApplying.set(view.session.id, applying);
+  try { return await applying; }
+  finally { if (nativeApplying.get(view.session.id) === applying) nativeApplying.delete(view.session.id); }
+}
+async function pollNative(version: number): Promise<boolean> {
+  let more = false;
+  const focused = activeView()?.session.id;
+  const foreground = focused ? views.get(focused) : undefined;
+  if (foreground) {
+    nativeForegroundEpoch.set(foreground.session.id, (nativeForegroundEpoch.get(foreground.session.id) ?? 0) + 1);
+    const result = await pollNativeView(foreground, version);
+    if (result.changed) refresh();
+    more = result.more;
   }
-  if (changed) refresh();
+  if (version !== loopVersion || disposed) return false;
+  for (const view of views.values()) {
+    const id = view.session.id;
+    if (id === focused || backgroundNative.has(id)) continue;
+    const visible = panes.some((pane, index) => pane.id === id && (index === 0 || split));
+    const minimumInterval = visible ? 50 : 150;
+    const now = performance.now();
+    if (now - (lastBackgroundNative.get(id) ?? -Infinity) < minimumInterval) continue;
+    lastBackgroundNative.set(id, now);
+    const epoch = nativeForegroundEpoch.get(id) ?? 0;
+    const stale = () => activeView()?.session.id === id || (nativeForegroundEpoch.get(id) ?? 0) !== epoch;
+    const flight = pollNativeView(view, version, stale).then(result => {
+      if (version !== loopVersion || disposed || !connected || stale()) return;
+      if (result.changed) refresh();
+      if (result.more) { lastBackgroundNative.delete(id); interactivePoll.wakeUp(); }
+    }).catch(error => { if (version === loopVersion) { backgroundNativeError = error; interactivePoll.wakeUp(); } });
+    backgroundNative.set(id, flight);
+    void flight.finally(() => { if (backgroundNative.get(id) === flight) backgroundNative.delete(id); });
+  }
   return more;
 }
 async function poll(version: number) {
   try {
     while (connected && version === loopVersion && !disposed) {
+      if (backgroundNativeError) throw backgroundNativeError;
       if (Date.now() - statusAt > 1000) {
         let status: RunnerStatus | undefined;
         try { status = await request<RunnerStatus>('status', runner?.statusVersion === 2 ? {workspaceAfter:runner.workspaceRevision} : {}); }
@@ -850,6 +890,9 @@ async function connect() {
     await terminalFontsReady;
     // Drain the old poll and all xterm callbacks before replacing buffers.
     await activeLoop;
+    await Promise.allSettled([...nativeApplying.values()]);
+    backgroundNative.clear(); lastBackgroundNative.clear(); nativeForegroundEpoch.clear();
+    backgroundNativeError = undefined;
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }

@@ -10,6 +10,7 @@ export class InteractivePoll {
     this.wake?.();
   }
   output() { this.outputUntil = this.now() + 100; }
+  wakeUp() { this.wake?.(); }
   isTyping(foreground: boolean) { return foreground && this.now() < this.activeUntil; }
   delay(foreground: boolean) {
     if (!foreground) return 150;
