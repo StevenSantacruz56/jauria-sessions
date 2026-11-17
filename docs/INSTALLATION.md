@@ -17,9 +17,11 @@ Las releases actuales de GitHub contienen código y documentación. El DMG se pr
 4. Expulsa la imagen y abre Jauria desde Aplicaciones. No ejecutes la app directamente desde el DMG.
 5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y selecciona la carpeta de trabajo. No necesitas registrar un proyecto para abrir una sesión.
 
+Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en `target/debug` o `target/release` al compilar son salidas de desarrollo, no instalaciones adicionales; macOS puede mostrarlos como apps si se abrieron durante pruebas. Retira o archiva copias antiguas sin borrar el perfil de datos. La lista reciente de un lanzador puede tardar en reflejar la limpieza aunque Spotlight y Launch Services ya apunten a la app instalada.
+
 Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Información → Diagnóstico → Comprobar CLI** si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
 
-Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio es privado: se necesita acceso para consultar sus releases. No se ha cambiado su visibilidad.
+Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio de código es público; eso no significa que exista un DMG 1.3.0 publicado. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
 
 ## Estado de firma de esta distribución
 

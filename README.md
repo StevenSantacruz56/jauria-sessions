@@ -11,7 +11,7 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
 
-**Versión actual: 1.3.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.3.0](docs/RELEASE_1.3.0.md). La release de GitHub contiene código y documentación; el instalador se prepara localmente, sin firma Developer ID ni notarización.
+**Versión del código: 1.3.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.3.0](docs/RELEASE_1.3.0.md). Las releases publicadas en GitHub llegan hasta 1.0.1; la app y el instalador 1.3.0 se prepararon localmente, sin firma Developer ID ni notarización.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
@@ -58,7 +58,13 @@ Pulso 1.3.0 presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso,
 4. **Abrir** en una tarjeta muestra el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
 5. **Plan y sesiones**, en la barra del proyecto, abre el plan opcional, la sesión principal y los vínculos. Los permisos y los avisos de macOS se administran en **Configuración**. El tablero recuerda el último proyecto y ofrece **Abrir sesión principal**, **Reanudar sesión principal** o **Abrir conversación activa**, según su estado. Al configurar permisos, elige expresamente la sesión y el alcance; crear proyectos propios no es el valor inicial.
 
-Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos explícitos acotados por proyecto y políticas revocables; MCP, importación del Site y sincronización en la nube siguen pendientes.
+Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos explícitos acotados por proyecto y políticas revocables. El runner 1.3.0 incluye un MCP local opcional; la importación del Site y la sincronización en la nube siguen pendientes.
+
+### Pulso con Claude Code
+
+Pulso es el tablero local de proyectos, fases y avances de Jauria. El MCP `jauria-pulso` ofrece ocho herramientas para consultar y registrar ese trabajo; **no viene conectado automáticamente a Claude Code ni concede permisos al registrarlo**. Para habilitarlo en sesiones nuevas, sigue [la configuración de Claude Code](docs/PULSO.md#mcp-local-opcional-para-nuevas-sesiones). Después abre una sesión nueva desde Jauria, comprueba `/mcp` y, en **Configuración → Permisos de agentes**, elige esa sesión y un proyecto concreto o **Crear proyectos propios**. La opción de recordar acceso empieza desmarcada.
+
+Una conversación de Claude ya abierta no carga el MCP añadido después de iniciarse. Para continuar allí, concede acceso a esa sesión y usa **Copiar instrucciones para el agente**: el comando local funciona sin MCP. Ese texto incluye la ruta del permiso privado, pero no su token; compártelo únicamente en la conversación elegida. El MCP de Claude Code es distinto de los conectores de Claude Desktop. [Alcance y seguridad](docs/PULSO.md#privacidad-permisos-y-límites).
 
 Cuando un programa emite explícitamente **OSC 7501**, la vista viva puede mostrar su estado. Es una señal cosmética, no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión no hay estado de programa; el replay no genera estados ni avisos y la reconexión reinicia este estado efímero.
 
@@ -143,7 +149,7 @@ Para sesiones reales, instala y autentica las CLI por separado. El backend actua
 
 La instalación para otros usuarios se prepara como un archivo **`.dmg` para Apple Silicon**: abre la imagen y arrastra **Jauria** a **Aplicaciones**. Jauria no requiere instalar Rust ni Node para abrir la app; las CLI de los proveedores y su acceso se preparan por separado. Consulta [la guía de instalación](docs/INSTALLATION.md).
 
-Las releases actuales de GitHub contienen **código y documentación**; el DMG se conserva como **instalador local**, sin adjuntarlo a la release. Cada paquete usa su versión en el nombre: `Jauria_<versión>_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. No hay un DMG descargable desde GitHub en esta entrega. Si el repositorio es privado, necesitas acceso de GitHub para consultar sus releases. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
+Las releases actuales de GitHub contienen **código y documentación hasta 1.0.1**; el DMG 1.3.0 se conserva como **instalador local**, sin adjuntarlo a una release. Cada paquete usa su versión en el nombre: `Jauria_<versión>_aarch64_unsigned.dmg`, acompañado de `SHA256SUMS` y un recibo de verificación. No hay un DMG 1.3.0 descargable desde GitHub en esta entrega. El repositorio de código es público. La distribución con firma Developer ID y notarización queda pendiente; no cambies protecciones de macOS para instalarlo.
 
 ## Compilar y abrir
 

@@ -73,6 +73,10 @@ El runner 1.3.0 incluye un servidor MCP por `stdio` que ofrece herramientas para
 claude mcp add-json jauria-pulso '{"type":"stdio","command":"${JAURIA_PULSO_CLIENT}","args":["--pulso-mcp"],"env":{"JAURIA_PULSO_HANDLE":"${JAURIA_PULSO_HANDLE}"}}' --scope user
 ```
 
+Esa entrada guarda nombres de variables, no un token ni una ruta privada. Fuera de Jauria, `claude mcp get jauria-pulso` puede indicar `Failed to connect` porque faltan esas variables: no equivale a un fallo del runner. En una sesión **nueva** abierta por Jauria, el runner proporciona ambas variables; comprueba el servidor con `/mcp` dentro de Claude Code. Una sesión ya iniciada no incorpora de forma retroactiva la configuración MCP. El servidor permite descubrir herramientas aun sin permiso, pero las llamadas a datos responden sin acceso hasta que concedas el alcance en **Configuración → Permisos de agentes**. Este registro de Claude Code no configura Claude Desktop.
+
+Si Claude pregunta qué es Pulso, indícale: «Pulso es el tablero local de proyectos, fases y avances de Jauria. Consulta sus herramientas `jauria_*` y espera a que te indique el plan y el proyecto autorizado». No pegues tokens ni el contenido del archivo de permiso en el chat.
+
 Para Codex, añade esta entrada a `~/.codex/config.toml` si quieres que reciba las dos variables de la sesión local:
 
 ```toml
@@ -82,7 +86,7 @@ args = ["-c", "exec \"$JAURIA_PULSO_CLIENT\" --pulso-mcp"]
 env_vars = ["JAURIA_PULSO_CLIENT", "JAURIA_PULSO_HANDLE"]
 ```
 
-Jauria no modifica esos archivos por sí sola. La configuración no contiene credenciales: la app pasa la ruta del permiso a cada proceso y cada llamada vuelve a validarlo. Si no has concedido acceso en **Configuración**, las herramientas responden sin consultar datos. La revocación corta el acceso. Claude Code y Codex deben cargar la nueva configuración al iniciar una sesión; no se reinician las dos sesiones actuales ni su runner para probar este flujo. Mientras ese runner siga en 1.2.0, usa la CLI copiada; MCP necesita el runner nuevo incluido en la entrega local. [Claude Code](https://code.claude.com/docs/en/mcp) y [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) documentan estos servidores locales.
+Jauria no modifica esos archivos por sí sola. La configuración no contiene credenciales: la app pasa la ruta del permiso a cada proceso y cada llamada vuelve a validarlo. Si no has concedido acceso en **Configuración**, las herramientas responden sin consultar datos. La revocación corta el acceso. Claude Code y Codex deben cargar la nueva configuración al iniciar una sesión. Si la interfaz está conectada a un runner anterior a 1.3.0, usa la CLI copiada y actualiza el runner solo después de terminar el trabajo activo; el MCP necesita el runner 1.3.0. [Claude Code](https://code.claude.com/docs/en/mcp) y [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) documentan estos servidores locales.
 
 Para sesiones ya iniciadas, utiliza el comando que muestra Pulso. Las nuevas también reciben `JAURIA_PULSO_CLIENT` y `JAURIA_PULSO_HANDLE` en su entorno, sin conceder acceso por el mero hecho de tener esas variables.
 
@@ -106,6 +110,7 @@ Si hay timeout, conserva el mismo `requestId`, ID y contenido al consultar/reint
 - Los datos se guardan en `pulso.sqlite` dentro del perfil local, separados del scrollback y sin depender del Site de Pulso. La aplicación web anterior permanece independiente; no se importan ni sincronizan automáticamente sus datos.
 - El endpoint de planificación tiene credencial, socket y límite de conexiones propios. La CLI del agente utiliza un permiso acotado y no lee el token de administración del runner.
 - Un permiso de Pulso no reemplaza los permisos de archivos, comandos, sandbox o MCP nativos de Claude/Codex. Tampoco aísla procesos del mismo usuario de macOS.
+- El texto de **Copiar instrucciones para el agente** incluye una ruta absoluta al archivo de permiso, pero no el token guardado dentro. Al pegarlo en una conversación, el proveedor recibe esa ruta. Úsalo solo en la sesión elegida; el MCP de sesiones nuevas evita incluirla en el prompt. No publiques el archivo de permiso, el perfil, su base SQLite ni el historial.
 - Lo que una sesión lee puede llegar al proveedor de ese agente. Concede solo el contexto que quieras compartir.
 - Título: hasta 240 caracteres; nota: 1.000; plan: 32.000; resumen de continuidad: 4.000; siguiente acción: 1.000. Proyectos y fases se consultan con páginas acotadas en SQL; el plan completo se solicita solo al abrir el proyecto.
 - Pulso admite hasta **64 MiB lógicos o 100.000 filas**, contando registros, actividad y recibos, no solo tareas. Hay **1 MiB y 2.000 filas adicionales de margen para identidades de permisos y políticas**; no amplían la capacidad para planes. La base `pulso.sqlite` tiene además un límite físico de **128 MiB**, independiente del historial de terminal y del resto del perfil.

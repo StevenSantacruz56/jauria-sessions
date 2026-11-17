@@ -4,7 +4,10 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
-Sin cambios pendientes registrados.
+### Documentación y verificación
+
+- README y guía de Pulso actualizados: MCP local disponible en 1.3.0, registro opcional por proveedor, sesión nueva y permiso explícito por proyecto; se aclara la diferencia con Claude Desktop y el uso de la CLI en sesiones existentes.
+- Guía de instalación aclarada para conservar una sola app en Aplicaciones sin borrar perfiles. Revisión acotada de exposición y dependencias registrada antes de integrar 1.3.0 en `main`.
 
 ## [1.3.0] - 2026-11-14
 
@@ -150,7 +153,8 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/861bd59...HEAD
+[1.3.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/861bd59
 [0.1.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v0.1.1
 [0.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/a32f414
 
@@ -158,6 +162,6 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 
 [1.0.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.0.1
 
-[1.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.1.0
+[1.1.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/b96fdfe
 
-[1.2.0]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.2.0
+[1.2.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/676fd0b

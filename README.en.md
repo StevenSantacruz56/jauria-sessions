@@ -4,7 +4,7 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-**Current version: 1.3.0.** Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Current source version: 1.3.0.** GitHub releases currently stop at 1.0.1; the 1.3.0 app and installer were prepared locally. Original code is licensed under [GPL-3.0-only](LICENSE). The supported distribution targets Apple Silicon; the app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -24,7 +24,13 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 
 Permissions, saved policies, revocation and macOS notices live in **Configuración**. Pulso remembers the last board per profile and offers a direct action to continue the project or focus its existing Claude continuation.
 
-Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped grants and revocable policies. MCP, website import and cloud sync remain deferred.
+Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped grants and revocable policies. The 1.3.0 runner includes an optional local MCP server; website import and cloud sync remain deferred.
+
+### Pulso and Claude Code
+
+Pulso is Jauria's local board for projects, phases, and progress checkpoints. Its optional `jauria-pulso` MCP server exposes eight tools, but Jauria does not automatically add the server to Claude Code or grant it access. Follow the [Claude Code setup](docs/PULSO.md#mcp-local-opcional-para-nuevas-sesiones), then start a new Claude Code session from Jauria and check `/mcp`. In **Configuración → Permisos de agentes**, select that session and either one project or the explicit **Crear proyectos propios** scope. Remembering access is off by default.
+
+An already running Claude conversation will not load a newly registered MCP server. For that conversation, grant access and use **Copiar instrucciones para el agente** instead. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. This Claude Code server is separate from Claude Desktop connectors. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
 
 Explicit **OSC 7501** reports may display program status in the live view. This cosmetic signal never updates phases. Jauria installs no hooks and changes no agent configuration. Programs that do not emit it have no program status. Replay creates no status or alerts; reconnecting resets this ephemeral state.
 
@@ -40,7 +46,7 @@ Example board in Jauria 1.3.0. Synthetic screenshot: no real session or task dat
 
 ## Install and start
 
-GitHub releases currently contain **source code and documentation**, with **no DMG attachments**. The unsigned installer remains local; access to repository content follows its GitHub visibility and permissions. A public, signed and notarized installer has not been distributed. See the [installation and update guide](docs/INSTALLATION.md).
+GitHub releases currently contain **source code and documentation through 1.0.1**, with **no 1.3.0 DMG attachment**. The unsigned 1.3.0 installer remains local; access to repository content follows its GitHub visibility and permissions. A public, signed and notarized installer has not been distributed. See the [installation and update guide](docs/INSTALLATION.md).
 
 Jauria itself does not require Rust or Node to run from an app bundle. Provider CLIs must be installed and authenticated separately. This release expects Codex at `/opt/homebrew/bin/codex` and Claude Code at `~/.local/bin/claude`; Terminal uses `/bin/zsh -il`.
 
