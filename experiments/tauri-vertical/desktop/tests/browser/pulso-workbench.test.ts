@@ -6,20 +6,20 @@ import { createServer } from 'vite';
 import { mkdir } from 'node:fs/promises';
 const server=await createServer({configFile:false,server:{host:'127.0.0.1',port:0,hmr:false}});await server.listen();
 const url=server.resolvedUrls!.local[0];
-type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string };
+type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string; volatileStatus?: boolean };
 async function install(page:Page, history = '', options: FixtureOptions = {}){await page.addInitScript(({history, options})=>{
  const w=window as any;const sessions=[{id:'main',title:'Plan sintético · Integración',kind:'claude',cwd:'/synthetic/project',status:'running',rows:24,cols:80},{id:'related',title:'Fase sintética · Validación',kind:'codex',cwd:'/synthetic/other',status:'running',rows:24,cols:80}];
  if(options.mainClosed)sessions[0].status='exited';
  if(options.activeContinuation)sessions.push({...sessions[0],id:'continued',title:'Continuación sintética',status:'running'});
  const runnerCalls:any[]=[];
  if(options.savedProject && !localStorage.getItem('jauria-pulso:last-board:/synthetic'))localStorage.setItem('jauria-pulso:last-board:/synthetic',JSON.stringify({schemaVersion:1,projectId:options.savedProject}));
- const events:any[]=history?[{seq:1,sessionId:'main',kind:'output',data:btoa(history)}]:[],resizes:any[]=[],inputs:any[]=[],calls:any[]=[];let rev=3;
+ const events:any[]=history?[{seq:1,sessionId:'main',kind:'output',data:btoa(history)}]:[],resizes:any[]=[],inputs:any[]=[],calls:any[]=[];let rev=3,statusReads=0;
  const projects:any[]=[{id:'plan',title:'Integrar Pulso en Jauria',plan:'Plan de demostración sintético.\n1. Definir el modelo\n2. Implementar\n3. Validar la fluidez',mainSessionId:'main',revision:1,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
  const items:any[]=[{id:'phase',projectId:'plan',title:'Validar la fluidez de las terminales',note:'Contenido sintético para comprobar navegación.',status:'doing',position:0,revision:2,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'},{id:'todo',projectId:null,title:'Preparar la revisión de mañana',note:'',status:'todo',position:0,revision:3,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
  // Keep every board column populated for visual review; the phase under test stays first.
  for(const [id,title,status] of [['scope','Definir el alcance de la entrega','todo'],['implementation','Integrar el tablero con el shell','doing'],['model','Modelo y checkpoints verificados','done']])items.push({...items[0],id,title,status,note:'Datos de prueba sintéticos.',revision:1});
- const status=()=>({pid:123,generation:'pulso-synthetic',pulsoVersion:1,pulsoBoardVersion:1,pulsoAvailable:true,nativeResumeVersion:1,workspaceVersion:1,projectLifecycleVersion:1,projects:[],tasks:[],normalTerminalVersion:1,settingsVersion:1,settings:{schemaVersion:1,maxConcurrentSessions:2,maxSupportedSessions:8},sessions:structuredClone(sessions),lastSeq:events.length});
- w.pulsoFixture={calls,runnerCalls,resizes,inputs,sessions,connections:0,holdNext:null,held:[],output(data:string){events.push({seq:events.length+1,sessionId:'main',kind:'output',data:btoa(data)});},phase:()=>structuredClone(items[0])};
+ const status=()=>{statusReads++;w.pulsoFixture.statusReads=statusReads;return{pid:123,generation:'pulso-synthetic',pulsoVersion:1,pulsoBoardVersion:1,pulsoAvailable:true,nativeResumeVersion:1,workspaceVersion:1,projectLifecycleVersion:1,projects:[],tasks:[],normalTerminalVersion:1,settingsVersion:1,settings:{schemaVersion:1,maxConcurrentSessions:2,maxSupportedSessions:8},sessions:structuredClone(sessions).map(s=>options.volatileStatus?{...s,lastObservedAt:statusReads}:s),lastSeq:events.length};};
+ w.pulsoFixture={calls,runnerCalls,resizes,inputs,sessions,statusReads:0,connections:0,holdNext:null,held:[],output(data:string){events.push({seq:events.length+1,sessionId:'main',kind:'output',data:btoa(data)});},phase:()=>structuredClone(items[0])};
  w.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},async invoke(cmd:string,a:any){
   if(cmd==='connect_runner'){w.pulsoFixture.connections++;return{dataDir:'/synthetic',socket:'/synthetic/sock',status:status(),smoke:true};}
   if(cmd==='probe_tools')return[];if(cmd==='record_ui_evidence')return;if(cmd==='plugin:window|set_badge_count')return;
@@ -91,6 +91,36 @@ try{
    assert.deepEqual(errors,[]);
   }finally{await browser.close();}
  });
+  await test(`${engine.name()}: session buttons survive status polling during a switch`, async () => {
+    const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});
+    try {
+      await install(page,'',{volatileStatus:true});await page.goto(url);
+      const other=page.locator('#session-list .session-item').filter({hasText:'Fase sintética · Validación'});
+      await other.waitFor();await other.scrollIntoViewIfNeeded();
+      await page.evaluate(()=>{(window as any).pulsoFixture.switchButton=document.querySelectorAll('#session-list .session-item')[1];});
+      const before=await page.evaluate(()=>(window as any).pulsoFixture.statusReads);
+      await page.waitForFunction(before=>(window as any).pulsoFixture.statusReads>before,before);
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.switchButton===document.querySelectorAll('#session-list .session-item')[1]),true,'status metadata must not replace the button');
+      const box=await other.boundingBox();assert.ok(box);
+      await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+      const pressedAt=await page.evaluate(()=>(window as any).pulsoFixture.statusReads);
+      await page.waitForFunction(before=>(window as any).pulsoFixture.statusReads>before,pressedAt);
+      await page.mouse.up();
+      assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
+      assert.equal(await page.locator('#session-0').inputValue(),'related');
+      await page.locator('#session-0').selectOption('main');
+      assert.equal(await page.locator('#workspace-title').textContent(),'Plan sintético · Integración');
+      await page.locator('#toggle-split').click();
+      assert.equal(await page.locator('#session-1').inputValue(),'related');
+      await other.click();
+      assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
+      assert.equal(await page.locator('#session-0').inputValue(),'main','split navigation must keep the other pane');
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0,'switching must not send terminal input');
+      await page.keyboard.type('x');
+      await page.waitForFunction(()=>(window as any).pulsoFixture.inputs.length>0);
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.at(-1).id),'related','typing after the switch must reach the focused session');
+    } finally {await browser.close();}
+  });
   await test(`${engine.name()}: ended main conversation resumes through the native boundary only after explicit click`, async () => {
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
     try {

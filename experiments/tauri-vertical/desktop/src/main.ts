@@ -404,23 +404,20 @@ function refresh() {
   $<HTMLButtonElement>('#copy-session-id').disabled = !current;
   $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying;
   refreshTasks(sessions);
-  const key = JSON.stringify([sessions, alerts, filter, query, taskScreen, current?.id]);
+  const groups = groupSessions(sessions.filter(s => matches(s, filter, query)));
+  // Keep the button itself mounted while status, output metadata or attention
+  // changes. Replacing it between pointer down and up loses the user's click.
+  const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.sessions.map(s => s.id)])]);
   if (sidebarKey !== key) {
     sidebarKey = key;
     const list = $('#session-list'); list.replaceChildren();
-    for (const group of groupSessions(sessions.filter(s => matches(s, filter, query)))) {
+    for (const group of groups) {
       const section = document.createElement('section'); section.className = 'session-group';
       const heading = document.createElement('div'); heading.className = 'group-heading';
       heading.innerHTML = icon('folder'); const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.path ?? group.name; section.append(heading);
       for (const s of group.sessions) {
-        const button = document.createElement('button'); button.className = 'session-item'; button.dataset.selected = String(taskScreen === 'terminal' && s.id === current?.id); button.setAttribute('aria-current', taskScreen === 'terminal' && s.id === current?.id ? 'true' : 'false');
+        const button = document.createElement('button'); button.className = 'session-item'; button.dataset.sessionId = s.id;
         button.innerHTML = `<span class="state-dot"></span><span class="session-item-copy"><span class="session-item-title"></span><span class="session-item-meta"></span></span>`;
-        const alert = alertById.get(s.id);
-        button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
-        (button.querySelector('.state-dot') as HTMLElement).dataset.state = alert ? 'attention' : s.status;
-        button.querySelector('.session-item-title')!.textContent = s.title;
-        button.querySelector('.session-item-meta')!.textContent = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : [statusLabel(s.status),programLabel(s.id)].filter(Boolean).join(' · ')}`;
-        button.title = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
         button.addEventListener('click', () => selectSession(s.id)); section.append(button);
       }
       list.append(section);
@@ -429,6 +426,23 @@ function refresh() {
       const empty = document.createElement('p'); empty.className = 'list-empty';
       empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Sin avisos observados. Las terminales no tienen seguimiento de permisos.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
     }
+  }
+  const sessionById = new Map(sessions.map(session => [session.id, session]));
+  for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('#session-list .session-item'))) {
+    const s = sessionById.get(button.dataset.sessionId!)!;
+    const alert = alertById.get(s.id);
+    const selected = taskScreen === 'terminal' && s.id === current?.id;
+    button.dataset.selected = String(selected);
+    button.setAttribute('aria-current', String(selected));
+    button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
+    (button.querySelector('.state-dot') as HTMLElement).dataset.state = alert ? 'attention' : s.status;
+    const title = button.querySelector('.session-item-title')!;
+    if (title.textContent !== s.title) title.textContent = s.title;
+    const meta = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : [statusLabel(s.status),programLabel(s.id)].filter(Boolean).join(' · ')}`;
+    const description = button.querySelector('.session-item-meta')!;
+    if (description.textContent !== meta) description.textContent = meta;
+    const tooltip = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
+    if (button.title !== tooltip) button.title = tooltip;
   }
 }
 function assign(pane: Pane, id: string | null) {
