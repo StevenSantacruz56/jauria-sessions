@@ -31,6 +31,7 @@ struct Grant {
     policy: Option<(String,String)>,
     principal: store::Principal,
     token: String,
+    automatic: bool,
 }
 struct State {
     store: store::Store,
@@ -43,6 +44,7 @@ struct Shared {
     lookup: SessionLookup,
     quitting: AtomicBool,
     listening: AtomicBool,
+    auto_enabled: AtomicBool,
     ui: String,
     grants_dir: PathBuf,
     socket: PathBuf,
@@ -129,6 +131,7 @@ impl Service {
             lookup,
             quitting: AtomicBool::new(false),
             listening: AtomicBool::new(true),
+            auto_enabled: AtomicBool::new(true),
             ui,
             grants_dir,
             socket,
@@ -217,22 +220,30 @@ impl Service {
         Ok(())
     }
     pub fn auto_grant(&self, session: &Value) -> Result<()> {
+        self.auto_grant_inner(session,false)
+    }
+    pub fn auto_grant_resume(&self, session: &Value) -> Result<()> {
+        self.auto_grant_inner(session,true)
+    }
+    fn auto_grant_inner(&self, session: &Value, resume: bool) -> Result<()> {
+        if !self.shared.auto_enabled.load(Ordering::Acquire) { return Ok(()); }
         ensure!(
             !self.shared.quitting.load(Ordering::Acquire),
             "service stopped"
         );
         let sid = store::id(session, "id")?;
         let epoch = self.shared.epoch(&sid)?;
-        ensure!(epoch == 0, "automatic grant cancelled after revocation");
+        ensure!(resume || epoch == 0, "automatic grant cancelled after revocation");
         let live = (self.shared.lookup)(&sid).context("session unavailable")?;
         live_session(&live)?;
+        ensure!(matches!(live["kind"].as_str(),Some("claude"|"codex")),"automatic access requires a Jauria agent session");
         let key = policy_key(&live)?;
         let mut state = self
             .shared
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("Pulso unavailable"))?;
-        if state.grants.contains_key(&sid) {
+        if state.grants.contains_key(&sid) && !resume {
             return Ok(());
         }
         let policy: Option<String> = state
@@ -240,15 +251,28 @@ impl Service {
             .0
             .query_row("SELECT body FROM policies WHERE key=?", [&key], |r| r.get(0))
             .optional()?;
+        // A session that was explicitly narrowed by the user must not widen
+        // merely because its structured Codex connection resumed.
+        if resume && policy.is_none() && state.grants.get(&sid).is_some_and(|grant|!grant.automatic) {
+            return Ok(());
+        }
         if let Some(policy) = policy {
             let policy: Value = serde_json::from_str(&policy)?;
             let mut a = json!({"sessionId":sid,"canCreateProjects":policy["canCreateProjects"].as_bool().unwrap_or(false)});
             if let Some(project) = policy["projectId"].as_str() {
                 a["projectId"] = json!(project);
             }
-            self.shared.issue(&mut state, &a, &live, epoch, Some(&key))?;
+            self.shared.issue(&mut state, &a, &live, epoch, Some(&key), false, true)?;
+        } else {
+            // The Jauria-owned session is the principal. Its handle remains
+            // session-local and revocable; external CLIs receive no handle.
+            let a=json!({"sessionId":sid,"canCreateProjects":true});
+            self.shared.issue(&mut state,&a,&live,epoch,None,true,true)?;
         }
         Ok(())
+    }
+    pub fn set_auto_enabled(&self, enabled: bool) {
+        self.shared.auto_enabled.store(enabled,Ordering::Release);
     }
     pub fn available(&self)->bool { self.shared.listening.load(Ordering::Acquire) && !self.shared.quitting.load(Ordering::Acquire) }
     pub fn shutdown(&self) {
@@ -293,7 +317,7 @@ impl Shared {
             .get(sid)
             .unwrap_or(&0))
     }
-    fn issue(&self, state: &mut State, a: &Value, live: &Value, epoch: u64, origin_policy: Option<&str>) -> Result<Value> {
+    fn issue(&self, state: &mut State, a: &Value, live: &Value, epoch: u64, origin_policy: Option<&str>, all_projects: bool, automatic: bool) -> Result<Value> {
         store::fields(
             a,
             &["sessionId", "projectId", "canCreateProjects", "remember"],
@@ -317,7 +341,7 @@ impl Shared {
             projects.insert(i);
         }
         let create = a["canCreateProjects"].as_bool().unwrap_or(false);
-        ensure!(create || !projects.is_empty(), "empty grant scope");
+        ensure!(create || all_projects || !projects.is_empty(), "empty grant scope");
         let principal: Option<String> = state
             .store
             .0
@@ -412,8 +436,10 @@ impl Shared {
                     session: Some(sid.clone()),
                     projects,
                     create,
+                    all_projects,
                 },
                 token,
+                automatic,
             },
         );
         drop(tokens);
@@ -460,7 +486,7 @@ impl Shared {
             match op {
                 "grant" => {
                     let (live, epoch) = live.unwrap();
-                    return self.issue(&mut state, a, &live, epoch, None);
+                    return self.issue(&mut state, a, &live, epoch, None, false, false);
                 }
                 "policies" => {
                     store::fields(a, &[])?;
@@ -514,6 +540,7 @@ impl Shared {
             bail!("unauthorized");
         }
         let result = (|| -> Result<Value> {
+            ensure!(!grant.automatic || self.auto_enabled.load(Ordering::Acquire),"unauthorized");
             if let Some((key,expected))=&grant.policy {
                 let body:Option<String>=state.store.0.query_row("SELECT body FROM policies WHERE key=?",[key],|r|r.get(0)).optional()?;
                 let body=body.context("unauthorized")?;
@@ -1025,9 +1052,64 @@ mod tests {
         f.ui("revoke_policy", json!({"id":grant["policyId"]}))
             .unwrap();
         f.service.auto_grant(&json!({"id":"s3"})).unwrap();
-        assert!(!f.data.join("pulso-grants/s3.json").exists());
+        assert!(f.data.join("pulso-grants/s3.json").exists());
         f.live.store(false, Ordering::Release);
         assert!(f.service.auto_grant(&json!({"id":"s4"})).is_err());
+    }
+    #[test]
+    fn new_agent_sessions_get_all_projects_until_global_access_is_disabled() {
+        let f=Fixture::new();
+        for id in ["alpha","beta"] {
+            f.ui("project_create",json!({"id":id,"requestId":id,"title":id})).unwrap();
+        }
+        f.ui("item_create",json!({"id":"private-note","requestId":"private-note","title":"Standalone"})).unwrap();
+        f.service.auto_grant(&json!({"id":"s1"})).unwrap();
+        let path=f.data.join("pulso-grants/s1.json");
+        let credential:Value=serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let token=credential["token"].as_str().unwrap();
+        let projects=f.agent(token,"projects",json!({})).unwrap();
+        assert_eq!(projects["projects"].as_array().unwrap().len(),2);
+        assert!(f.agent(token,"project",json!({"id":"beta"})).is_ok());
+        assert_eq!(f.agent(token,"items",json!({})).unwrap()["totalCount"],0);
+        assert!(f.agent(token,"item",json!({"id":"private-note"})).is_err());
+        assert!(f.agent(token,"activity",json!({"projectId":null})).is_err());
+        assert!(f.agent(token,"project_create",json!({"id":"gamma","requestId":"gamma","title":"Gamma"})).is_ok());
+        f.service.set_auto_enabled(false);
+        assert!(f.agent(token,"project",json!({"id":"alpha"})).is_err());
+        f.ui("grant",json!({"sessionId":"manual","projectId":"alpha"})).unwrap();
+        let manual:Value=serde_json::from_slice(&fs::read(f.data.join("pulso-grants/manual.json")).unwrap()).unwrap();
+        assert!(f.agent(manual["token"].as_str().unwrap(),"project",json!({"id":"alpha"})).is_ok());
+        f.service.auto_grant(&json!({"id":"s2"})).unwrap();
+        assert!(!f.data.join("pulso-grants/s2.json").exists());
+        f.service.set_auto_enabled(true);
+        f.service.auto_grant(&json!({"id":"s2"})).unwrap();
+        assert!(f.data.join("pulso-grants/s2.json").exists());
+    }
+    #[test]
+    fn structured_resume_replaces_a_revoked_generation_credential() {
+        let f=Fixture::new();
+        f.service.auto_grant(&json!({"id":"s1"})).unwrap();
+        let path=f.data.join("pulso-grants/s1.json");
+        let old:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        f.service.revoke_session("s1").unwrap();
+        assert!(f.agent(old["token"].as_str().unwrap(),"projects",json!({})).is_err());
+        f.service.auto_grant_resume(&json!({"id":"s1"})).unwrap();
+        let new:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_ne!(old["token"],new["token"]);
+        assert!(f.agent(new["token"].as_str().unwrap(),"projects",json!({})).is_ok());
+    }
+    #[test]
+    fn structured_resume_never_widens_an_explicit_manual_scope() {
+        let f=Fixture::new();
+        for id in ["one","two"] {f.ui("project_create",json!({"id":id,"requestId":id,"title":id})).unwrap();}
+        f.ui("grant",json!({"sessionId":"s1","projectId":"one"})).unwrap();
+        let path=f.data.join("pulso-grants/s1.json");
+        let old:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        f.service.revoke_session("s1").unwrap();
+        f.service.auto_grant_resume(&json!({"id":"s1"})).unwrap();
+        let unchanged:Value=serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(unchanged["token"],old["token"]);
+        assert!(f.agent(old["token"].as_str().unwrap(),"project",json!({"id":"two"})).is_err());
     }
     #[test]
     fn narrowed_scope_does_not_replay_receipts_from_removed_project() {

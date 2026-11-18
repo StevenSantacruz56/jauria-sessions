@@ -19,6 +19,7 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 struct State {
     limit: usize,
+    pulso_auto_access: bool,
     warning: Option<&'static str>,
 }
 
@@ -37,15 +38,15 @@ impl AppSettings {
     /// creates or repairs files. Invalid settings remain available for inspection.
     pub fn open(profile: &Path) -> Result<Self> {
         let directory = open_profile(profile)?;
-        let (limit, warning) = match load(&directory) {
-            Ok(Some(limit)) => (limit, None),
-            Ok(None) => (2, None),
-            Err(_) => (2, Some(WARNING)),
+        let (limit, pulso_auto_access, warning) = match load(&directory) {
+            Ok(Some((limit, pulso_auto_access))) => (limit, pulso_auto_access, None),
+            Ok(None) => (2, true, None),
+            Err(_) => (2, true, Some(WARNING)),
         };
         Ok(Self {
             profile: profile.to_owned(),
             directory,
-            state: Mutex::new(State { limit, warning }),
+            state: Mutex::new(State { limit, pulso_auto_access, warning }),
             #[cfg(test)]
             fail_directory_sync: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -57,6 +58,10 @@ impl AppSettings {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).limit
     }
 
+    pub fn pulso_auto_access(&self) -> bool {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).pulso_auto_access
+    }
+
     pub fn snapshot(&self) -> Value {
         snapshot(&self.state.lock().unwrap_or_else(|e| e.into_inner()))
     }
@@ -66,12 +71,19 @@ impl AppSettings {
     /// Errors leave the previous file and memory intact. Once rename commits,
     /// returns the new snapshot; directory-fsync failure becomes a durability warning.
     pub fn set_limit(&self, limit: usize) -> Result<Value> {
-        ensure!((1..=8).contains(&limit), "session limit must be an integer from 1 to 8");
+        self.update(Some(limit), None)
+    }
+
+    pub fn update(&self, limit: Option<usize>, pulso_auto_access: Option<bool>) -> Result<Value> {
+        ensure!(limit.is_some() || pulso_auto_access.is_some(), "settings change required");
+        if let Some(limit) = limit { ensure!((1..=8).contains(&limit), "session limit must be an integer from 1 to 8"); }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.validate_profile()?;
         validate_target(&self.directory)?;
         let bytes = serde_json::to_vec(&json!({
-            "schemaVersion": 1, "maxConcurrentSessions": limit
+            "schemaVersion": 2,
+            "maxConcurrentSessions": limit.unwrap_or(state.limit),
+            "pulsoAutoAccess": pulso_auto_access.unwrap_or(state.pulso_auto_access),
         }))?;
 
         let (temporary, mut file) = create_temp(&self.directory)?;
@@ -92,7 +104,8 @@ impl AppSettings {
         ) })?;
         // Rename is the commit point. A later directory-fsync failure cannot be
         // reported as a failed save: memory and admission must match the new file.
-        state.limit = limit;
+        if let Some(limit) = limit { state.limit = limit; }
+        if let Some(enabled) = pulso_auto_access { state.pulso_auto_access = enabled; }
         state.warning = if self.sync_directory().is_err() { Some(DURABILITY_WARNING) } else { None };
         Ok(snapshot(&state))
     }
@@ -116,9 +129,10 @@ impl AppSettings {
 
 fn snapshot(state: &State) -> Value {
     json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "maxConcurrentSessions": state.limit,
         "maxSupportedSessions": 8,
+        "pulsoAutoAccess": state.pulso_auto_access,
         "warning": state.warning,
     })
 }
@@ -175,7 +189,7 @@ fn validate_target(directory: &File) -> Result<()> {
     existing(directory).map(|_| ())
 }
 
-fn load(directory: &File) -> Result<Option<usize>> {
+fn load(directory: &File) -> Result<Option<(usize, bool)>> {
     let Some(file) = existing(directory)? else { return Ok(None) };
     ensure!(file.metadata()?.len() <= MAX_BYTES, "settings too large");
     let mut bytes = Vec::new();
@@ -183,12 +197,14 @@ fn load(directory: &File) -> Result<Option<usize>> {
     ensure!(bytes.len() as u64 <= MAX_BYTES, "settings too large");
     let value: Value = serde_json::from_slice(&bytes)?;
     let object = value.as_object().context("settings must be an object")?;
-    ensure!(object.len() == 2 && object.contains_key("schemaVersion")
-        && object.contains_key("maxConcurrentSessions"), "unknown or missing settings fields");
-    ensure!(object["schemaVersion"].as_u64() == Some(1), "unsupported settings schema");
-    let limit = object["maxConcurrentSessions"].as_u64().context("invalid session limit")?;
+    let schema=object.get("schemaVersion").and_then(Value::as_u64).context("unsupported settings schema")?;
+    ensure!((schema == 1 && object.len() == 2 || schema == 2 && object.len() == 3)
+        && object.contains_key("maxConcurrentSessions")
+        && (schema == 1 || object.contains_key("pulsoAutoAccess")), "unknown or missing settings fields");
+    let limit = object.get("maxConcurrentSessions").and_then(Value::as_u64).context("invalid session limit")?;
     ensure!((1..=8).contains(&limit), "invalid session limit");
-    Ok(Some(limit as usize))
+    let auto=if schema == 1 {true} else {object.get("pulsoAutoAccess").and_then(Value::as_bool).context("invalid Pulso access setting")?};
+    Ok(Some((limit as usize, auto)))
 }
 
 fn create_temp(directory: &File) -> Result<(Temporary<'_>, File)> {

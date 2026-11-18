@@ -66,7 +66,8 @@ fn settings_cap_four_lowering_preserves_custody_and_persists() {
     assert_eq!(app.rpc("get_settings",json!({}))["maxConcurrentSessions"],2);
     assert_eq!(app.rpc("set_settings",json!({"maxConcurrentSessions":4}))["maxConcurrentSessions"],4);
     let status=app.rpc("status",json!({}));
-    assert_eq!(status["settingsVersion"],1);assert_eq!(status["sessionRenameVersion"],1);
+    assert_eq!(status["settingsVersion"],2);assert_eq!(status["sessionRenameVersion"],1);
+    assert_eq!(status["settings"]["pulsoAutoAccess"],true);
     assert_eq!(status["settings"]["maxConcurrentSessions"],4);
     for id in ["one","two","three","four"] {assert_eq!(app.start(id)["status"],"running");}
     app.reject("start",Instance::start_args("five"));
@@ -119,6 +120,9 @@ fn strict_preferences_and_rename_validation_default_two() {
         app.reject("set_settings",json!({"maxConcurrentSessions":value}));
     }
     for args in [json!({}),json!({"maxConcurrentSessions":4,"extra":true})] {app.reject("set_settings",args);}
+    for value in [json!(null),json!(1),json!("false")] {app.reject("set_settings",json!({"pulsoAutoAccess":value}));}
+    assert_eq!(app.rpc("set_settings",json!({"pulsoAutoAccess":false}))["pulsoAutoAccess"],false);
+    assert_eq!(app.rpc("get_settings",json!({}))["pulsoAutoAccess"],false);
     app.reject("get_settings",json!({"extra":true}));
     assert_eq!(app.rpc("get_settings",json!({}))["maxConcurrentSessions"],2);
     for title in [json!(""),json!("  "),json!("x".repeat(121)),json!("🐺".repeat(121)),

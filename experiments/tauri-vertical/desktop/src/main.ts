@@ -270,7 +270,7 @@ function refresh() {
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'}${runner.runnerVersion ? ` · v${runner.runnerVersion}` : ''} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
   const capabilities=runner as RunnerStatus & {telemetryVersion?:number;verificationVersion?:number;recoveryVersion?:number;handoffVersion?:number;codexVersion?:number;terminalSessionVersion?:number;projectLifecycleVersion?:number};
-  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===1 && runner?.sessionRenameVersion===1);
+  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===2 && runner?.sessionRenameVersion===1);
   $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
   text('#cursor', `Eventos procesados: ${renderedSeq}`);
   const retained=runner?.retention;
@@ -574,7 +574,7 @@ async function action(work: () => Promise<void>) {
   try { await work(); } catch (e) { notice(message(e), true); } finally { busyAction = false; refresh(); }
 }
 function occupiedSessions() { return [...views.values()].filter(v => !['exited','stopped','failed','interrupted','released'].includes(v.session.status)).length; }
-function sessionLimit() { return runner?.settingsVersion === 1 ? runner.settings?.maxConcurrentSessions ?? 2 : 2; }
+function sessionLimit() { return runner?.settingsVersion === 1 || runner?.settingsVersion === 2 ? runner.settings?.maxConcurrentSessions ?? 2 : 2; }
 function taskLaunchBlock(task: Task, sessions: Session[]): string | null {
   if (task.state !== 'ready') return 'Prepara el worktree antes de iniciar un proveedor.';
   if (sessions.some(s => s.taskId === task.id && ['running','starting','needs_attention'].includes(s.status))) return 'Esta tarea ya tiene una sesión abierta o pendiente de atención. Vuelve a su terminal.';
@@ -1338,18 +1338,20 @@ const settingsPanel = mountSettings({
 
   async read() {
     if (!connected || connecting) throw new Error('Runner sin conexión.');
-    if (runner?.settingsVersion !== 1) return { schemaVersion: 1, maxConcurrentSessions: 2, maxSupportedSessions: 2,
+    if (runner?.settingsVersion !== 1 && runner?.settingsVersion !== 2) return { schemaVersion: 1, maxConcurrentSessions: 2, maxSupportedSessions: 2,
       warning: 'Runner anterior: se conserva el límite de 2 sesiones. Actualiza el runner para ajustarlo.' };
     const check = workspaceContext();
     const result = await request<AppSettings>('get_settings', {}); check(); return result;
   },
-  async save(maxConcurrentSessions) {
-    if (!connected || connecting || runner?.settingsVersion !== 1) throw new Error('El runner no permite editar la configuración.');
+  async save(maxConcurrentSessions, pulsoAutoAccess) {
+    if (!connected || connecting || (runner?.settingsVersion !== 1 && runner?.settingsVersion !== 2)) throw new Error('El runner no permite editar la configuración.');
     const check = workspaceContext();
-    const result = await request<AppSettings>('set_settings', { maxConcurrentSessions }); check(); return result;
+    const result = await request<AppSettings>('set_settings', runner.settingsVersion === 2
+      ? { maxConcurrentSessions, pulsoAutoAccess }
+      : { maxConcurrentSessions }); check(); return result;
   },
   getTheme: () => theme.value, setTheme: applyTheme, version: appVersion,
-  canEdit: () => connected && !connecting && runner?.settingsVersion === 1,
+  canEdit: () => connected && !connecting && (runner?.settingsVersion === 1 || runner?.settingsVersion === 2),
   onSaved(settings) { if (runner) runner.settings = settings; refresh(); },
 });
 function openPermissions(context: {projectId?: string; sessionId?: string}) {

@@ -54,8 +54,8 @@ fn first_launch_default_without_any_writes() -> Result<()> {
     let before = fs::metadata(p.path())?;
     let settings = AppSettings::open(p.path())?;
     assert_eq!(settings.limit(), 2);
-    assert_eq!(settings.snapshot(), json!({"schemaVersion":1,"maxConcurrentSessions":2,
-        "maxSupportedSessions":8,"warning":null}));
+    assert_eq!(settings.snapshot(), json!({"schemaVersion":2,"maxConcurrentSessions":2,
+        "maxSupportedSessions":8,"pulsoAutoAccess":true,"warning":null}));
     assert_eq!(fs::read_dir(p.path())?.count(), 0);
     assert_eq!(fs::metadata(p.path())?.modified()?, before.modified()?);
     Ok(())
@@ -69,7 +69,7 @@ fn persists_only_schema_and_limit_and_reopens_at_both_boundaries() -> Result<()>
         assert_eq!(settings.set_limit(limit)?["maxConcurrentSessions"], limit);
         assert_eq!(AppSettings::open(p.path())?.limit(), limit);
         let value: Value = serde_json::from_slice(&fs::read(p.file())?)?;
-        assert_eq!(value, json!({"schemaVersion":1,"maxConcurrentSessions":limit}));
+        assert_eq!(value, json!({"schemaVersion":2,"maxConcurrentSessions":limit,"pulsoAutoAccess":true}));
         let metadata = fs::metadata(p.file())?;
         assert_eq!(metadata.mode() & 0o7777, 0o600);
         assert_eq!(metadata.nlink(), 1);
@@ -259,8 +259,9 @@ fn concurrent_readers_and_writers_observe_complete_settings() -> Result<()> {
         thread::spawn(move || {
             while !done.load(Ordering::Acquire) {
                 let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                assert_eq!(value.as_object().unwrap().len(), 2);
-                assert_eq!(value["schemaVersion"], 1);
+                assert_eq!(value.as_object().unwrap().len(), 3);
+                assert_eq!(value["schemaVersion"], 2);
+                assert_eq!(value["pulsoAutoAccess"], true);
                 assert!((1..=8).contains(&value["maxConcurrentSessions"].as_u64().unwrap()));
             }
         })
@@ -283,5 +284,23 @@ fn concurrent_readers_and_writers_observe_complete_settings() -> Result<()> {
     observer.join().unwrap();
     assert_eq!(settings.limit(), AppSettings::open(p.path())?.limit());
     assert_eq!(fs::read_dir(p.path())?.count(), 1);
+    Ok(())
+}
+
+#[test]
+fn migrates_old_settings_and_persists_pulso_preference() -> Result<()> {
+    let p = Profile::new()?;
+    p.seed(br#"{"schemaVersion":1,"maxConcurrentSessions":4}"#)?;
+    let settings = AppSettings::open(p.path())?;
+    assert_eq!(settings.limit(), 4);
+    assert!(settings.pulso_auto_access());
+    let saved = settings.update(None, Some(false))?;
+    assert_eq!(saved["pulsoAutoAccess"], false);
+    assert_eq!(saved["maxConcurrentSessions"], 4);
+    let reopened = AppSettings::open(p.path())?;
+    assert!(!reopened.pulso_auto_access());
+    assert_eq!(reopened.limit(), 4);
+    assert_eq!(reopened.update(Some(5), Some(true))?["pulsoAutoAccess"], true);
+    assert_eq!(AppSettings::open(p.path())?.limit(), 5);
     Ok(())
 }

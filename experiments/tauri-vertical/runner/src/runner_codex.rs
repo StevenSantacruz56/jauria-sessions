@@ -116,6 +116,7 @@ impl Runner {
             let jobs=self.codex_jobs.lock().unwrap();
             let stored=self.db.lock().unwrap().session(id)?.context("Sesión desconocida")?;
             ensure!(stored["codex"]["generation"]==generation,"La conexión cambió; la detención no se aplica a otra generación");
+            if let Some(pulso)=&self.pulso {let _=pulso.revoke_session(id);}
             if let Some(job)=jobs.get(id){ensure!(job.control.generation==generation,"La conexión cambió");job.control.ready.store(false,Ordering::Release);job.control.stop.store(true,Ordering::Release);}
             else {ensure!(matches!(stored["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released")),"Sesión sin custodia; no se envían señales");return Ok(stored);}
         }
@@ -159,9 +160,21 @@ impl Runner {
             }
         };
         let generation=attached["generation"].as_i64().context("Generación inválida")?;drop(db);
+        let pulso_mcp=if self.settings.pulso_auto_access() {
+            if let Some(service)=self.pulso.as_ref().filter(|service|service.available()) {
+                let session=self.db.lock().unwrap().session(id)?.context("Sesión desconocida")?;
+                let grant_result=if resume.is_some() {service.auto_grant_resume(&session)} else {service.auto_grant(&session)};
+                if let Err(error)=grant_result {
+                    self.db.lock().unwrap().state(id,"failed",json!({"reason":"No se pudo preparar Pulso para Codex"}))?;
+                    return Err(error.context("No se pudo preparar Pulso para Codex"));
+                }
+                Some(crate::pulso_mcp_config::PulsoMcp::new(std::env::current_exe()?,self.data_dir.join("pulso-grants").join(format!("{id}.json")))?)
+            }else{None}
+        }else{None};
         let (control,rx)=codex_runtime::channel(generation);let worker_control=Control{stop:control.stop.clone(),ready:control.ready.clone(),tx:control.tx.clone(),generation};let owner=self.clone();let sid=id.to_owned();
         let worker=thread::Builder::new().name("jauria-codex".into()).spawn(move||{
-            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||codex_runtime::run(owner.db.clone(),owner.mutations.clone(),worker_control,rx,sid.clone(),cwd)));
+            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||codex_runtime::run(owner.db.clone(),owner.mutations.clone(),worker_control,rx,sid.clone(),cwd,pulso_mcp)));
+            if let Some(pulso)=&owner.pulso {let _=pulso.revoke_session(&sid);}
             if !matches!(result,Ok(Ok(()))){
                 let mut db=owner.db.lock().unwrap();
                 if db.session(&sid).is_ok_and(|s|s.is_some_and(|s|!matches!(s["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released"|"needs_attention")))){

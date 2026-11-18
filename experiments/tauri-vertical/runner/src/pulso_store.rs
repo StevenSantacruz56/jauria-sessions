@@ -15,6 +15,7 @@ pub(super) struct Principal {
     pub session: Option<String>,
     pub projects: HashSet<String>,
     pub create: bool,
+    pub all_projects: bool,
 }
 impl Principal {
     pub fn ui() -> Self {
@@ -23,10 +24,11 @@ impl Principal {
             session: None,
             projects: HashSet::new(),
             create: true,
+            all_projects: true,
         }
     }
     pub fn sees(&self, p: &str) -> bool {
-        self.session.is_none() || self.projects.contains(p)
+        self.all_projects || self.projects.contains(p)
     }
 }
 pub(super) fn now() -> u64 {
@@ -200,6 +202,8 @@ impl Store {
                 // Ignore activity outside the grant, including link-only changes.
                 let revision = if p.session.is_none() {
                     self.revision()?
+                } else if p.all_projects {
+                    self.0.query_row("SELECT COALESCE(MAX(seq),0) FROM events WHERE json_extract(body,'$.projectId') IS NOT NULL",[],|r|r.get::<_,i64>(0))? as u64
                 } else {
                     // Each grant performs one indexed lookup; unrelated history is never scanned.
                     self.0.query_row(
@@ -300,13 +304,16 @@ impl Store {
                 use rusqlite::types::Value as SqlValue;
                 let mut predicate = String::from("kind=? AND COALESCE(json_extract(body,'$.archived'),0)=?");
                 let mut parameters = vec![SqlValue::Text(kind.into()), SqlValue::Integer(i64::from(a["archived"].as_bool().unwrap_or(false)))];
-                if p.session.is_some() {
+                if !p.all_projects {
                     predicate.push_str(if op=="projects" {
                         " AND id IN (SELECT value FROM json_each(?))"
                     } else {
                         " AND json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?))"
                     });
                     parameters.push(SqlValue::Text(serde_json::to_string(&p.projects)?));
+                } else if p.session.is_some() && op=="items" {
+                    // All Pulso projects never includes standalone Pendientes.
+                    predicate.push_str(" AND json_extract(body,'$.projectId') IS NOT NULL");
                 }
                 if op=="items" && a.get("projectId").is_some() {
                     predicate.push_str(" AND json_extract(body,'$.projectId') IS ?");
@@ -354,9 +361,11 @@ impl Store {
                 use rusqlite::types::Value as SqlValue;
                 let mut predicates = Vec::new();
                 let mut parameters = Vec::new();
-                if p.session.is_some() {
+                if !p.all_projects {
                     predicates.push("json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?))");
                     parameters.push(SqlValue::Text(serde_json::to_string(&p.projects)?));
+                } else if p.session.is_some() {
+                    predicates.push("json_extract(body,'$.projectId') IS NOT NULL");
                 }
                 for (field, predicate) in [
                     ("projectId", "json_extract(body,'$.projectId') IS ?"),
@@ -778,7 +787,7 @@ mod store_tests {
         assert_eq!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap(), json!({"revision":revision,"unchanged":true}));
         assert!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision-1})).unwrap()["columns"].is_object());
         assert_eq!(store.read(&ui, "board", &json!({"projectId":null})).unwrap()["columns"]["todo"]["totalCount"], 0);
-        let agent = Principal { session:Some("agent".into()), projects:HashSet::from(["p".into()]), ..Principal::ui() };
+        let agent = Principal { session:Some("agent".into()), projects:HashSet::from(["p".into()]), all_projects:false, ..Principal::ui() };
         assert_eq!(store.read(&agent, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap_err().to_string(), "unauthorized");
         for args in [json!({}), json!({"projectId":false}), json!({"projectId":"../bad"}), json!({"projectId":null,"status":"todo"})] {
             assert!(store.read(&ui, "board", &args).is_err());
@@ -990,7 +999,7 @@ mod store_tests {
         ] {
             store.0.execute("INSERT INTO events VALUES(?,?)", params![seq, body.to_string()]).unwrap();
         }
-        let mut agent = Principal { id:"a".into(), session:Some("s".into()), projects:HashSet::from(["p".into()]), create:false };
+        let mut agent = Principal { id:"a".into(), session:Some("s".into()), projects:HashSet::from(["p".into()]), create:false, all_projects:false };
         assert_eq!(store.read(&agent, "revision", &json!({})).unwrap()["revision"], 2);
         let activity = store.read(&agent, "activity", &json!({"limit":1})).unwrap();
         assert_eq!(activity["events"], json!([{"projectId":"p","itemId":"other"}]));

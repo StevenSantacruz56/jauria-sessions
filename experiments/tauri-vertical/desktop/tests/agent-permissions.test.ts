@@ -65,7 +65,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         assert.equal(await page.getByLabel('Sesión que recibirá permiso').locator('option').count(), 3);
         assert.equal(await page.getByLabel('Alcance del permiso').inputValue(), '');
         assert.equal(await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).isDisabled(), true);
-        assert.equal(await page.getByRole('checkbox').isChecked(), false);
+        assert.equal(await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).isChecked(), false);
         assert.match(await page.locator('.settings-permissions').innerText(), /Synthetic project/);
         assert.match(await page.locator('.settings-permissions').innerText(), /missing-project/);
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
@@ -80,7 +80,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         assert.match(copied,/jauria-pulso --handle '\/synthetic\/safe-handle'/);
         assert.match(copied,/Crea un proyecto de Pulso y sus fases/);
         assert.doesNotMatch(copied,/secret-token|secret-handle|secret-guidance/);
-        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox').check();
+        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).check();
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click(); await ready(page);
         assert.deepEqual(await act(page, 'return f.calls.filter(c => c[0] === "grant").at(-1)'), ['grant', { sessionId: 's1', projectId: 'project1', canCreateProjects: false, remember: true }]);
         await page.getByRole('button',{name:'Copiar instrucciones para el agente'}).click();
@@ -160,7 +160,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
       await t.test('more preserves scope and opt-in on failure/retry, and rejects nonadvancing or oversized pages', async () => {
         const page = await mounted(); await open(page);
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
-        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox').check();
+        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).check();
         await act(page, 'f.fail = true;'); await page.getByRole('button', {name:'Más proyectos',exact:true}).click(); await ready(page);
         assert.match(await page.locator('.settings-permissions').innerText(), /No se pudieron cargar más proyectos/);
         for (const response of [
@@ -171,7 +171,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
           await act(page, `f.fail=false; f.projectPages={1:${response}};`);
           await page.getByRole('button', {name:'Más proyectos',exact:true}).click(); await ready(page);
           assert.equal(await page.getByLabel('Alcance del permiso').inputValue(), 'project1');
-          assert.equal(await page.getByRole('checkbox').isChecked(), true);
+          assert.equal(await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).isChecked(), true);
         }
         assert.equal(await page.getByLabel('Alcance del permiso').locator('option').count(), 4);
         assert.deepEqual(await act(page, 'return f.calls.filter(c=>c[0]==="projects").map(c=>c[1].cursor)'), [0,1,1,1,1]);
@@ -219,12 +219,12 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         assert.match(await rows.first().innerText(), /Puede crear proyectos propios/);
         assert.match(await rows.nth(1).innerText(), /No puede crear proyectos propios/);
         await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
-        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox').check();
+        await page.getByLabel('Alcance del permiso').selectOption('project1'); await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).check();
         await act(page, 'f.failPolicies=true;');
         await page.getByRole('button', {name:'Conceder acceso y ver comando'}).click(); await ready(page);
         assert.match(await page.locator('.settings-permissions [role="status"]').innerText(), /Acceso concedido.*No se pudo actualizar la lista/);
         assert.doesNotMatch(await page.locator('.settings-permissions [role="status"]').innerText(), /No se pudo confirmar/);
-        assert.equal(await page.getByRole('checkbox').isChecked(), false);
+        assert.equal(await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).isChecked(), false);
         assert.equal(await page.getByLabel('Comando local para el agente').inputValue(), "jauria-pulso --handle '/synthetic/safe-handle'");
         await act(page, 'f.failPolicies=false;');
         await page.getByRole('button', {name:'Actualizar permisos y proyectos'}).click(); await ready(page);
@@ -245,7 +245,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
       await t.test('write guards Escape, public and forced close; returns focus to underlying Pulso; remember resets', async () => {
         const page = await mounted(); await open(page); await page.getByLabel('Sesión que recibirá permiso').selectOption('s1');
         await page.getByLabel('Alcance del permiso').selectOption('__own_projects__');
-        await page.getByRole('checkbox').check(); await act(page, 'f.hold = "grant";');
+        await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).check(); await act(page, 'f.hold = "grant";');
         await page.getByRole('button', { name: 'Conceder acceso y ver comando' }).click();
         await page.keyboard.press('Escape'); await act(page, 'f.panel.close(); document.querySelector(".settings-dialog").close();');
         await page.waitForFunction(() => document.querySelector<HTMLDialogElement>('.settings-dialog')?.open);
@@ -253,7 +253,7 @@ if (process.env.SETTINGS_PANEL_BROWSER !== '1') {
         await page.getByRole('button', { name: /^Cerrar/ }).click();
         await page.waitForFunction(() => document.activeElement?.id === 'opener');
         assert.equal(await page.locator('#pulso[open]').count(), 1);
-        await open(page); assert.equal(await page.getByRole('checkbox').isChecked(), false);
+        await open(page); assert.equal(await page.getByRole('checkbox', { name: 'Recordar para futuras sesiones de esta herramienta en esta carpeta' }).isChecked(), false);
       });
       await t.test('close and profile disposal fence late reads and writes; unavailable makes no RPCs', async () => {
         for (const operation of ['policies', 'grant']) {

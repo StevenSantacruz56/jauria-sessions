@@ -11,6 +11,7 @@ mod git_worktree;
 mod pulso;
 mod pulso_client;
 mod pulso_mcp;
+mod pulso_mcp_config;
 mod native_sessions;
 
 fn main() {

@@ -234,7 +234,7 @@ impl Runner {
             pulso_streams.session(id).or_else(|| pulso_db.try_lock().ok().and_then(|db| db.session(id).ok().flatten()))
         });
         let pulso = match crate::pulso::Service::start(&data_dir, socket.parent().context("socket parent")?, lookup) {
-            Ok(service) => Some(service),
+            Ok(service) => { service.set_auto_enabled(settings.pulso_auto_access()); Some(service) },
             Err(_) => { eprintln!("Pulso no disponible; las terminales siguen operativas. Conserva sus datos y revisa el módulo."); None },
         };
         Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
@@ -360,7 +360,7 @@ impl Runner {
         let allowed: &[&str] = match op {
             "status" => &["workspaceAfter"],
             "get_settings" => &[],
-            "set_settings" => &["maxConcurrentSessions"],
+            "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
             "rename_session" => &["id","title"],
             "native_binding" => &["id"],
             "resume_native" => &["id","sourceId","rows","cols"],
@@ -397,11 +397,14 @@ impl Runner {
         let args = &request["args"];
         if op == "get_settings" { return Ok(self.settings.snapshot()); }
         if op == "set_settings" {
-            let limit=args["maxConcurrentSessions"].as_u64().filter(|n|(1..=8).contains(n))
-                .context("maxConcurrentSessions must be an integer from 1 to 8")?;
+            let limit=args.get("maxConcurrentSessions").map(|value|value.as_u64().filter(|n|(1..=8).contains(n))
+                .context("maxConcurrentSessions must be an integer from 1 to 8")).transpose()?;
+            let auto=args.get("pulsoAutoAccess").map(|value|value.as_bool().context("pulsoAutoAccess must be a boolean")).transpose()?;
             let _guard=self.mutations.lock().unwrap();
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-            return self.settings.set_limit(limit as usize);
+            let result=self.settings.update(limit.map(|n|n as usize),auto)?;
+            if let (Some(pulso),Some(enabled))=(&self.pulso,auto) {pulso.set_auto_enabled(enabled);}
+            return Ok(result);
         }
         if op == "native_binding" {
             let id=args["id"].as_str().context("Falta sesión")?; validate_id(id)?;
@@ -504,7 +507,7 @@ impl Runner {
             // Settings remain current even when SQLite uses the cached fallback.
             result["pulsoAvailable"]=json!(self.pulso.as_ref().is_some_and(|p|p.available()));
             result["settings"]=self.settings.snapshot();
-            result["settingsVersion"]=json!(1);
+            result["settingsVersion"]=json!(2);
             result["sessionRenameVersion"]=json!(1);
             let sessions=result["sessions"].as_array_mut().context("Invalid session cache")?;
             for live in self.terminal_streams.sessions() {
@@ -901,8 +904,15 @@ impl Runner {
             cmd.arg(&binding.conversation_id);
         }
         if matches!(kind,"claude"|"codex") {
-            cmd.env("JAURIA_PULSO_HANDLE", self.data_dir.join("pulso-grants").join(format!("{id}.json")));
-            cmd.env("JAURIA_PULSO_CLIENT", std::env::current_exe()?);
+            let runner=std::env::current_exe()?;
+            let handle=self.data_dir.join("pulso-grants").join(format!("{id}.json"));
+            cmd.env("JAURIA_PULSO_HANDLE", &handle);
+            cmd.env("JAURIA_PULSO_CLIENT", &runner);
+            if self.settings.pulso_auto_access() && self.pulso.as_ref().is_some_and(|service|service.available()) {
+                let mcp=crate::pulso_mcp_config::PulsoMcp::new(runner,handle)?;
+                if kind=="claude" {cmd.arg("--mcp-config");cmd.arg(mcp.claude_config());}
+                else {for override_value in mcp.codex_overrides()? {cmd.arg("-c");cmd.arg(override_value);}}
+            }
         }
         if kind=="claude" {
             cmd.arg("--settings");cmd.arg(crate::claude_quota::settings(&std::env::current_exe()?,&self.data_dir)?);
@@ -1550,7 +1560,7 @@ mod session_preferences_tests {
         let _busy=runner.db.lock().unwrap();
         let cached=request("status",json!({}))?;
         assert_eq!(cached["settings"]["maxConcurrentSessions"],4);
-        assert_eq!(cached["settingsVersion"],1);assert_eq!(cached["sessionRenameVersion"],1);
+        assert_eq!(cached["settingsVersion"],2);assert_eq!(cached["sessionRenameVersion"],1);
         for row in cached["sessions"].as_array().unwrap() {assert_eq!(row["title"],"renamed");}
         Ok(())
     }

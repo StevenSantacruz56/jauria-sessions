@@ -6,6 +6,16 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 Sin cambios pendientes registrados.
 
+## [1.3.3] - 2026-11-18
+
+### Pulso para agentes
+
+- Claude Code y Codex iniciados desde Jauría reciben el servidor MCP local `jauria-pulso` y acceso predeterminado a los proyectos de Pulso. Cada sesión usa una credencial privada y revocable; las sesiones iniciadas fuera de Jauría no reciben acceso.
+- Configuración muestra un interruptor principal para el acceso automático. Los permisos manuales de sesiones anteriores quedan en una sección desplegable; las políticas recordadas más estrechas conservan su alcance.
+- El ajuste persiste en el perfil con migración del esquema anterior. Desactivarlo corta las concesiones automáticas, sin modificar los permisos manuales ni las aprobaciones nativas de cada proveedor.
+- La conexión estructurada de Codex permite exclusivamente el MCP local de Jauría; el resto de servidores continúa deshabilitado en ese modo.
+- Se actualizan la guía, las capturas de Configuración y las pruebas de persistencia, autorización, MCP y accesibilidad del diálogo.
+
 ## [1.3.2] - 2026-11-18
 
 ### Documentación y distribución
@@ -174,7 +184,8 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3
 [1.3.2]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2
 [1.3.1]: https://github.com/StevenSantacruz56/jauria-sessions/tree/v1.3.1
 [1.3.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/861bd59

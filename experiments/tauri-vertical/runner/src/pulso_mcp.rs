@@ -2,7 +2,7 @@
 //! discovery never grants access and this process never reads the UI token.
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
-use std::{env, io::{self, BufRead, BufReader, Read, Write}, path::PathBuf};
+use std::{env, fs, io::{self, BufRead, BufReader, Read, Write}, path::PathBuf, thread, time::{Duration, Instant}};
 
 const MAX_LINE: u64 = 128 * 1024;
 const VERSION: &str = "2025-11-25";
@@ -69,6 +69,12 @@ fn tool_call(params: &Value) -> Value {
         let args=params.get("arguments").cloned().unwrap_or_else(||json!({}));
         let (op,request_args)=operation(name,&args)?;
         let path=PathBuf::from(env::var_os("JAURIA_PULSO_HANDLE").context("Esta sesión no tiene acceso a Pulso")?);
+        // PTY admission publishes the private grant just after the native child
+        // starts. Wait only while the handle is absent; never retry a tool write.
+        let until=Instant::now()+Duration::from_secs(2);
+        while fs::symlink_metadata(&path).is_err() && Instant::now()<until {
+            thread::sleep(Duration::from_millis(20));
+        }
         crate::pulso_client::request(&path,op,request_args)
     })();
     match result {

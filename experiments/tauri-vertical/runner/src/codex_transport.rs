@@ -31,6 +31,9 @@ impl Process {
     /// remains available to the provider's own login implementation.
     pub fn codex(cwd:&Path)->Result<Self>{Self::codex_with_disabled_mcp(cwd,&[])}
     pub fn codex_with_disabled_mcp(cwd:&Path,servers:&[String])->Result<Self>{
+        Self::codex_with_pulso(cwd,servers,None)
+    }
+    pub fn codex_with_pulso(cwd:&Path,servers:&[String],pulso:Option<&crate::pulso_mcp_config::PulsoMcp>)->Result<Self>{
         ensure!(servers.len()<=64,"Too many configured MCP servers for this adapter");
         let (home,user)=identity()?;
         let mut command=Command::new("/opt/homebrew/bin/codex");
@@ -41,8 +44,11 @@ impl Process {
             // This CLI's dotted override parser rejects quoted TOML key segments.
             // Never silently leave an inherited server enabled for odd names.
             ensure!(!name.is_empty() && name.len()<=256 && name.bytes().all(|b|b.is_ascii_alphanumeric() || b"_-".contains(&b)),"Unsupported MCP name for CLI override syntax");
-            command.arg("-c").arg(format!("mcp_servers.{name}.enabled=false"));
+            if name!="jauria-pulso" || pulso.is_none() {
+                command.arg("-c").arg(format!("mcp_servers.{name}.enabled=false"));
+            }
         }
+        if let Some(pulso)=pulso {for override_value in pulso.codex_overrides()? {command.arg("-c").arg(override_value);}}
         Self::spawn(command,cwd)
     }
     fn spawn(mut command:Command,cwd:&Path)->Result<Self>{

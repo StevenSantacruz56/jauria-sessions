@@ -71,6 +71,24 @@
 .settings-permissions-result label { display: block; margin-top: 12px; font-size: 12px; }
 .settings-permissions-result textarea { width: 100%; min-height: 80px; margin: 8px 0; resize: vertical; overflow-wrap: anywhere; }
 .settings-dialog .settings-section { margin: 0 0 12px; }
+.settings-pulso {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface, var(--panel));
+}
+.settings-pulso.settings-dialog-section { margin-top: 20px; }
+.settings-pulso-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; font-weight: 600; }
+.settings-pulso-switch input { appearance: none; position: relative; width: 42px; height: 24px; margin: 0; flex: 0 0 auto; border: 1px solid var(--control-border); border-radius: 999px; background: var(--hover); cursor: pointer; }
+.settings-pulso-switch input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 25%); transition: transform .15s ease; }
+.settings-pulso-switch input:checked { border-color: var(--accent); background: var(--accent); }
+.settings-pulso-switch input:checked::before { transform: translateX(18px); }
+.settings-pulso-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-pulso-switch input:disabled { cursor: default; opacity: .6; }
+@media (prefers-reduced-motion: reduce) { .settings-pulso-switch input::before { transition: none; } }
+.settings-pulso .settings-dialog-help { margin-bottom: 0; }
+.settings-permissions-details > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.settings-permissions-details > .settings-permissions { margin-top: 16px; }
 @media (max-width: 480px) {
   .settings-permissions .settings-dialog-row select { width: 100%; }
 }

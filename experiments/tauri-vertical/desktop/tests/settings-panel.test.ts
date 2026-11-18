@@ -35,9 +35,9 @@ async function fixture(browser: Browser, config = '') {
   await page.evaluate(config => {
     const w = window as any;
     const f = w.fixture = {
-      reads: 0, saves: [] as number[], themes: [] as string[], saved: [] as any[],
+      reads: 0, saves: [] as number[], autoSaves: [] as boolean[], themes: [] as string[], saved: [] as any[],
       editable: true, readError: false, saveError: false, holdRead: false, holdSave: false,
-      settings: { schemaVersion: 1, maxConcurrentSessions: 2, maxSupportedSessions: 8, warning: null },
+      settings: { schemaVersion: 2, maxConcurrentSessions: 2, maxSupportedSessions: 8, pulsoAutoAccess: true, warning: null },
       resolveRead: null as any, resolveSave: null as any,
     };
     Function('f', config)(f);
@@ -48,11 +48,12 @@ async function fixture(browser: Browser, config = '') {
         if (f.readError) throw Error('Synthetic read error');
         return structuredClone(f.settings);
       },
-      save: async (value: number) => {
+      save: async (value: number, pulsoAutoAccess?: boolean) => {
         f.saves.push(value);
+        if (pulsoAutoAccess !== undefined) f.autoSaves.push(pulsoAutoAccess);
         if (f.holdSave) return new Promise(resolve => { f.resolveSave = resolve; });
         if (f.saveError) throw Error('Synthetic save error');
-        return { ...structuredClone(f.settings), maxConcurrentSessions: value };
+        return { ...structuredClone(f.settings), maxConcurrentSessions: value, pulsoAutoAccess };
       },
       getTheme: () => 'system', setTheme: (value: string) => f.themes.push(value),
       version: '1.0.0', canEdit: () => f.editable,
@@ -117,6 +118,17 @@ for (const engine of [chromium, webkit]) {
       assert.deepEqual(await action(page, 'return f.saves'), [3]);
     });
 
+    await t.test('Pulso access starts enabled and saves a clear opt out', async () => {
+      const page = await mounted();
+      await page.locator('#opener').click(); await ready(page);
+      const toggle = page.getByRole('checkbox', { name: 'Acceso automático a Pulso' });
+      assert.equal(await toggle.isChecked(), true);
+      assert.match(await page.locator('.settings-pulso').innerText(), /Claude Code y Codex iniciados desde Jauría/);
+      await toggle.uncheck();
+      await page.getByRole('button', { name: 'Guardar', exact: true }).click(); await ready(page);
+      assert.deepEqual(await action(page, 'return [f.autoSaves, f.saved[0].pulsoAutoAccess]'), [[false], false]);
+    });
+
     await t.test('read failure stays open, retries and preserves drafts when server bounds change', async () => {
       const page = await mounted('f.readError = true;');
       await page.locator('#opener').click(); await ready(page);
@@ -162,7 +174,7 @@ for (const engine of [chromium, webkit]) {
       await page.keyboard.press('Escape'); await action(page, 'f.panel.close();');
       assert.equal(await page.locator('dialog[open]').count(), 1);
       for (const control of ['input', 'select', 'button[type=submit]', 'button.quiet']) {
-        assert.equal(await page.locator(`dialog ${control}`).isDisabled(), true);
+        for (const element of await page.locator(`dialog ${control}`).all()) assert.equal(await element.isDisabled(), true);
       }
       assert.deepEqual(await action(page, 'return f.themes'), []);
       await action(page, 'f.resolveSave({...f.settings, maxSupportedSessions: 4, maxConcurrentSessions: 4});'); await ready(page);

@@ -9,7 +9,7 @@ Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto repr
 3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
 4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o cambia el selector **Mover** con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
 5. Pulsa el título de una tarjeta para ver el detalle derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
-6. Abre **Plan y sesiones** en la barra del proyecto para editar el plan opcional, cambiar la sesión principal y vincular sesiones. **Configurar permisos…** lleva a Configuración con el proyecto elegido; allí debes seleccionar expresamente la sesión que recibirá acceso. La principal no cambia automáticamente cuando termina.
+6. Abre **Plan y sesiones** en la barra del proyecto para editar el plan opcional, cambiar la sesión principal y vincular sesiones. **Configurar permisos…** abre el acceso manual de una sesión existente. La principal no cambia automáticamente cuando termina.
 
 La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
 
@@ -53,42 +53,21 @@ En el drawer de la tarjeta despliega **Guardar avance** y registra qué quedó l
 
 Cambiar una fase a **Hecho** registra avance de agenda. No implica pruebas aprobadas, aceptación de código, merge ni modificación de Jira. Terminar una sesión o un turno tampoco completa una fase automáticamente.
 
-## Permitir que los agentes registren planes
+## Acceso de Claude Code y Codex a Pulso
 
-El acceso empieza desactivado. Desde **Configuración → Permisos de agentes**, selecciona una sesión viva y elige explícitamente un proyecto **o** la opción **Crear proyectos propios**. Pulsa **Conceder acceso y ver comando**. El permiso queda limitado al alcance elegido: permite actualizar sus fases y marcarlas Hecho, sin compartir toda tu agenda ni los pendientes independientes.
+En Jauría 1.3.3, **Configuración → Pulso para agentes → Acceso automático a Pulso** está activado de forma predeterminada. Cada sesión nueva de Claude Code o Codex iniciada desde Jauría recibe su propio servidor MCP local y un permiso privado para leer y editar todos los proyectos de Pulso y crear proyectos. No cambia los permisos nativos para archivos, comandos o red de cada proveedor. Los agentes iniciados fuera de Jauría no reciben la credencial. El permiso se revoca al terminar la sesión y el interruptor puede apagar el acceso automático en cualquier momento.
 
-La casilla **Recordar para futuras sesiones de esta herramienta en esta carpeta** empieza desmarcada. Puedes marcarla para guardar una política. Esa política solo se aplica al proveedor y a la ruta canónica elegidos. Cada sesión futura recibe una credencial nueva; detener una sesión invalida su acceso. Puedes gestionar y revocar los permisos recordados desde el mismo bloque de acceso.
+El servidor se inyecta solo en el proceso de esa sesión. Jauría no modifica `~/.claude` ni `~/.codex/config.toml`, y no coloca el token en argumentos, variables de entorno ni mensajes. La configuración de inicio incluye la ruta del archivo privado del permiso; el servidor vuelve a validarlo en cada operación. Claude Code conserva sus otros servidores MCP. La conexión estructurada de Codex mantiene deshabilitados los servidores ajenos a Jauría en ese modo.
 
-Pulso muestra el comando local y un botón **Copiar instrucciones para el agente**. Pega el texto copiado en la misma conversación y describe el plan. El texto ya indica si puede crear un proyecto o si debe trabajar en uno existente; no necesitas preparar JSON. Por ejemplo, después de pegarlo puedes pedir:
+Una sesión que ya estaba abierta al actualizar la app no descubre el MCP nuevo. En **Configuración → Acceso manual para sesiones existentes**, selecciona la sesión y elige un proyecto o **Crear proyectos propios**. Pulsa **Conceder acceso y ver comando** y usa **Copiar instrucciones para el agente**. El permiso manual conserva el alcance elegido; una política recordada para proveedor y carpeta sigue siendo más estrecha que el acceso predeterminado. Para evitar el comando manual, abre una sesión nueva después de instalar la actualización.
+
+Por ejemplo, puedes pedir al agente:
 
 > Registra este plan como proyecto de Jauria. Crea sus fases en el orden acordado. Antes de cambiar de fase, guarda qué quedó listo y el siguiente paso. Consulta la revisión vigente antes de actualizar y no sobrescribas un conflicto.
 
-El comando usa una ruta a un permiso privado, nunca el token de administración del runner. La CLI local funciona también en las sesiones actuales con un runner compatible. No hace falta cambiar la configuración MCP para usarla.
+Si Claude pregunta qué es Pulso, indícale: «Pulso es el tablero local de proyectos, fases y avances de Jauría. Consulta las herramientas `jauria_*` y espera a que te indique el plan». No pegues tokens ni el contenido del archivo de permiso en el chat.
 
-### MCP local opcional para nuevas sesiones
-
-El runner 1.3.0 incluye un servidor MCP por `stdio` que ofrece herramientas para listar y crear proyectos y fases, leer revisiones, actualizar fases y registrar checkpoints. Reutiliza exactamente el permiso de Pulso de la sesión; configurar el servidor **no concede acceso**. Para que Claude Code lo descubra en futuras sesiones iniciadas desde Jauria, configura una vez el servidor desde una terminal del sistema:
-
-```sh
-claude mcp add-json jauria-pulso '{"type":"stdio","command":"${JAURIA_PULSO_CLIENT}","args":["--pulso-mcp"],"env":{"JAURIA_PULSO_HANDLE":"${JAURIA_PULSO_HANDLE}"}}' --scope user
-```
-
-Esa entrada guarda nombres de variables, no un token ni una ruta privada. Fuera de Jauria, `claude mcp get jauria-pulso` puede indicar `Failed to connect` porque faltan esas variables: no equivale a un fallo del runner. En una sesión **nueva** abierta por Jauria, el runner proporciona ambas variables; comprueba el servidor con `/mcp` dentro de Claude Code. Una sesión ya iniciada no incorpora de forma retroactiva la configuración MCP. El servidor permite descubrir herramientas aun sin permiso, pero las llamadas a datos responden sin acceso hasta que concedas el alcance en **Configuración → Permisos de agentes**. Este registro de Claude Code no configura Claude Desktop.
-
-Si Claude pregunta qué es Pulso, indícale: «Pulso es el tablero local de proyectos, fases y avances de Jauria. Consulta sus herramientas `jauria_*` y espera a que te indique el plan y el proyecto autorizado». No pegues tokens ni el contenido del archivo de permiso en el chat.
-
-Para Codex, añade esta entrada a `~/.codex/config.toml` si quieres que reciba las dos variables de la sesión local:
-
-```toml
-[mcp_servers.jauria-pulso]
-command = "/bin/zsh"
-args = ["-c", "exec \"$JAURIA_PULSO_CLIENT\" --pulso-mcp"]
-env_vars = ["JAURIA_PULSO_CLIENT", "JAURIA_PULSO_HANDLE"]
-```
-
-Jauria no modifica esos archivos por sí sola. La configuración no contiene credenciales: la app pasa la ruta del permiso a cada proceso y cada llamada vuelve a validarlo. Si no has concedido acceso en **Configuración**, las herramientas responden sin consultar datos. La revocación corta el acceso. Claude Code y Codex deben cargar la nueva configuración al iniciar una sesión. Si la interfaz está conectada a un runner anterior a 1.3.0, usa la CLI copiada y actualiza el runner solo después de terminar el trabajo activo; el MCP necesita el runner 1.3.0. [Claude Code](https://code.claude.com/docs/en/mcp) y [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) documentan estos servidores locales.
-
-Para sesiones ya iniciadas, utiliza el comando que muestra Pulso. Las nuevas también reciben `JAURIA_PULSO_CLIENT` y `JAURIA_PULSO_HANDLE` en su entorno, sin conceder acceso por el mero hecho de tener esas variables.
+El MCP local ofrece herramientas para listar y crear proyectos y fases, leer revisiones, actualizar fases y registrar checkpoints. Comprueba la conexión con `/mcp` en Claude Code o la lista MCP de Codex. [Claude Code](https://code.claude.com/docs/en/mcp) y [Codex](https://developers.openai.com/codex/mcp/) documentan sus clientes MCP.
 
 ### Ejemplo técnico sintético
 
@@ -108,10 +87,10 @@ Si hay timeout, conserva el mismo `requestId`, ID y contenido al consultar/reint
 ## Privacidad, permisos y límites
 
 - Los datos se guardan en `pulso.sqlite` dentro del perfil local, separados del scrollback y sin depender del Site de Pulso. La aplicación web anterior permanece independiente; no se importan ni sincronizan automáticamente sus datos.
-- El endpoint de planificación tiene credencial, socket y límite de conexiones propios. La CLI del agente utiliza un permiso acotado y no lee el token de administración del runner.
+- El endpoint de planificación tiene credencial, socket y límite de conexiones propios. La CLI del agente usa el permiso de su sesión y no lee el token de administración del runner. Los permisos manuales pueden acotarse por proyecto; el acceso automático predeterminado abarca todos los proyectos de Pulso.
 - Un permiso de Pulso no reemplaza los permisos de archivos, comandos, sandbox o MCP nativos de Claude/Codex. Tampoco aísla procesos del mismo usuario de macOS.
 - El texto de **Copiar instrucciones para el agente** incluye una ruta absoluta al archivo de permiso, pero no el token guardado dentro. Al pegarlo en una conversación, el proveedor recibe esa ruta. Úsalo solo en la sesión elegida; el MCP de sesiones nuevas evita incluirla en el prompt. No publiques el archivo de permiso, el perfil, su base SQLite ni el historial.
-- Lo que una sesión lee puede llegar al proveedor de ese agente. Concede solo el contexto que quieras compartir.
+- Lo que una sesión lee puede llegar al proveedor de ese agente. Si un proyecto contiene información que no quieres ofrecer a Claude Code o Codex, apaga el acceso automático antes de iniciar la sesión y usa el permiso manual de un solo proyecto.
 - Título: hasta 240 caracteres; nota: 1.000; plan: 32.000; resumen de continuidad: 4.000; siguiente acción: 1.000. Proyectos y fases se consultan con páginas acotadas en SQL; el plan completo se solicita solo al abrir el proyecto.
 - Pulso admite hasta **64 MiB lógicos o 100.000 filas**, contando registros, actividad y recibos, no solo tareas. Hay **1 MiB y 2.000 filas adicionales de margen para identidades de permisos y políticas**; no amplían la capacidad para planes. La base `pulso.sqlite` tiene además un límite físico de **128 MiB**, independiente del historial de terminal y del resto del perfil.
 - Al alcanzar el presupuesto, las lecturas continúan y se rechazan nuevos cambios que lo excedan. El margen de permisos no elimina el límite físico. No hay borrado automático ni interfaz de exportación para liberar espacio. Si el módulo no puede abrirse, las terminales siguen disponibles y los datos se conservan para revisión.

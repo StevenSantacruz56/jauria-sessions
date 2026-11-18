@@ -4,7 +4,7 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-**Stable version: 1.3.2.** The [GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2) includes source and a verified Apple Silicon DMG. The app is unsigned for Developer ID distribution and is not notarized; read the [installation limits](docs/INSTALLATION.md) before downloading. Original code is licensed under [GPL-3.0-only](LICENSE). The app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Stable version: 1.3.3.** The [GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) includes source and a verified Apple Silicon DMG. The app is unsigned for Developer ID distribution and is not notarized; read the [installation limits](docs/INSTALLATION.md) before downloading. Original code is licensed under [GPL-3.0-only](LICENSE). The app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -24,21 +24,21 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 
 Permissions, saved policies, revocation and macOS notices live in **Configuración**. Pulso remembers the last board per profile and offers a direct action to continue the project or focus its existing Claude continuation.
 
-Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped grants and revocable policies. The runner includes an optional local MCP server; website import and cloud sync remain deferred.
+Return directly to a live session, inspect local history, or edit and copy phase context before opening a new blank session. Context is never sent automatically to the PTY. Exact-ID Claude resume remains an attempt for identities reserved by Jauria, subject to provider history and existing locks. Codex keeps its terminal, history and copied context; native Codex resume is unavailable. The local CLI retains explicit project-scoped manual grants and revocable policies; website import and cloud sync remain deferred.
 
-### Pulso and Claude Code
+### Pulso, Claude Code, and Codex
 
-Pulso is Jauria's local board for projects, phases, and progress checkpoints. Its optional `jauria-pulso` MCP server exposes eight tools, but Jauria does not automatically add the server to Claude Code or grant it access. Follow the [Claude Code setup](docs/PULSO.md#mcp-local-opcional-para-nuevas-sesiones), then start a new Claude Code session from Jauria and check `/mcp`. In **Configuración → Permisos de agentes**, select that session and either one project or the explicit **Crear proyectos propios** scope. Remembering access is off by default.
+Pulso is Jauria's local board for projects, phases, and progress checkpoints. In 1.3.3, new Claude Code and Codex sessions started from Jauria automatically receive the `jauria-pulso` MCP server and access to all local Pulso projects, including project creation. **Configuración → Pulso para agentes → Acceso automático a Pulso** starts enabled and can be turned off. Each session has a private, revocable credential. Native file, command, and network permissions remain with each provider.
 
-An already running Claude conversation will not load a newly registered MCP server. For that conversation, grant access and use **Copiar instrucciones para el agente** instead. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. This Claude Code server is separate from Claude Desktop connectors. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
+An already running conversation will not load a newly registered MCP server. For that conversation, open **Configuración → Acceso manual para sesiones existentes** and use **Copiar instrucciones para el agente**. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. Remembered manual policies can narrow access by project, provider, and directory. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
 
 Explicit **OSC 7501** reports appear in the live view and **Actividad**. They never update phases or prove that work was validated. Jauria installs no hooks and changes no agent configuration. A running session with no report is labeled as progress not reported. Replay creates no status or alerts; reconnecting resets this ephemeral state.
 
 **Actividad** groups sessions by action needed, notices, finished turns, working and idle. It shows how long an agent has reported working. A finished turn stays pending through a later `idle` report until you open the session; `blocked` stays visible while reported. The header alert opens the relevant session, while marking an alert seen never approves a permission or resolves an error. Optional macOS notices use generic wording without session names or paths. See the [status rules and limits](docs/SESSION_ALERTS.md#actividad-y-avisos-desde-131) (Spanish).
 
-The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), [1.3.1 activity implementation](docs/RELEASE_1.3.1.md), and [1.3.2 release notes](docs/RELEASE_1.3.2.md) (Spanish).
+The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), [1.3.1 activity implementation](docs/RELEASE_1.3.1.md), and [1.3.3 release notes](docs/RELEASE_1.3.3.md) (Spanish).
 
-The **1.3.2** DMG is verified and published with a SHA-256 checksum and JSON receipt. See [this version's validation and limits](docs/RELEASE_1.3.2.md), [the activity implementation](docs/RELEASE_1.3.1.md), and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md). Screenshots use a separate synthetic profile.
+The **1.3.3** DMG is verified and published with a SHA-256 checksum and JSON receipt. See [this version's validation and limits](docs/RELEASE_1.3.3.md), [the activity implementation](docs/RELEASE_1.3.1.md), and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md). Screenshots use a separate synthetic profile.
 
 See the [screenshots and full usage guide](README.md#capturas). The current board is shown below.
 
@@ -55,9 +55,13 @@ Example board in Jauria 1.3.2. Synthetic screenshot: no real session or task dat
 
 These activity screenshots use synthetic sessions and terminal output.
 
+![Jauria 1.3.3 settings with automatic Pulso access enabled](docs/screenshots/configuracion-1.3.3.png)
+
+The settings screenshot uses synthetic data and shows the new default access control.
+
 ## Install and start
 
-The [v1.3.2 GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2) includes source, `Jauria_1.3.2_aarch64_unsigned.dmg`, `SHA256SUMS`, and a JSON receipt. Verify the checksum before use. The app lacks a Developer ID signature and notarization, so macOS may block it. Do not disable Gatekeeper or remove quarantine; if blocked, wait for a signed and notarized build. See the [installation and update guide](docs/INSTALLATION.md).
+The [v1.3.3 GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) includes source, `Jauria_1.3.3_aarch64_unsigned.dmg`, `SHA256SUMS`, and a JSON receipt. Verify the checksum before use. The app lacks a Developer ID signature and notarization, so macOS may block it. Do not disable Gatekeeper or remove quarantine; if blocked, wait for a signed and notarized build. See the [installation and update guide](docs/INSTALLATION.md).
 
 Jauria itself does not require Rust or Node to run from an app bundle. Provider CLIs must be installed and authenticated separately. This release expects Codex at `/opt/homebrew/bin/codex` and Claude Code at `~/.local/bin/claude`; Terminal uses `/bin/zsh -il`.
 
@@ -94,4 +98,4 @@ The default desktop build is optimized release mode and unsigned. Use `--debug` 
 
 ## Project status and security
 
-Read the [changelog](CHANGELOG.md), [1.3.2 notes](docs/RELEASE_1.3.2.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).
+Read the [changelog](CHANGELOG.md), [1.3.3 notes](docs/RELEASE_1.3.3.md), [security policy](SECURITY.md), and [publication readiness review](docs/PUBLICATION_READINESS.md). Local tests and a scoped exposure review do not certify that the software is free of vulnerabilities. Discovery and citations in search-assisted tools are not guaranteed; see [DISCOVERABILITY.md](docs/DISCOVERABILITY.md).

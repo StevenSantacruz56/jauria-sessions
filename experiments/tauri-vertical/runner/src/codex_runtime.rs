@@ -48,21 +48,32 @@ fn uuid() -> Result<String> {
 }
 // Raw config/account responses live only on the stack. Missing configuration is
 // unsafe: an explicit effective MCP table is required even when empty.
-fn servers(v: &Value, disabled: bool) -> Result<Vec<String>> {
+fn servers(v: &Value, disabled: bool, pulso: Option<&crate::pulso_mcp_config::PulsoMcp>) -> Result<Vec<String>> {
     let table = v.pointer("/config/mcp_servers").and_then(Value::as_object)
         .context("Effective MCP table unavailable")?;
     ensure!(table.len() <= 64, "MCP server quota");
     for (name, entry) in table {
         ensure!(!name.is_empty() && name.len() <= 256 && !name.contains('\0'), "Invalid MCP name");
-        if disabled { ensure!(entry["enabled"] == false, "MCP server not explicitly disabled"); }
+        if disabled {
+            if name=="jauria-pulso" && pulso.is_some() {
+                let pulso=pulso.unwrap();
+                ensure!(entry["enabled"]==true
+                    && entry["command"].as_str()==pulso.runner.to_str()
+                    && entry["args"]==json!(["--pulso-mcp"])
+                    && entry["env"].as_object().is_some_and(|env|env.len()==1)
+                    && entry["env"]["JAURIA_PULSO_HANDLE"].as_str()==pulso.handle.to_str(),
+                    "Jauria Pulso MCP configuration differs from the owned session");
+            } else { ensure!(entry["enabled"] == false, "MCP server not explicitly disabled"); }
+        }
     }
+    if disabled && pulso.is_some() {ensure!(table.contains_key("jauria-pulso"),"Jauria Pulso MCP unavailable");}
     Ok(table.keys().cloned().collect())
 }
 fn spawn(admission: &Mutex<()>, control: &Control, cwd: &std::path::Path,
-    names: Option<&[String]>) -> Result<Process> {
+    names: Option<&[String]>, pulso: Option<&crate::pulso_mcp_config::PulsoMcp>) -> Result<Process> {
     let _guard = lock(admission)?;
     ensure!(!control.stop.load(Ordering::Acquire), "Actor stopped before fork");
-    match names { Some(names) => Process::codex_with_disabled_mcp(cwd, names), None => Process::codex(cwd) }
+    match names { Some(names) => Process::codex_with_pulso(cwd, names, pulso), None => Process::codex(cwd) }
 }
 fn boot_rpc(p: &mut Process, c: &Control, end: Instant, id: u64, method: &str, params: Value) -> Result<Value> {
     ensure!(Instant::now() < end && !c.stop.load(Ordering::Acquire), "Boot stopped or expired");
@@ -354,7 +365,7 @@ impl Actor<'_> {
 }
 
 pub fn run(db: Arc<Mutex<Store>>, admission: Arc<Mutex<()>>, control: Control,
-    rx: Receiver<Intent>, session_id: String, cwd: PathBuf) -> Result<()> {
+    rx: Receiver<Intent>, session_id: String, cwd: PathBuf, pulso: Option<crate::pulso_mcp_config::PulsoMcp>) -> Result<()> {
     let deadline = Instant::now()+Duration::from_secs(20);
     let mut process: Option<Process> = None;
     let mut wait_confirmed = true;
@@ -368,21 +379,21 @@ pub fn run(db: Arc<Mutex<Store>>, admission: Arc<Mutex<()>>, control: Control,
             Err(error) => { wait_confirmed = false; return Err(error); }
         };
         ensure!(version == codec::PROTOCOL_VERSION, "Codex version must be 0.167.1");
-        process = Some(spawn(&admission,&control,&cwd,None)?);
+        process = Some(spawn(&admission,&control,&cwd,None,None)?);
         let p = process.as_mut().unwrap();
         initialize(p,&control,deadline)?;
         let config_params = json!({"cwd":cwd.to_str().context("Non UTF-8 cwd")?,"includeLayers":false});
-        let names = servers(&boot_rpc(p,&control,deadline,2,"config/read",config_params.clone())?,false)?;
+        let names = servers(&boot_rpc(p,&control,deadline,2,"config/read",config_params.clone())?,false,None)?;
         let closed = p.close(); wait_confirmed = closed["waitConfirmed"] == true;
         ensure!(wait_confirmed, "Bootstrap cleanup uncertain");
         process = None;
         ensure!(Instant::now() < deadline, "Boot deadline expired");
-        process = Some(spawn(&admission,&control,&cwd,Some(&names))?);
+        process = Some(spawn(&admission,&control,&cwd,Some(&names),pulso.as_ref())?);
         let p = process.as_mut().unwrap(); initialize(p,&control,deadline)?;
         let account = boot_rpc(p,&control,deadline,2,"account/read",json!({}))?;
         ensure!(account.pointer("/account/type").and_then(Value::as_str) == Some("chatgpt"), "Native ChatGPT authentication required");
         drop(account);
-        servers(&boot_rpc(p,&control,deadline,3,"config/read",config_params)?,true)?;
+        servers(&boot_rpc(p,&control,deadline,3,"config/read",config_params)?,true,pulso.as_ref())?;
         let session = ledger::get_session(&lock(&db)?.0,&session_id)?;
         ensure!(session["generation"] == control.generation, "Stale connection generation");
         let mut params = json!({"cwd":cwd.to_str().context("Non UTF-8 cwd")?,"approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":"workspace-write"});
@@ -469,10 +480,29 @@ mod tests {
         assert_eq!(lock(&db).unwrap().0.query_row("SELECT count(*) FROM provider_requests",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
     #[test] fn effective_mcp_must_be_explicitly_disabled() {
-        assert!(servers(&json!({}),true).is_err());
-        assert!(servers(&json!({"config":{"mcp_servers":{"a":{}}}}),true).is_err());
-        assert!(servers(&json!({"config":{"mcp_servers":{"a":{"enabled":true}}}}),true).is_err());
-        assert_eq!(servers(&json!({"config":{"mcp_servers":{"a":{"enabled":false}}}}),true).unwrap(),vec!["a"]);
+        assert!(servers(&json!({}),true,None).is_err());
+        assert!(servers(&json!({"config":{"mcp_servers":{"a":{}}}}),true,None).is_err());
+        assert!(servers(&json!({"config":{"mcp_servers":{"a":{"enabled":true}}}}),true,None).is_err());
+        assert_eq!(servers(&json!({"config":{"mcp_servers":{"a":{"enabled":false}}}}),true,None).unwrap(),vec!["a"]);
+    }
+    #[test] fn effective_mcp_allows_only_the_owned_pulso_server() {
+        let own=crate::pulso_mcp_config::PulsoMcp::new(PathBuf::from("/app/aw-runner"),PathBuf::from("/private/grant.json")).unwrap();
+        let mut config=json!({"config":{"mcp_servers":{
+            "other":{"enabled":false},
+            "jauria-pulso":{"enabled":true,"command":"/app/aw-runner","args":["--pulso-mcp"],"env":{"JAURIA_PULSO_HANDLE":"/private/grant.json"}}
+        }}});
+        assert_eq!(servers(&config,true,Some(&own)).unwrap().len(),2);
+        config["config"]["mcp_servers"]["other"]["enabled"]=json!(true);
+        assert!(servers(&config,true,Some(&own)).is_err());
+        config["config"]["mcp_servers"]["other"]["enabled"]=json!(false);
+        config["config"]["mcp_servers"]["jauria-pulso"]["command"]=json!("/bin/sh");
+        assert!(servers(&config,true,Some(&own)).is_err());
+        config["config"]["mcp_servers"]["jauria-pulso"]["command"]=json!("/app/aw-runner");
+        config["config"]["mcp_servers"]["jauria-pulso"]["env"]["JAURIA_PULSO_HANDLE"]=json!("/private/other.json");
+        assert!(servers(&config,true,Some(&own)).is_err());
+        config["config"]["mcp_servers"]["jauria-pulso"]["env"]["JAURIA_PULSO_HANDLE"]=json!("/private/grant.json");
+        config["config"]["mcp_servers"]["jauria-pulso"]["env"]["EXTRA"]=json!("unexpected");
+        assert!(servers(&config,true,Some(&own)).is_err());
     }
     #[test] fn claim_projection_and_typed_ids() {
         let v=json!({"sessionId":"s","turnId":"t","attemptId":"a","generation":2});
@@ -542,7 +572,7 @@ mod tests {
         assert_eq!(ledger::get_turn(&lock(&db).unwrap().0,"t").unwrap()["status"],"cancel_requested");
         assert!(a.turn.as_ref().unwrap().cancelled && !a.turn.as_ref().unwrap().interrupt_sent);
         c.stop.store(true,Ordering::Release);
-        assert!(spawn(&Mutex::new(()),&c,std::path::Path::new("/"),None).is_err());
+        assert!(spawn(&Mutex::new(()),&c,std::path::Path::new("/"),None,None).is_err());
     }
     #[test] fn native_failed_is_failed_and_system_error_is_never_green() {
         let (db,c,id)=fixture(); let mut a=actor(&db,&c,id);
