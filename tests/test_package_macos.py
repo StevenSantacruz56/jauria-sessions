@@ -130,6 +130,13 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(receipt['signed'])
         self.assertFalse(receipt['developerIdSigned'])
 
+    def test_rejects_binary_with_builder_home_path(self):
+        binary = self.app / 'Contents/MacOS/Jauria'
+        binary.write_bytes(binary.read_bytes() + b'/Users/example/secret-worktree/src/main.rs')
+        with self.assertRaisesRegex(packaging.PackageError, 'ruta absoluta'):
+            self.package()
+        self.assertFalse(self.output.exists())
+
     def test_notarization_requires_all_three_checks_before_image_creation(self):
         self.signed = self.developer_id = self.assessed = self.stapled = True
         artifact = self.package(require_notarized=True)

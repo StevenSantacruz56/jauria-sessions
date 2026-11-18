@@ -94,6 +94,8 @@ def validate_app(app, version):
                     raise PackageError('Symlink roto en el bundle') from None
                 if not resolved.is_relative_to(app):
                     raise PackageError('Symlink fuera del bundle')
+            elif entry.is_file() and re.search(rb'/Users/[^/\x00\s]+/', entry.read_bytes()):
+                raise PackageError('El bundle contiene una ruta absoluta del equipo de compilación')
     return app
 
 

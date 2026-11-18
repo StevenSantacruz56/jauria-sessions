@@ -170,12 +170,12 @@ try{
         await page.evaluate(()=>document.documentElement.dataset.theme='light');
         await settings.locator('.settings-dialog-content').evaluate(n=>n.scrollTop=0);
         await page.waitForTimeout(300);
-        await page.screenshot({path:`${docsDir}/configuracion-1.3.0.png`,animations:'disabled'});
+        await page.screenshot({path:`${docsDir}/configuracion-1.3.2.png`,animations:'disabled'});
         await settings.getByRole('button',{name:'Cerrar',exact:true}).click();
         await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
         await page.setViewportSize({width:1440,height:1000});
         await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Abrir sesión principal',exact:true}).waitFor();
-        await page.screenshot({path:`${docsDir}/pulso-1.3.0.png`,animations:'disabled'});
+        await page.screenshot({path:`${docsDir}/pulso-1.3.2.png`,animations:'disabled'});
       }
     } finally {await browser.close();}
   });
@@ -306,10 +306,22 @@ try{
       await page.locator('.session-group[data-activity="needs"]').waitFor();
       assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
       const screenshotDir=process.env.PULSO_SCREENSHOT_DIR;
-      if(screenshotDir){await mkdir(screenshotDir,{recursive:true});await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-light.png`,animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-dark.png`,animations:'disabled'});await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      if(screenshotDir){
+        await mkdir(screenshotDir,{recursive:true});
+        await page.evaluate(()=>(window as any).pulsoFixture.output('$ jauria-demo revisar-avisos\r\n[ok] Estados declarados por el agente\r\n[ok] Sesiones agrupadas por prioridad\r\n[pendiente] Confirmar permiso para continuar\r\n'));
+        await page.waitForTimeout(650);
+        await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-light.png`,animations:'disabled'});
+        await page.evaluate(()=>document.documentElement.dataset.theme='dark');
+        await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-alert-dark.png`,animations:'disabled'});
+        await page.evaluate(()=>document.documentElement.dataset.theme='light');
+      }
       await emit('working');await page.locator('.session-group[data-activity="working"]').waitFor();
       assert.equal(await session.getAttribute('data-attention'),'false');
-      if(screenshotDir)await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-working-light.png`,animations:'disabled'});
+      if(screenshotDir){
+        await page.evaluate(()=>(window as any).pulsoFixture.output('[ok] Permiso confirmado\r\n[en curso] Validando la vista de actividad...\r\n'));
+        await page.waitForTimeout(650);
+        await page.screenshot({path:`${screenshotDir}/${engine.name()}-activity-working-light.png`,animations:'disabled'});
+      }
       await emit('idle');await page.locator('.session-group[data-activity="finished"]').waitFor();
       assert.match(await session.textContent() ?? '', /Turno terminado/);
       await session.click();

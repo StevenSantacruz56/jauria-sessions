@@ -56,3 +56,13 @@ Fecha: 17 de noviembre de 2026. Base revisada: `861bd59` y sus nueve commits des
 - `tauri 2.12.5` supera las versiones afectadas por [GHSA-w28w-mhc8-qvjv](https://github.com/tauri-apps/tauri/security/advisories/GHSA-w28w-mhc8-qvjv). GLib 0.18.5 sigue en el lockfile pero `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` no encontró dependientes. La única alerta abierta de Dependabot consultada antes de integrar era GLib; GitHub puede reevaluar al actualizar `main`.
 
 No se incorporaron al repositorio las credenciales de Claude Code, el perfil real, el permiso Pulso ni la copia local del instalador. El registro local de MCP en la cuenta del desarrollador es una configuración de uso, no un archivo del proyecto.
+
+## Revisión acotada para la release 1.3.2
+
+Fecha: 18 de noviembre de 2026. Alcance: cambios desde 1.3.1, nuevas capturas sintéticas y bundle/DMG Apple Silicon. Esta revisión de exposición no es una auditoría completa.
+
+- La primera compilación release contenía rutas del equipo de build en ubicaciones de pánico de Rust. Se descartó ese DMG antes de publicar. `scripts/build-macos.py` ahora remapea rutas de fuente, Cargo y carpeta personal; `scripts/package-macos.py` rechaza rutas absolutas `/Users/<cuenta>/` en el bundle. El DMG definitivo se montó en solo lectura y la inspección del bundle encontró cero coincidencias de ese patrón.
+- Las cinco imágenes nuevas fueron capturadas con un runner sintético. Se inspeccionaron visualmente: no muestran sesiones, proyectos ni carpetas personales. Ninguna contiene chunks PNG de texto o EXIF. Se eliminaron las cuatro capturas reemplazadas que ya no tenían referencias.
+- Gitleaks con redacción completa no detectó secretos en el diff de código y documentación; se vuelve a escanear el commit completo antes de publicar. `npm audit --package-lock-only --ignore-scripts`, con y sin `--omit=dev`, informó cero alertas el día de la entrega.
+- GitHub mantiene una alerta moderada para GLib en el lockfile Rust. `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` no encontró ese paquete en el destino macOS soportado. La alerta no se declara corregida para Linux/BSD.
+- El DMG verificado contiene LICENSE, NOTICE, la guía de instalación y referencia al código fuente de la misma versión. No incluye el perfil de datos del usuario. No hay firma Developer ID ni notarización, y no se probó Gatekeeper en otro Mac.

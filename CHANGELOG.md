@@ -6,6 +6,16 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 Sin cambios pendientes registrados.
 
+## [1.3.2] - 2026-11-18
+
+### Documentación y distribución
+
+- Se renuevan capturas sintéticas de Actividad, Pulso y Configuración con la interfaz actual. Las vistas de Actividad muestran una terminal de demostración para dar contexto a la acción requerida y al trabajo en curso.
+- README en español e inglés, guía de instalación y notas de entrega actualizados para identificar la versión y los tres archivos de GitHub Release: DMG, SHA-256 y recibo de verificación.
+- Se publica por primera vez el DMG Apple Silicon en GitHub Releases. Es una compilación estable verificada localmente, **sin firma Developer ID ni notarización**; macOS puede bloquear su apertura. No se recomienda desactivar Gatekeeper ni quitar la cuarentena.
+- La compilación Rust remapea las rutas del equipo de build y el empaquetador rechaza un bundle que todavía contenga rutas absolutas de usuario macOS. Se detectó y descartó un primer DMG antes de publicarlo.
+- La actividad y los avisos mantienen las reglas implementadas en 1.3.1; no se cambian permisos, estado de Pulso ni lanzamiento de proveedores.
+
 ## [1.3.1] - 2026-11-17
 
 ### Actividad y avisos de sesiones
@@ -164,7 +174,8 @@ Primera base de desarrollo conservada antes de introducir este changelog.
 - Avisos de sesión, contador en el Dock y notificaciones opcionales de macOS.
 - Correcciones de scroll, geometría, entrada y carga de configuración MCP de Claude Code.
 
-[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/StevenSantacruz56/jauria-sessions/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2
 [1.3.1]: https://github.com/StevenSantacruz56/jauria-sessions/tree/v1.3.1
 [1.3.0]: https://github.com/StevenSantacruz56/jauria-sessions/tree/861bd59
 [0.1.1]: https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v0.1.1

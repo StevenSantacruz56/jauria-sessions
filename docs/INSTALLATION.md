@@ -2,11 +2,11 @@
 
 La distribución actual es para Mac con Apple Silicon (arm64/aarch64). La configuración de la app declara macOS 11.0 como mínimo; la compatibilidad solo se ha validado en el Mac actual de pruebas, no en todas las versiones desde macOS 11. No hay paquete Intel ni Windows en esta distribución.
 
-## Instalar el paquete local
+## Descargar e instalar 1.3.2
 
-Las releases actuales de GitHub contienen código y documentación. El DMG se preparó para uso local y **no se adjunta a GitHub Releases** en esta entrega. La disponibilidad del código no implica que exista un instalador descargable.
+La [release v1.3.2](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2) ofrece el código fuente y un DMG verificado para Apple Silicon. El DMG **no tiene firma Developer ID ni notarización**; lee la sección de firma antes de instalarlo.
 
-1. Abre la carpeta donde recibiste o generaste `Jauria_<versión>_aarch64_unsigned.dmg`. Conserva junto a él `SHA256SUMS` y el archivo `.receipt.json`; describen la misma imagen y sus verificaciones.
+1. Descarga de esa misma release `Jauria_1.3.2_aarch64_unsigned.dmg`, `SHA256SUMS` y `Jauria_1.3.2_aarch64_unsigned.dmg.receipt.json`. Conserva los tres juntos; describen la misma imagen y sus verificaciones.
 2. Para comprobar el archivo, ejecuta desde esa carpeta:
 
    ```sh
@@ -21,7 +21,7 @@ Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en
 
 Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Información → Diagnóstico → Comprobar CLI** si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
 
-Si en una entrega futura se publican instaladores, descárgalos con su checksum y recibo desde [GitHub Releases](https://github.com/StevenSantacruz56/jauria-sessions/releases). El repositorio de código es público; eso no significa que exista un DMG 1.3.1 publicado. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
+Descarga siempre el DMG, checksum y recibo de la **misma** [release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.2). El checksum identifica el archivo; no aporta firma de editor ni notarización. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
 
 ## Estado de firma de esta distribución
 
@@ -39,7 +39,7 @@ Las funciones nuevas del backend requieren un runner actualizado. Si aparece el 
 
 Desde 1.0.1, el código propio se licencia bajo GPL-3.0-only. El bundle incorpora LICENSE y NOTICE; el DMG añade ambos textos y `SOURCE_REFERENCE.txt`, con enlaces a la etiqueta y al archivo de fuente de su misma versión. Esa referencia no entrega automáticamente el código ni certifica cumplimiento de GPL. Si redistribuyes binarios, proporciona la fuente correspondiente y los materiales de compilación conforme a [LICENSE](../LICENSE); el destinatario debe poder acceder al código. Un repositorio privado inaccesible para él no basta.
 
-El paquete incluye el bundle proporcionado, esta guía, la licencia, la referencia a la fuente y los avisos de terceros disponibles. No se copian perfiles de usuario, tokens del runner, credenciales ni configuraciones de proveedores desde el equipo que empaqueta. La actualización conserva los datos externos de tu perfil; no los añadas manualmente al bundle ni al DMG.
+El paquete incluye el bundle proporcionado, esta guía, la licencia, la referencia a la fuente y los avisos de terceros disponibles. No se copian perfiles de usuario, tokens del runner, credenciales ni configuraciones de proveedores desde el equipo que empaqueta. El empaquetador rechaza rutas absolutas `/Users/<cuenta>/` dentro del bundle. La actualización conserva los datos externos de tu perfil; no los añadas manualmente al bundle ni al DMG.
 
 ## Crear el paquete desde un bundle existente
 
@@ -59,8 +59,8 @@ Para exigir una app ya firmada y notarizada:
 python3 scripts/package-macos.py --app /ruta/absoluta/Jauria.app --output /ruta/absoluta/paquetes --require-notarized
 ```
 
-Esta opción verifica `codesign --verify --deep --strict` con requisito Developer ID, `spctl --assess` y `xcrun stapler validate` antes de crear el artefacto. No firma ni envía la app a Apple. El script comprueba la versión contra `VERSION`, los dos binarios arm64 y la copia temporal; crea una imagen comprimida UDZO y verifica su integridad con `hdiutil verify` antes de publicarla junto al checksum y recibo.
+Esta opción verifica `codesign --verify --deep --strict` con requisito Developer ID, `spctl --assess` y `xcrun stapler validate` antes de crear el artefacto. No firma ni envía la app a Apple. El script comprueba la versión contra `VERSION`, los dos binarios arm64, rutas personales en el bundle y la copia temporal; crea una imagen comprimida UDZO y verifica su integridad con `hdiutil verify` antes de publicarla junto al checksum y recibo.
 
-Antes de publicar en GitHub Releases, el coordinador debe montar el DMG en modo de solo lectura y comprobar contenido e instalación en un equipo de prueba. Los tests unitarios simulan las herramientas y no crean imágenes reales.
+Antes de publicar una nueva versión en GitHub Releases, monta el DMG en modo de solo lectura y comprueba su contenido; verifica la app en un perfil aislado del equipo de prueba. Los tests unitarios simulan las herramientas y no crean imágenes reales. Esta verificación no sustituye una prueba de Gatekeeper sobre una descarga real ni una firma Developer ID.
 
 La elección de DMG sigue el formato habitual de distribución de macOS descrito por [Tauri: DMG](https://v2.tauri.app/distribute/dmg/). La separación entre firma Developer ID, notarización y ad-hoc sigue [Tauri: macOS Code Signing](https://v2.tauri.app/distribute/sign/macos/).

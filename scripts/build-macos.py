@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Portable local build using installed native tools and inherited environment."""
 from pathlib import Path
-import argparse, os, platform, shutil, subprocess
+import argparse, os, platform, shlex, shutil, subprocess
 ROOT=Path(__file__).resolve().parents[1]
 APP=ROOT/'experiments/tauri-vertical'
 p=argparse.ArgumentParser();p.add_argument('--check-only',action='store_true');p.add_argument('--debug',action='store_true',help='Build a development desktop bundle instead of the optimized release.');args=p.parse_args()
@@ -11,6 +11,15 @@ for tool in ('cargo','rustc','node','npm','xcodebuild'):
 env=os.environ.copy()
 # Bundle resource path expects the runner in runner/target. Avoid inherited target overrides.
 env.pop('CARGO_TARGET_DIR',None)
+# Rust panic locations can otherwise embed the builder's absolute home path in
+# release binaries, including third-party crate paths. Preserve caller flags.
+flags=env.get('CARGO_ENCODED_RUSTFLAGS','').split('\x1f') if env.get('CARGO_ENCODED_RUSTFLAGS') else shlex.split(env.get('RUSTFLAGS',''))
+home=Path.home().resolve()
+cargo_home=Path(env.get('CARGO_HOME',home/'.cargo')).resolve()
+for source,destination in ((cargo_home,'/jauria-cargo'),(ROOT.resolve(),'/jauria-source'),(home,'/jauria-home')):
+    flags.append(f'--remap-path-prefix={source}={destination}')
+env['CARGO_ENCODED_RUSTFLAGS']='\x1f'.join(flags)
+env.pop('RUSTFLAGS',None)
 def run(argv,cwd):subprocess.run(argv,cwd=cwd,env=env,check=True)
 run(['python3','scripts/version.py','--check'],ROOT)
 run(['python3','-m','unittest','discover','-s','tests','-p','test_*.py'],ROOT)

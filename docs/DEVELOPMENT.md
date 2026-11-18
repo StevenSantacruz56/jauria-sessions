@@ -13,7 +13,9 @@ El fixture `runner/tests/fixtures/protocol.synthetic.jsonl` contiene exclusivame
 
 El workflow `.github/workflows/macos.yml` configura Node 24 para ejecutar los tests TypeScript con el soporte nativo de borrado de tipos; no implica que los tests locales se hayan ejecutado en Node 24. Usa Rust estable, macOS Apple Silicon, permisos de repositorio de solo lectura y acciones fijadas a SHA. No instala CLI de proveedores, no realiza login, no firma, no publica ni sube perfiles o evidencia. Referencia del runner: https://docs.github.com/en/actions/reference/runners/github-hosted-runners .
 
-Los resultados deben verificarse sobre el snapshot final: una compilación anterior al freeze no valida cambios posteriores. El DMG local se genera y verifica con `scripts/package-macos.py`; no se publica automáticamente. La firma Developer ID, la notarización, la distribución del instalador en GitHub, Intel y otras plataformas quedan pendientes.
+Los resultados deben verificarse sobre el snapshot final: una compilación anterior al freeze no valida cambios posteriores. El DMG se genera y verifica con `scripts/package-macos.py`; su publicación en GitHub es un paso explícito posterior. La release v1.3.2 adjunta un DMG sin firma Developer ID ni notarización. Esas verificaciones, Intel y otras plataformas quedan pendientes.
+
+`scripts/build-macos.py` añade `--remap-path-prefix` a las compilaciones Rust para que los lugares de pánico no incluyan la carpeta personal del compilador. Conserva los flags Rust existentes. El empaquetador inspecciona el bundle y rechaza rutas absolutas `/Users/<cuenta>/` antes de crear el DMG; no elimina el contenido por sí solo. Si aparece ese error, reconstruye con el script de build y revisa el recurso que lo causó.
 
 Los scripts originales de build/launch de laboratorio se sustituyen por `scripts/build-macos.py` y `scripts/launch-macos.py`; no se copian sus rutas de SDK, cachés, preferencias de perfil ni fallbacks a experimentos externos. La detección de ejecutables de proveedores en el backend no cambia en este paquete.
 
