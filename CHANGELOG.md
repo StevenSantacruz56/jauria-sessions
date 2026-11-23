@@ -4,7 +4,16 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
-Sin cambios pendientes registrados.
+### Sin publicar · 1.4.0 entrega A: sistema visual y barra lateral
+
+- Paleta neutra clara y oscura de la propuesta 1.4: superficies sin tinte azul, un borde translúcido, cuatro colores de estado unificados (`--state-working`, `--state-attention`, `--state-ready`, `--state-paused`), texto tenue `--dim` y un acento de foco frío `--focus`. El ámbar queda en la acción principal (`.primary`) y la marca; el panel enfocado, el anillo de teclado, las tarjetas, las pestañas y el interruptor de Configuración usan el foco frío.
+- Escala única: letra de 11, 12, 13 y 16 px (20 px en títulos de diálogo y bienvenida), pesos 400/500/600 en Inter, radios de 6 px en controles, 8 px en filas y tarjetas y 10 px en paneles, columnas y diálogos. Un solo estilo de pestaña elevada para Abiertas/Historial y los tableros de Pulso.
+- El fondo del terminal pasa a `#16191d` en CSS y en el tema de xterm a la vez.
+- Barra lateral de 264 px: cabecera con marca, búsqueda (⌘K) y nueva sesión (⌘N); sección **Proyectos** con los tableros de Pulso, su avance (hechas/total) y Pendientes; sección **Agentes** con filas de 30 px de una línea, icono del proveedor, duración e indicador de estado. Solo un reporte `working` explícito (OSC 7501) muestra el anillo giratorio; un proceso abierto sin reporte muestra un aro vacío. El estado también está disponible como texto.
+- Los agentes se agrupan **Por proyecto** (predeterminado; sesión principal y vínculos de proyecto de Pulso, el resto en «Sin proyecto») o **Por estado** (las secciones de Actividad). La elección se recuerda por perfil.
+- La entrada de Repositorios y tareas Git se oculta de la barra lateral; el código de tareas, revisión, verificación y relevo no cambia.
+- Pulso: columnas sin borde con punto de estado, tarjetas de radio 8 con un solo borde, sin el título «Pulso» repetido ni el eslogan permanente. El selector «Mover» se mantiene.
+- Sin cambios en el runner, la barra de avisos de 50 px, la cabecera de los paneles ni el inset del terminal. Al ensanchar la barra lateral, el terminal pierde unas columnas en ventanas anchas; por debajo de 860 px la barra sigue superpuesta.
 
 ## [1.3.3] - 2026-11-18
 
