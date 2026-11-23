@@ -72,6 +72,7 @@ Jauria itself does not require Rust or Node to run from an app bundle. Provider 
 3. Optionally name the session, then select **Iniciar sesión**.
 4. Open **Configuración…** (`⌘,`) to change appearance or the concurrency limit.
 5. Use **Dividir** to display two sessions side by side.
+6. Press `⌘⇧P` (or the search button in the top bar) for the **command palette**: sessions that need you, open sessions, Pulso boards and actions, filtered as you type. Unavailable actions are listed with the reason; **Terminar** and **Cambiar nombre** open their usual confirmation or form, and the palette never types into a terminal. `⌘K` still filters the agent list and `⌘I` toggles Información.
 
 The current interface is in Spanish. Closing its window leaves sessions running in the local runner; **Terminar** stops the selected process while preserving files and saved history. **Interrumpir** sends Ctrl-C without guaranteeing that the process exits.
 

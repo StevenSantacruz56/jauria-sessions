@@ -39,6 +39,15 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Se mantienen el límite de plazas, la regla de un escritor por worktree Git, «Liberar carpeta» para sesiones inciertas, la eliminación y compactación del historial (ahora con su propia confirmación nativa), Pulso, MCP, permisos, avisos y Configuración. Los fixtures de prueba siguen visibles solo en modo smoke.
 - Pruebas: se eliminan las de la función retirada y se añade `legacy_profile_rpc`, que abre un perfil sintético con datos antiguos.
 
+### Sin publicar · 1.4.0 entrega C: paleta de comandos
+
+- Paleta de comandos con `⌘⇧P` (Ctrl+Shift+P fuera de macOS) o con el botón de búsqueda de la barra superior, que muestra el atajo. Es un diálogo modal de 560 px cerca del borde superior, fuera del flujo: abrirla no cambia el tamaño del terminal ni envía `resize`.
+- Resultados agrupados: **Te necesitan** (acción requerida o aviso), **Sesiones** abiertas con su indicador de estado y su proyecto, **Proyectos** (tableros de Pulso del resumen ya cargado, con Pendientes) y **Acciones**. La búsqueda ignora mayúsculas y acentos, admite subcadenas e iniciales y ordena por coincidencia y después por prioridad de estado. Las fases de Pulso no se buscan todavía: el cliente no las tiene cargadas y la paleta no hace lecturas nuevas (entrega E).
+- Acciones: nueva sesión, abrir la sesión que más te necesita, marcar avisos como vistos, dividir/unificar, enfocar el otro panel, ir a Pulso/volver a la terminal, nuevo proyecto, buscar en la lista de agentes, agrupar por proyecto/estado, Abiertas/Historial, Información, Configuración, apariencia y, sobre la sesión del panel enfocado, cambiar nombre, interrumpir y terminar. Terminar y Cambiar nombre abren su confirmación o formulario de siempre; Interrumpir solo enfoca su botón. Ninguna acción escribe en un terminal ni concede permisos de Pulso. Las no disponibles aparecen deshabilitadas con el motivo.
+- Teclado y accesibilidad: patrón combobox + listbox con grupos con nombre, flechas, Inicio/Fin con la búsqueda vacía, Intro, Escape o clic fuera para cerrar, anuncio del número de resultados y foco devuelto al elemento anterior (normalmente el terminal). Ninguna tecla escrita en la paleta, ni el propio atajo, llega al PTY o a un campo de Codex, y los atajos globales se ignoran mientras está abierta. No se abre sobre otro diálogo modal; el selector de sesión, el popover de avisos y los menús se cierran antes.
+- En Pulso, navegar desde la paleta (otro tablero, una sesión, volver a la terminal o nuevo proyecto) respeta las guardas del borrador.
+- `⌘K` no cambia: sigue abriendo y enfocando la búsqueda de la lista de agentes (sus pruebas y su flujo dependen de ese campo). Los atajos `⌘N`, `⌘K`, `⌘I` y `⌘,` salen de `main.ts` a un registro único (`shortcuts.ts`, `app-commands.ts`) que usan el manejador de atajos y la paleta.
+
 ## [1.3.3] - 2026-11-18
 
 ### Pulso para agentes

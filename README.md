@@ -42,6 +42,16 @@ Con la aplicación abierta:
 
 Pulsa **Dividir** para mostrar dos paneles y elige una sesión distinta en el menú de cada uno. Dividir cambia la vista; no crea otra sesión. El selector separa **Abiertas** e **Historial**, y distingue las sesiones con nombres iguales por carpeta o identificador. El límite predeterminado es de **dos sesiones simultáneas** y puedes cambiarlo entre 1 y 8 en **Configuración…** (`⌘,`). El límite es compartido por los proveedores. Reducirlo no detiene sesiones abiertas. Las sesiones con estado incierto pueden seguir ocupando una plaza hasta resolverlas.
 
+Pulsa `⌘⇧P` o el botón de búsqueda de la barra superior para abrir la **paleta de comandos**: escribe parte del nombre de una sesión, un tablero de Pulso o una acción (sin importar mayúsculas ni acentos; las iniciales también sirven) y pulsa Intro. Primero aparecen las sesiones que te necesitan. Las acciones que no están disponibles se muestran con el motivo. **Terminar** y **Cambiar nombre** abren su confirmación o formulario habitual, e **Interrumpir** solo enfoca su botón; la paleta nunca escribe en el terminal. Escape la cierra y devuelve el foco al terminal.
+
+| Atajo | Acción |
+| --- | --- |
+| `⌘N` | Nueva sesión |
+| `⌘⇧P` | Paleta de comandos |
+| `⌘K` | Buscar en la lista de agentes |
+| `⌘I` | Mostrar u ocultar Información |
+| `⌘,` | Configuración |
+
 Abre **Acciones de la sesión → Cambiar nombre…** en el menú de los tres puntos del panel para cambiar el nombre de una sesión activa o del historial. El nuevo nombre se guarda localmente y no modifica la conversación del proveedor.
 
 En **Configuración…** puedes elegir la apariencia y el máximo de sesiones. El cambio de capacidad se aplica a los próximos inicios; se mantienen las protecciones de worktree. La apariencia se guarda para la interfaz local; la capacidad se guarda en el perfil del runner.
