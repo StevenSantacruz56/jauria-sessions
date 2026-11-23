@@ -10,6 +10,8 @@ export type PulsoCheckpoint = { id: string; itemId: string; brief: string; nextA
 type Link = { projectId?: string; itemId?: string; sessionId: string };
 export type PulsoPanelOptions = {
   host: HTMLElement;
+  /** Where the board tabs and the "+" for a new project live (the workbench top bar). Defaults to the panel. */
+  tabsHost?: HTMLElement;
   request: (op: string, args: Record<string, unknown>) => Promise<any>;
   sessions: () => Session[];
   openSession: (id: string) => void;
@@ -19,6 +21,7 @@ export type PulsoPanelOptions = {
   onOpenPermissions?: (context:{projectId?:string;sessionId?:string}) => void;
   persistenceKey?: () => string | null;
   bindingCacheKey?: () => string;
+  /** Kept for compatibility; the top-bar tabs and sidebar return to the terminal. */
   backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
@@ -62,17 +65,16 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     input.value = values.some(([id]) => id === value) ? value : values[0]?.[0] ?? ''; wrap.append(input); return { wrap, input };
   }
   const root = el('section', '', 'pulso-panel'); root.hidden = true; root.setAttribute('aria-label', 'Pulso');
-  // The workbench header already names Pulso; no second title or permanent tagline.
-  const header = el('header', '', 'pulso-header');
-  const headerActions=el('div','','pulso-header-actions');
-  if(options.backToTerminal)headerActions.append(button('Volver a terminal',()=>options.backToTerminal!(),'quiet'));
-  headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'));
-  header.append(headerActions);
+  // Board tabs live in the workbench top bar; the "+" there creates a project.
+  // One amber action per screen: the project's main-session action in the toolbar.
   const feedback = el('div', '', 'pulso-feedback'); feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   const errors = el('div', '', 'pulso-error'); errors.hidden = true; errors.setAttribute('role', 'alert');
   const undoSlot = el('div', '', 'pulso-undo');
   const outline=el('nav','','pulso-tabs');outline.setAttribute('aria-label','Tableros de Pulso');
-  const projectList=el('div','','pulso-project-tabs');outline.append(projectList);
+  const projectList=el('div','','pulso-project-tabs');
+  const addProject=button('',()=>newProject(),'icon-button pulso-tab-add');addProject.setAttribute('aria-label','Nuevo proyecto');addProject.title='Nuevo proyecto';
+  addProject.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+  outline.append(projectList,addProject);
   const toolbar=el('div','','pulso-board-toolbar');
   const board=el('div','','pulso-board');board.setAttribute('aria-label','Tablero de trabajo');
   const drawer=el('dialog','','pulso-drawer');drawer.setAttribute('aria-label','Detalle de Pulso');
@@ -81,7 +83,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const drawerMessages=el('div','','pulso-drawer-messages');
   const detail=el('section','','pulso-detail');detail.setAttribute('aria-label','Detalle de Pulso');drawer.append(drawerHeader,drawerMessages,detail);
   drawer.addEventListener('cancel',event=>{event.preventDefault();closeDrawer();});
-  root.append(header,outline,feedback,errors,undoSlot,toolbar,board,drawer);options.host.append(root);
+  root.append(feedback,errors,undoSlot,toolbar,board,drawer);options.host.append(root);
+  if(options.tabsHost)options.tabsHost.append(outline);else root.prepend(outline);
   const capture=el('form','','pulso-capture');const captureTitle=field('Nombre del proyecto',false,240);captureTitle.input.required=true;captureTitle.input.placeholder='Por ejemplo: lanzar mi aplicación';
   const originLabel=el('label','','pulso-check');const originCheck=el('input');originCheck.type='checkbox';originCheck.checked=true;
   const originText=el('span');originLabel.append(originCheck,originText);
@@ -151,7 +154,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const say = (message: string) => { if (!disposed) feedback.textContent = message; };
   function freeze() {
     root.setAttribute('aria-busy', String(busy));
-    for (const n of Array.from(root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button,input,select,textarea'))) {
+    for (const n of [root,outline].flatMap(scope=>Array.from(scope.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button,input,select,textarea')))) {
       n.disabled = busy || (navigating&&(board.contains(n)||toolbar.contains(n))) || (!!failed && !errors.contains(n)) || (dirty && !!activeEditor && !activeEditor.contains(n) && !errors.contains(n));
     }
   }
@@ -237,12 +240,15 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const sameBoard=board.dataset.projectId===(selectedProject?.id??'');
     const focus=sameBoard?previousFocus:undefined;
     const openAdds=new Set(sameBoard?Array.from(board.querySelectorAll<HTMLElement>('.pulso-column')).filter(n=>n.querySelector<HTMLFormElement>('.pulso-add-form')?.hidden===false).map(n=>n.dataset.state):[]);
-    toolbar.replaceChildren();const name=el('div');name.append(el('h2',selectedProject?.title??'Pendientes'));
+    // One compact line: title, progress, Plan y sesiones and the primary action.
+    toolbar.replaceChildren();const title=el('h2',selectedProject?.title??'Pendientes','pulso-board-title');title.title=title.textContent??'';
     const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
-    name.append(el('p',total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'} · arrastra entre columnas`:'Añade una tarjeta en la columna donde quieras empezar.','pulso-progress'));toolbar.append(name);
+    const progress=el('p',total?`${complete} de ${total} ${selectedProject?'fases hechas':'pendientes hechos'}`:'Sin tarjetas todavía','pulso-progress');
+    progress.title=total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'}`:'Añade una tarjeta en la columna donde quieras empezar.';
+    toolbar.append(title,progress);
+    if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet pulso-plan-button'));
     if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Reanudar sesión principal');toolbar.append(recovery);}
-    if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet'));
-    board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';
+    closeMoveMenu(false);board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';
     for(const status of statuses){
       const column=el('section','','pulso-column');column.dataset.state=status;column.setAttribute('aria-label',labels[status]);
       const h=el('header');h.append(el('h3',labels[status]),el('span',String(columns[status].totalCount),'pulso-count'));column.append(h);
@@ -269,12 +275,49 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const card=el('article','','pulso-card');card.dataset.itemId=item.id;card.dataset.state=item.status;
     const open=button('',()=>chooseItem(item),'pulso-card-open');open.dataset.focusKey=`item-${item.id}`;open.setAttribute('aria-label',`Abrir ${item.title}`);
     open.append(el('span',item.title,'pulso-card-title'));if(item.note)open.append(el('span',item.note,'pulso-card-note'));card.append(open);
-    const footer=el('div','','pulso-card-footer');
-    const move=select(`Mover ${item.title}`,Object.entries(labels),item.status);move.input.classList.add('pulso-card-move');move.input.onchange=()=>{void moveCard(item,move.input.value as PulsoItem['status']);};footer.append(move.input);
-    move.input.dataset.focusKey=`move-${item.id}`;
-    const handle=button('',()=>say('Arrastra esta tarjeta a otra columna o utiliza el menú Mover.'),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);
+    const controls=el('div','','pulso-card-controls');
+    const handle=button('',()=>say('Arrastra esta tarjeta a otra columna o usa su menú «…» (Mover).'),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);handle.title='Arrastrar a otra columna';
     handle.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-linecap="round"/></svg>';
-    handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));footer.append(handle);card.append(footer);return card;
+    handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));
+    // Keyboard alternative to dragging: a menu with the four columns (same move, undo and phase order).
+    const menu=button('',()=>openMoveMenu(item,menu),'quiet pulso-card-menu');menu.setAttribute('aria-label',`Mover ${item.title}`);menu.title='Mover a otra columna';
+    menu.setAttribute('aria-haspopup','menu');menu.setAttribute('aria-expanded','false');menu.dataset.focusKey=`move-${item.id}`;
+    menu.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+    controls.append(menu,handle);card.append(controls);return card;
+  }
+  let moveMenu:{node:HTMLElement;anchor:HTMLButtonElement;dispose:()=>void}|null=null;
+  function closeMoveMenu(focusAnchor:boolean){
+    const current=moveMenu;if(!current)return;moveMenu=null;current.dispose();current.node.remove();current.anchor.setAttribute('aria-expanded','false');
+    if(focusAnchor&&current.anchor.isConnected)current.anchor.focus({preventScroll:true});
+  }
+  function openMoveMenu(item:PulsoItem,anchor:HTMLButtonElement){
+    if(moveMenu){const same=moveMenu.anchor===anchor;closeMoveMenu(same);if(same)return;}
+    if(busy||dirty||failed||!available())return;
+    const node=el('div','','pulso-move-menu');node.setAttribute('role','menu');node.setAttribute('aria-label',`Mover ${item.title}`);
+    const items=statuses.map(status=>{
+      const entry=el('button',`Mover a ${labels[status]}`,'pulso-move-item');entry.type='button';entry.setAttribute('role','menuitem');entry.tabIndex=-1;entry.dataset.state=status;
+      if(status===item.status){entry.setAttribute('aria-disabled','true');entry.title='Columna actual';entry.append(el('span',' · actual','pulso-move-current'));}
+      entry.onclick=()=>{if(status===item.status)return;closeMoveMenu(false);anchor.focus({preventScroll:true});void moveCard(item,status);};
+      node.append(entry);return entry;
+    });
+    const enabled=()=>items.filter(entry=>entry.getAttribute('aria-disabled')!=='true');
+    node.addEventListener('keydown',event=>{
+      const list=enabled();const index=list.indexOf(document.activeElement as HTMLButtonElement);
+      if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const next=event.key==='ArrowDown'?(index+1)%list.length:(index-1+list.length)%list.length;list[next]?.focus();}
+      else if(event.key==='Home'||event.key==='End'){event.preventDefault();(event.key==='Home'?list[0]:list.at(-1))?.focus();}
+      else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeMoveMenu(true);}
+      else if(event.key==='Tab'){closeMoveMenu(false);}
+    });
+    // Fixed position escapes the scrolling column; it closes on scroll or resize.
+    const rect=anchor.getBoundingClientRect();root.append(node);
+    const height=node.offsetHeight,width=node.offsetWidth;
+    const top=rect.bottom+4+height>innerHeight-8?Math.max(8,rect.top-4-height):rect.bottom+4;
+    node.style.top=`${top}px`;node.style.left=`${Math.max(8,Math.min(innerWidth-width-8,rect.right-width))}px`;
+    const outside=(event:PointerEvent)=>{if(!node.contains(event.target as Node)&&!anchor.contains(event.target as Node))closeMoveMenu(false);};
+    const away=()=>closeMoveMenu(false);
+    document.addEventListener('pointerdown',outside,true);board.addEventListener('scroll',away,true);addEventListener('resize',away);
+    moveMenu={node,anchor,dispose:()=>{document.removeEventListener('pointerdown',outside,true);board.removeEventListener('scroll',away,true);removeEventListener('resize',away);}};
+    anchor.setAttribute('aria-expanded','true');enabled()[0]?.focus({preventScroll:true});
   }
   function startDrag(event:PointerEvent,item:PulsoItem,card:HTMLElement,handle:HTMLElement){
     if(event.button!==0||busy||dirty||failed)return;event.preventDefault();dragging=true;handle.setPointerCapture(event.pointerId);let target:PulsoItem['status']|null=null;card.classList.add('is-dragging');
@@ -632,7 +675,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   document.addEventListener('visibilitychange', visibility);
   return {
     show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
-    hide() {if(disposed)return;visible=false;cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
+    hide() {if(disposed)return;visible=false;closeMoveMenu(false);cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
     /** Sidebar entry: same guards as the tabs; a draft or failed save keeps the current board. */
     async openBoard(projectId){
@@ -643,6 +686,6 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     },
     currentBoard(){return selectedProject?.id??null;},
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
-    dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
+    dispose() { if (disposed) return; disposed = true; visible = false;closeMoveMenu(false);outline.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

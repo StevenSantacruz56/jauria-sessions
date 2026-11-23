@@ -38,17 +38,7 @@
   border-radius: 6px;
 }
 
-.pulso-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-  padding: 12px 24px 8px;
-}
-.pulso-header:not(:has(> :not([hidden]))) { display: none; }
-.pulso-header-actions, .pulso-inline-actions {
+.pulso-inline-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -61,7 +51,7 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.pulso-progress { margin-top: 6px; font-variant-numeric: tabular-nums; }
+.pulso-progress { font-variant-numeric: tabular-nums; }
 .pulso-tabs {
   display: flex;
   align-items: center;
@@ -73,20 +63,26 @@
   border-bottom: 1px solid var(--border);
   scroll-padding-inline: 24px;
 }
-/* Same raised tab as the sidebar filters: background and 1px border, no underline. */
+.pulso-project-tabs { display: flex; align-items: center; flex: 0 1 auto; gap: 3px; min-width: 0; }
+/* Same raised tab as the session tabs and sidebar filters: background and 1px border, no underline. */
 .pulso-tab {
   position: relative;
   flex: 0 0 auto;
-  max-width: 240px;
+  max-width: 220px;
   min-height: 29px;
-  padding: 4px 10px;
+  height: 29px;
+  padding: 0 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  line-height: 27px;
 }
 .pulso-tab:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .pulso-tab[aria-current="true"], .pulso-tab[aria-current="true"]:hover:not(:disabled) {
@@ -94,19 +90,27 @@
   border-color: var(--border);
   color: var(--text);
 }
+.pulso-tab-add { width: 26px; min-height: 26px; height: 26px; padding: 5px; flex: 0 0 auto; }
+/* In the workbench top bar the tabs share its 42 px line and scroll sideways. */
+.top-pulso-tabs { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; height: 100%; }
+.top-pulso-tabs .pulso-tabs { height: 100%; padding: 0; border: 0; gap: 3px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.top-pulso-tabs .pulso-tabs::-webkit-scrollbar { display: none; }
+.top-pulso-tabs .pulso-project-tabs > .quiet { flex: 0 0 auto; min-height: 29px; height: 29px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+
+/* Project bar: one compact line with title, progress, Plan y sesiones and the primary action. */
 .pulso-board-toolbar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-  padding: 20px 24px 16px;
+  gap: 12px;
+  min-height: 46px;
+  padding: 6px 24px;
+  border-bottom: 1px solid var(--border);
 }
-.pulso-board-toolbar > div { min-width: 0; }
-.pulso-board-toolbar h2 { font-size: 16px; font-weight: 600; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: anywhere; }
-.pulso-board-toolbar p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.pulso-board-toolbar > div:last-child:not(:first-child) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pulso-board-title { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pulso-board-toolbar .pulso-progress { flex: 1 1 auto; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pulso-board-toolbar button { flex: 0 0 auto; min-height: 28px; padding: 4px 10px; font-size: 12px; white-space: nowrap; }
+.pulso-board-toolbar .pulso-plan-button { color: var(--muted); }
 
 /* A constrained flex chain keeps horizontal overflow in the board and vertical
    overflow in each list, including when the host is only 640px wide. */
@@ -117,7 +121,7 @@
   gap: 12px;
   min-width: 0;
   min-height: 0;
-  padding: 0 24px 24px;
+  padding: 12px 24px 24px;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-padding-inline: 24px;
@@ -181,10 +185,10 @@
   gap: 7px;
   width: 100%;
   min-width: 0;
-  min-height: 64px;
-  padding: 13px 40px 12px 12px;
+  min-height: 48px;
+  padding: 10px 64px 11px 12px;
   border: 0;
-  border-radius: 7px 7px 0 0;
+  border-radius: 7px;
   background: transparent;
   text-align: left;
 }
@@ -201,32 +205,38 @@
   line-height: 1.55;
   white-space: pre-line;
 }
-.pulso-card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px 8px;
-  padding: 0 12px 11px;
-}
-.pulso-card-footer small { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.pulso-card-move { max-width: 100%; min-height: 30px; padding: 4px 6px; font-size: 11px; }
-.pulso-card-handle {
-  position: absolute;
-  top: 6px;
-  right: 5px;
-  width: 30px;
-  min-height: 32px;
+/* Menu (keyboard alternative to dragging) and grip share the top-right corner. */
+.pulso-card-controls { position: absolute; top: 6px; right: 5px; display: flex; align-items: center; gap: 0; }
+.pulso-card-menu, .pulso-card-handle {
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
   padding: 6px;
   border-color: transparent;
   background: transparent;
-  color: var(--muted);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
+  color: var(--dim);
 }
-.pulso-card-handle svg { width: 16px; height: 16px; }
+.pulso-card-menu:hover:not(:disabled), .pulso-card-handle:hover:not(:disabled), .pulso-card-menu[aria-expanded="true"] { color: var(--text); }
+.pulso-card-handle { cursor: grab; touch-action: none; user-select: none; }
+.pulso-card-menu svg, .pulso-card-handle svg { width: 16px; height: 16px; }
 .pulso-card-handle:active { cursor: grabbing; }
+.pulso-move-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-row);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+}
+.pulso-move-item { justify-content: flex-start; width: 100%; min-height: 30px; padding: 4px 10px; border-color: transparent; background: transparent; font-size: 12px; font-weight: 400; text-align: left; white-space: nowrap; }
+.pulso-move-item:focus-visible { outline-offset: -2px; }
+.pulso-move-item[aria-disabled="true"] { color: var(--dim); cursor: default; }
+.pulso-move-item[aria-disabled="true"]:hover { background: transparent; }
+.pulso-move-current { color: var(--dim); }
 .pulso-card.is-dragging { opacity: .5; border-style: dashed; border-color: var(--focus); }
 .pulso-column.is-drop-target { outline: 2px solid var(--focus); outline-offset: -2px; background: var(--selected); }
 .pulso-add-trigger { flex: 0 0 auto; justify-content: flex-start; width: 100%; min-height: 30px; padding: 0 8px; border-color: transparent; border-radius: var(--radius-row); background: transparent; color: var(--dim); font-size: 12px; font-weight: 400; }
@@ -245,7 +255,7 @@
   width: auto;
   max-width: none;
   max-height: 25%;
-  margin: 0 24px 10px;
+  margin: 10px 24px 0;
   padding: 10px 12px;
   overflow: auto;
   border: 1px solid var(--control-border);
@@ -335,10 +345,9 @@
 .pulso-checkpoint-preview .pulso-prose + h4 { margin-top: 12px; }
 
 @media (max-width: 760px) {
-  .pulso-header { align-items: flex-start; padding: 12px 16px 8px; }
   .pulso-tabs { padding-inline: 16px; scroll-padding-inline: 16px; }
-  .pulso-board-toolbar { padding: 16px; }
-  .pulso-board { padding: 0 16px 16px; scroll-padding-inline: 16px; }
+  .pulso-board-toolbar { flex-wrap: wrap; padding: 6px 16px; }
+  .pulso-board { padding: 12px 16px 16px; scroll-padding-inline: 16px; }
   .pulso-column { flex-basis: 240px; }
   .pulso-empty-board { padding: 28px 16px; }
   .pulso-detail { padding: 20px 16px 28px; }

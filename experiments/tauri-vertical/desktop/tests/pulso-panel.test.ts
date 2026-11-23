@@ -134,6 +134,13 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
     await run(page, 'f.panel.show()'); await page.getByRole('button', { name: 'Pendientes', exact: true }).waitFor();
     return page;
   }
+  // Moving a card without dragging: the card's «…» menu (replaces the native Mover select since 1.4).
+  const statusLabels: Record<string, string> = { todo: 'Por hacer', doing: 'En curso', waiting: 'En espera', done: 'Hecho' };
+  async function move(p: Page, title: string, status: string) {
+    await p.getByRole('button', { name: `Mover ${title}`, exact: true }).click();
+    await p.getByRole('menuitem', { name: `Mover a ${statusLabels[status]}`, exact: true }).click();
+  }
+  const columnOf = (p: Page, title: string) => p.locator('.pulso-card', { has: p.getByRole('button', { name: `Abrir ${title}`, exact: true }) }).getAttribute('data-state');
   for (const engine of process.env.PULSO_PANEL_WEBKIT === '1' ? [chromium, webkit] : [chromium]) {
     await test(`${engine.name()}: Pulso isolated stage`, async t => {
       const browser = await engine.launch(engine === chromium ? { channel: 'chrome' } : {}); t.after(() => browser.close());
@@ -229,7 +236,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByLabel('Siguiente acción ·').fill('Continuar en curso');
         await p.getByRole('button', { name: 'Registrar checkpoint', exact: true }).click(); await idle(p);
         await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
-        await p.getByLabel('Mover Fase i1', { exact: true }).selectOption('doing'); await idle(p);
+        await move(p, 'Fase i1', 'doing'); await idle(p);
         const calls = await run(p, 'return f.calls');
         const checkpoint = calls.find((c: any) => c.op === 'checkpoint_create');
         const moves = calls.filter((c: any) => c.op === 'item_update');
@@ -553,8 +560,26 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.equal(await p.getByRole('button',{name:/^Abrir /}).count(),55);
         assert.deepEqual(await run(p,'return f.calls.filter(c=>c.op==="items").map(c=>c.args.expectedSnapshotRevision)'),[1,2]);
       });
+      await t.test('card menu moves by keyboard, disables the current column and keeps undo', async () => {
+        const p = await mounted();
+        const button = p.getByRole('button', { name: 'Mover Fase solo', exact: true });
+        await button.focus(); await p.keyboard.press('Enter');
+        const menu = p.getByRole('menu', { name: 'Mover Fase solo', exact: true }); await menu.waitFor();
+        assert.equal(await button.getAttribute('aria-expanded'), 'true');
+        assert.equal(await menu.getByRole('menuitem', { name: /^Mover a Por hacer/ }).getAttribute('aria-disabled'), 'true');
+        assert.equal(await p.evaluate(() => document.activeElement?.textContent), 'Mover a En curso');
+        await p.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
+        assert.equal(await button.evaluate(el => el === document.activeElement), true, 'Escape returns focus to the card button');
+        assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="item_update").length'), 0);
+        await p.keyboard.press('Enter'); await menu.waitFor(); await p.keyboard.press('ArrowDown'); await p.keyboard.press('Enter'); await idle(p);
+        assert.equal(await columnOf(p, 'Fase solo'), 'waiting');
+        assert.deepEqual(await run(p, 'return f.calls.filter(c=>c.op==="item_update").map(c=>c.args.status)'), ['waiting']);
+        assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed,f.calls.filter(c=>/grant|link|pty|input|turn/.test(c.op))]'), [[], [], [], []]);
+        await p.getByRole('button', { name: 'Deshacer cambio de estado', exact: true }).click(); await idle(p);
+        assert.equal(await columnOf(p, 'Fase solo'), 'todo');
+      });
       await t.test('cross-column CAS move retries an uncertain committed receipt with identical payload', async () => {
-        const p=await mounted();await run(p,'f.timeoutAfterCommit=true');await p.getByLabel('Mover Fase solo',{exact:true}).selectOption('doing');
+        const p=await mounted();await run(p,'f.timeoutAfterCommit=true');await move(p, 'Fase solo', 'doing');
         await p.getByRole('button',{name:'Reintentar mismo cambio',exact:true}).click();await idle(p);
         const calls=await run(p,'return f.calls.filter(c=>c.op==="item_update")');assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);
         assert.deepEqual(calls[0].args,{id:'solo',status:'doing',expectedRevision:1,requestId:calls[0].args.requestId});
@@ -618,11 +643,11 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         const p = await mounted();
         await run(p, 'f.revision=2;f.holdOps=["board"];f.pendingRefresh=f.panel.refresh();');
         await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'board'));
-        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('doing'); await idle(p);
+        await move(p, 'Fase solo', 'doing'); await idle(p);
         await run(p, 'f.delayed.find(d=>d.op==="board").resolve();return f.pendingRefresh;');
         await p.getByRole('region', { name: 'En curso', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
-        assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'doing');
-        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done'); await idle(p);
+        assert.equal(await columnOf(p, 'Fase solo'), 'doing');
+        await move(p, 'Fase solo', 'done'); await idle(p);
         assert.deepEqual(await run(p, 'return f.calls.filter(c=>c.op==="item_update").map(c=>c.args.expectedRevision)'), [1, 3]);
         await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
       });
@@ -643,10 +668,10 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('releasing an uncertain board move restores the selector and allows the same destination again', async () => {
         const p = await mounted(); await run(p, 'f.failWrite=true');
-        await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done');
+        await move(p, 'Fase solo', 'done');
         await p.getByRole('button', { name: 'Liberar borrador', exact: true }).click();
-        assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'todo');
-        await run(p, 'f.failWrite=false'); await p.getByLabel('Mover Fase solo', { exact: true }).selectOption('done'); await idle(p);
+        assert.equal(await columnOf(p, 'Fase solo'), 'todo');
+        await run(p, 'f.failWrite=false'); await move(p, 'Fase solo', 'done'); await idle(p);
         const calls = await run(p, 'return f.calls.filter(c=>c.op==="item_update")'); assert.equal(calls.length, 2);
         assert.notEqual(calls[0].args.requestId, calls[1].args.requestId); assert.equal(calls[1].args.expectedRevision, 1);
         await p.getByRole('region', { name: 'Hecho', exact: true }).getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
@@ -741,7 +766,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
           await p.mouse.up(); if (cancel === 'hide') await run(p, 'f.panel.show();');
           await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
           assert.equal(await p.locator('.is-dragging,.is-drop-target').count(), 0);
-          assert.equal(await p.getByLabel('Mover Fase solo', { exact: true }).inputValue(), 'todo');
+          assert.equal(await columnOf(p, 'Fase solo'), 'todo');
           assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="item_update").length'), 0);
         }
         assert.deepEqual(await run(p, 'return [f.opened,f.created,f.resumed]'), [[], [], []]);
