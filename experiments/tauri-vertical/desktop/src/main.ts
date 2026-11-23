@@ -332,6 +332,7 @@ function refresh() {
 
   if(handoffContext && $<HTMLTextAreaElement>('#handoff-context-text').value!==handoffContext){$<HTMLTextAreaElement>('#handoff-context-text').value=handoffContext;text('#handoff-context-status','');}
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
+  else if ($('#telemetry-summary').textContent === 'Recursos sin conexión') text('#telemetry-summary','CPU — · RAM —');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'}${runner.runnerVersion ? ` · v${runner.runnerVersion}` : ''} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');

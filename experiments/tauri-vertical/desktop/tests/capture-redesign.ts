@@ -134,6 +134,9 @@ try {
       await page.keyboard.press('Escape');
       await page.locator('#open-settings').click(); await page.waitForTimeout(600);
       await page.screenshot({ path: `${dir}/${theme}-7-configuracion.png` });
+      await page.keyboard.press('Escape'); await page.locator('#session-list .session-item').first().click();
+      await page.setViewportSize({ width: 760, height: 560 }); await page.waitForTimeout(700);
+      await page.screenshot({ path: `${dir}/${theme}-8-terminal-760.png` });
       await page.close();
     }
   }
