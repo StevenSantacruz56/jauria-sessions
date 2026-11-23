@@ -63,3 +63,5 @@ Codex revisó el plan y sus correcciones mandan sobre él: secuencias por tipo d
 
 Jauria adopta el modelo de información, no código ni dependencias de Herdr. El estado sigue siendo una declaración de la salida del terminal: no prueba qué hace el agente, no modifica fases ni permisos y no se infiere de texto crudo. Detalle y límites en [SESSION_ALERTS.md](SESSION_ALERTS.md#estado-y-vistos-en-el-runner-14-e).
 
+La interfaz adopta el contrato cuando el runner lo anuncia: el estado, la duración y los avisos de cada sesión salen del registro del runner, que todas las superficies leen igual, y lo visto vuelve con `mark_seen` usando el registro que se pintó. Siguiendo a Herdr, el fin no visto se conserva aunque el agente siga trabajando. A diferencia de Herdr, el visto automático exige que xterm ya haya pintado el frame del aviso y que la sesión esté atendida; el resto requiere abrir la sesión o Marcar vistos. Con un runner anterior, la interfaz sigue en el modo de 1.3.1. Detalle en [SESSION_ALERTS.md](SESSION_ALERTS.md#la-interfaz-con-el-runner-14-e).
+

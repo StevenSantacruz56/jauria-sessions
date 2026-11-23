@@ -74,6 +74,15 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Persistencia en la tabla nueva `agent_attention` de `runner.sqlite`, sin cambiar `user_version` (5), sin FK, triggers ni prefijo `storage_`. `mark_seen` responde tras confirmar en disco (`durable`); el resto se confirma en menos de 250 ms. El cierre espera a los hilos de los PTY y a los workers de Codex y vacía con el mejor esfuerzo durante como mucho 3 s. Purgar o compactar el historial no borra la atención; las filas de sesiones terminadas con todo visto se limitan a 512 también en ejecución, y los avisos sin ver nunca se descartan. Un runner 1.3.3 abre el perfil, purga y compacta sin tocar la tabla (comprobado con su binario).
 - El escaneo ocurre fuera del candado de publicación: en una ráfaga de 50 MiB con `resize` cada 5 ms, `resize` p99 bajó de 2,8–7,7 ms a 0,3–0,7 ms y el drenaje no empeoró. La compilación de macOS ejecuta ahora la suite `agent_attention_rpc`. La interfaz que consume este contrato llega aparte.
 
+### Sin publicar · 1.4.0 entrega E: atención de agentes en la interfaz
+
+- Con `agentAttentionVersion: 1` la interfaz toma del runner el estado declarado, la duración del turno y los avisos sin ver de cada sesión. Barra lateral, pestañas, cabecera del panel, barra de estado, campana, pies de tarjeta de Pulso, paleta y Dock leen la misma fuente (`src/attention-source.ts`). El estado y la duración sobreviven a cerrar la ventana, reconectar y recargar. «Trabajando» solo con `state == "working"`.
+- «Turno terminado» sigue visible y contado aunque el agente ya trabaje en otro turno (la fila indica «Trabaja de nuevo»). Un bloqueo dura mientras se declara. `permission` del runner solo dice que la solicitud llegó sin verse: el permiso pendiente sigue saliendo de `codex_state`.
+- Lo visto vuelve al runner con `mark_seen`, con el `epoch` y el `through` del registro que se pintó: automático solo para avisos cuyo frame xterm ya consumió en la sesión atendida, fuera del replay; los demás, al abrir la sesión o con Marcar vistos. Lotes de hasta 64, una llamada a la vez y solo con algo nuevo; un rechazo por `epoch` se resincroniza, `durable: false` no se muestra como error y un fallo de red conserva el visto local y reintenta.
+- Primer contacto: los pendientes del runner cuentan en la campana, la barra de estado y el Dock desde el primer render. Las notificaciones de macOS solo avisan de secuencias posteriores a la conexión y no se repiten al reconectar. Con `hasMore`, los totales vienen del runner y la lista de la campana termina con «y N más sin listar».
+- Con un runner 1.3.x todo queda como antes: lector de OSC en xterm, visto en la ventana y primera instantánea silenciosa.
+- Pruebas: vectores compartidos contra `parseProgramStatus` y el xterm instalado en Node, Chromium y WebKit; reglas de visto, línea base de macOS y `hasMore`; suite de navegador `tests/browser/agent-attention.test.ts` con los dos modos. La prueba de prioridad de terminal espera la entrada antes de medir el pintado tras reconectar (antes fallaba ~1 de cada 10 en WebKit).
+
 ## [1.3.3] - 2026-11-18
 
 ### Pulso para agentes

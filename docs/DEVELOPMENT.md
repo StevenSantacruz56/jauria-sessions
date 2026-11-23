@@ -188,6 +188,15 @@ cargo test --locked --test agent_attention_rpc
 cargo test --release --locked --test agent_attention_rpc burst -- --ignored --nocapture
 ```
 
+Lado de la interfaz, desde `experiments/tauri-vertical/desktop` (frontera Tauri sintética; no abre runner, perfiles ni proveedores):
+
+```sh
+node --test tests/attention-source.test.ts tests/program-status-vectors.test.ts
+node --test --test-concurrency=1 tests/browser/agent-attention.test.ts tests/browser/program-status-parity.test.ts
+```
+
+`attention-source.test.ts` cubre el mapeo de `agent`, cada regla de marcar visto, la línea base de macOS y `hasMore`. `program-status-vectors.test.ts` pasa los vectores compartidos por `parseProgramStatus` y por el xterm instalado con los manejadores del cliente (entero, cada corte en dos y byte a byte); `program-status-parity.test.ts` repite los flujos en Chromium y WebKit. Un vector que discrepe con xterm es un hallazgo del runner: no se edita el vector. `agent-attention.test.ts` alterna `agentAttentionVersion` en el arnés; con `AGENT_ATTENTION_SCREENSHOT_DIR=/ruta/absoluta` guarda capturas sintéticas claras y oscuras.
+
 La tercera mide una ráfaga de 50 MiB con `resize` concurrente; con `AGENT_BASELINE_RUNNER=/ruta/absoluta/aw-runner` compara con otro binario (`AGENT_BASELINE_LAST=1` invierte el orden; `AGENT_BENCH_NO_RESIZE=1` mide solo el drenaje). Los vectores del parser son `desktop/tests/fixtures/program-status-vectors.json`, compartidos con las pruebas del cliente.
 
 ### Vuelta atrás a la versión anterior (paso de la lista de release)
