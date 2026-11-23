@@ -37,7 +37,7 @@ async function install(page:Page, history = '', options: FixtureOptions = {}){aw
    else if(a.op==='link')result={link:structuredClone(x)};
    else if(a.op==='item_update'){const item=items.find(i=>i.id===x.id);if(item.revision!==x.expectedRevision)return{ok:false,error:'revision conflict'};Object.assign(item,Object.fromEntries(Object.entries(x).filter(([k])=>!['requestId','expectedRevision'].includes(k))),{revision:++rev});result={item:structuredClone(item)};}
    else return{ok:false,error:'Unexpected synthetic operation'};
-   if(w.pulsoFixture.holdNext===a.op){w.pulsoFixture.holdNext=null;await new Promise(resolve=>w.pulsoFixture.held.push({op:a.op,result,resolve}));}
+   if(w.pulsoFixture.holdNext===a.op&&Object.entries(w.pulsoFixture.holdWhen??{}).every(([k,v])=>x[k]===v)){w.pulsoFixture.holdNext=null;w.pulsoFixture.holdWhen=null;await new Promise(resolve=>w.pulsoFixture.held.push({op:a.op,result,resolve}));}
    return{ok:true,result};
   }
   if(cmd==='runner_request'){
@@ -183,9 +183,13 @@ try{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
     try {
       await install(page); await page.goto(url); await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      await page.evaluate(()=>(window as any).pulsoFixture.holdNext='projects');
       await page.locator('#open-settings').click();
       const settings=page.getByRole('dialog',{name:'Configuración',exact:true}); await settings.waitFor();
+      // Manual access is a collapsed section since 1.3.3: expanding it starts the
+      // permissions read. Hold only that page (limit 50) so a sidebar refresh of
+      // 'projects' (limit 20) cannot take the hold instead.
+      await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.holdNext='projects';f.holdWhen={limit:50,cursor:0};});
+      await settings.getByText('Acceso manual para sesiones existentes',{exact:true}).click();
       await page.waitForFunction(()=>(window as any).pulsoFixture.held.length===1);
       await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.held[0].result.projects=[{id:'stale-project',title:'STALE SYNTHETIC RESPONSE'}];});
       // Exercise the shell's real reconnect handler while the modal read is held.
