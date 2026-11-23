@@ -1650,6 +1650,82 @@ mod pulso_revision_tests {
         Ok(())
     }
 
+    /// Medium on-disk profile with the real storage budget: summary and board
+    /// run under the Pulso service mutex while a writer and `status` keep going.
+    /// Thresholds are an order of magnitude above debug-build measurements.
+    #[test]
+    fn pulso_reads_under_the_service_mutex_do_not_stall_writes_or_status() -> Result<()> {
+        use rusqlite::params;
+        use std::sync::atomic::AtomicBool;
+        let (_tmp,root,runner)=fixture()?;
+        status(&runner)?;
+        let pulso_service=runner.pulso.clone().context("Pulso")?;
+        pulso_service.with_store_for_test(|c| {
+            c.execute_batch("BEGIN")?;
+            let mut doc=c.prepare("INSERT INTO docs VALUES(?,?,?)")?;
+            for n in 0..50 {
+                doc.execute(params!["project",format!("project-{n:02}"),json!({"id":format!("project-{n:02}"),"title":format!("Proyecto {n}"),"plan":"","mainSessionId":format!("main-{n}"),"revision":1,"archived":false,"createdAt":n,"updatedAt":n}).to_string()])?;
+            }
+            for n in 0..5000 {
+                // project-00 gets the 80 board cards (20 per column); the rest spread out.
+                let (project,status)=if n<80 {("project-00".to_owned(),["todo","doing","waiting","done"][n/20])} else {(format!("project-{:02}",n%50),["todo","doing","waiting","done"][n%4])};
+                let id=format!("item-{n}");
+                doc.execute(params!["item",id,json!({"id":id,"projectId":project,"title":"Fase sintética","note":"n".repeat(200),"status":status,"position":n,"revision":1,"archived":false,"createdAt":n,"updatedAt":n}).to_string()])?;
+                if n<80 { for k in 0..20 { doc.execute(params!["checkpoint",format!("cp-{n}-{k}"),json!({"id":format!("cp-{n}-{k}"),"itemId":id,"brief":"b","nextAction":"n","sessionId":format!("cp-session-{k}"),"createdAt":k}).to_string()])?; } }
+            }
+            for n in 0..1000 {
+                let body=if n%2==0 {json!({"id":format!("link-x{n}"),"projectId":format!("project-{:02}",n%50),"sessionId":format!("session-{n}")})} else {json!({"id":format!("link-x{n}"),"itemId":format!("item-{}",n*5%5000),"sessionId":format!("session-{n}")})};
+                doc.execute(params!["link",body["id"].as_str().unwrap(),body.to_string()])?;
+            }
+            drop(doc);
+            c.execute_batch("COMMIT")
+        })?;
+        let rows:i64=pulso_service.with_store_for_test(|c|c.query_row("SELECT rows FROM pulso_budget",[],|r|r.get(0)))?;
+        assert!(rows>7000,"budget triggers active: {rows}");
+        let timed=|op:&str,args:Value|->Result<(Duration,Value)>{let t=Instant::now();let v=pulso(&root,op,args)?;Ok((t.elapsed(),v))};
+        let (summary_alone,summary)=timed("sidebar_summary",json!({}))?;
+        let (board_alone,board)=timed("board",json!({"projectId":"project-00"}))?;
+        assert_eq!(summary["projects"].as_array().unwrap().len(),50);
+        assert_eq!(board["columns"]["todo"]["items"][0]["checkpointCount"],20);
+        let stop=Arc::new(AtomicBool::new(false));
+        let reader={let (root,stop)=(root.clone(),stop.clone());thread::spawn(move||->Result<(usize,Duration)>{
+            let (mut n,mut worst)=(0,Duration::ZERO);
+            while !stop.load(Ordering::Acquire) {
+                for (op,args) in [("sidebar_summary",json!({})),("board",json!({"projectId":"project-00"}))] {
+                    let t=Instant::now();pulso(&root,op,args)?;worst=worst.max(t.elapsed());n+=1;
+                }
+            }
+            Ok((n,worst))
+        })};
+        let writer={let root=root.clone();thread::spawn(move||->Result<Duration>{
+            let mut worst=Duration::ZERO;
+            for n in 0..20 {
+                let t=Instant::now();
+                pulso(&root,"item_create",json!({"id":format!("w{n}"),"requestId":format!("w{n}"),"projectId":"project-01","title":"concurrent"}))?;
+                worst=worst.max(t.elapsed());
+            }
+            Ok(worst)
+        })};
+        let mut status_worst=Duration::ZERO;
+        let until=Instant::now()+Duration::from_millis(300);
+        while !writer.is_finished() || Instant::now()<until {
+            let t=Instant::now();let value=status(&runner)?;status_worst=status_worst.max(t.elapsed());
+            assert!(value["pulsoRevision"].as_u64().is_some());
+            thread::sleep(Duration::from_millis(5));
+        }
+        let write_worst=writer.join().unwrap()?;
+        stop.store(true,Ordering::Release);
+        let (reads,read_worst)=reader.join().unwrap()?;
+        eprintln!("pulso mutex: summary alone {summary_alone:?}, board alone {board_alone:?}; concurrent reads {reads} worst {read_worst:?}; write worst {write_worst:?}; status worst {status_worst:?}");
+        assert!(reads>=2);
+        assert_eq!(meta(&root)?,20);
+        assert_eq!(status(&runner)?["pulsoRevision"],20);
+        assert!(read_worst<Duration::from_millis(1500),"read {read_worst:?}");
+        assert!(write_worst<Duration::from_millis(2000),"write {write_worst:?}");
+        assert!(status_worst<Duration::from_millis(500),"status {status_worst:?}");
+        Ok(())
+    }
+
     #[test]
     fn status_omits_revision_when_pulso_is_unavailable() -> Result<()> {
         let (_tmp,_root,runner)=fixture()?;
