@@ -1283,6 +1283,73 @@ mod store_tests {
     }
 
     #[test]
+    fn narrow_agent_reads_never_reach_the_other_project_or_new_footers() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        // Everything that belongs to pb or to Pendientes carries a SECRET marker.
+        write(&mut store, &mut ui, "project_create", json!({"id":"pa","requestId":"pa","title":"Visible A","mainSessionId":"main-a"}));
+        write(&mut store, &mut ui, "project_create", json!({"id":"pb","requestId":"pb","title":"SECRET-B-TITLE","plan":"SECRET-B-PLAN","mainSessionId":"SECRET-B-MAIN"}));
+        write(&mut store, &mut ui, "item_create", json!({"id":"ia","requestId":"ia","projectId":"pa","title":"Phase A","status":"doing"}));
+        write(&mut store, &mut ui, "item_create", json!({"id":"SECRET-B-PHASE","requestId":"ib","projectId":"pb","title":"SECRET-B-PHASE-TITLE","note":"SECRET-B-NOTE","status":"done"}));
+        write(&mut store, &mut ui, "item_create", json!({"id":"SECRET-PENDING","requestId":"pend","title":"SECRET-PENDING-TITLE"}));
+        for (n, target, session) in [
+            ("la1", json!({"projectId":"pa"}), "s-a-project"), ("la2", json!({"itemId":"ia"}), "s-a-phase"),
+            ("lb1", json!({"projectId":"pb"}), "SECRET-B-SPROJECT"), ("lb2", json!({"itemId":"SECRET-B-PHASE"}), "SECRET-B-SPHASE"),
+            ("lp", json!({"itemId":"SECRET-PENDING"}), "SECRET-PENDING-SESSION"),
+        ] {
+            let mut a = target; a["requestId"] = json!(n); a["sessionId"] = json!(session);
+            write(&mut store, &mut ui, "link", a);
+        }
+        for (item, session, brief) in [("ia", "s-a-cp", "brief A"), ("SECRET-B-PHASE", "SECRET-B-SCP", "SECRET-B-BRIEF")] {
+            let current = store.get("item", item).unwrap();
+            write(&mut store, &mut ui, "checkpoint_create", json!({"id":format!("cp-{}", current["revision"]),"requestId":format!("cp-{item}"),"itemId":item,"expectedRevision":current["revision"],"brief":brief,"nextAction":"next","sessionId":session}));
+        }
+        // Manual one-project policy: narrow scope, no project creation.
+        let agent = Principal { id:"session-a".into(), session:Some("s-agent".into()), projects:HashSet::from(["pa".into()]), create:false, all_projects:false };
+        let allowed = [
+            ("revision", json!({})), ("projects", json!({})), ("projects", json!({"archived":true})), ("projects", json!({"limit":100})),
+            ("project", json!({"id":"pa"})), ("items", json!({})), ("items", json!({"projectId":"pa"})), ("items", json!({"status":"done"})),
+            ("item", json!({"id":"ia"})), ("links", json!({"projectId":"pa"})), ("activity", json!({})), ("activity", json!({"projectId":"pa"})),
+            ("activity", json!({"itemId":"ia"})), ("checkpoint_history", json!({"itemId":"ia"})),
+        ];
+        let mut seen = String::new();
+        for (op, args) in &allowed {
+            let value = store.read(&agent, op, args).unwrap_or_else(|e| panic!("{op} {args}: {e}"));
+            seen.push_str(&value.to_string());
+        }
+        let refused = [
+            ("project", json!({"id":"pb"})), ("items", json!({"projectId":"pb"})), ("item", json!({"id":"SECRET-B-PHASE"})),
+            ("item", json!({"id":"SECRET-PENDING"})), ("links", json!({"projectId":"pb"})), ("activity", json!({"projectId":"pb"})),
+            ("activity", json!({"itemId":"SECRET-B-PHASE"})), ("activity", json!({"projectId":null})), ("checkpoint_history", json!({"itemId":"SECRET-B-PHASE"})),
+        ];
+        for (op, args) in &refused {
+            let error = store.read(&agent, op, args).unwrap_err().to_string();
+            assert_eq!(error, "not found or not authorized", "{op} {args}");
+        }
+        for (op, args) in [("sidebar_summary", json!({})), ("sidebar_summary", json!({"ifRevision":0})), ("board", json!({"projectId":"pa"})), ("board", json!({"projectId":"pb"})), ("board", json!({"projectId":null}))] {
+            assert_eq!(store.read(&agent, op, &args).unwrap_err().to_string(), "unauthorized", "{op} {args}");
+        }
+        assert!(!seen.contains("SECRET"), "agent read leaked another scope: {seen}");
+        for visible in ["s-a-project", "s-a-phase", "s-a-cp", "Phase A"] { assert!(seen.contains(visible), "{visible}"); }
+        // item / items keep their pre-E5 shape: footer keys exist only on board cards.
+        assert!(!seen.contains("checkpointCount") && !seen.contains("\"source\""), "{seen}");
+        let item = store.read(&agent, "item", &json!({"id":"ia"})).unwrap();
+        let keys: Vec<_> = item.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["checkpointCursor","checkpoints","checkpointsHasMore","item","links","linksHasMore"]);
+        let card_keys = ["archived","createdAt","id","note","position","projectId","revision","status","title","updatedAt","updatedBy","updatedSessionId"];
+        assert_eq!(item["item"].as_object().unwrap().keys().cloned().collect::<Vec<_>>(), card_keys);
+        let page = store.read(&agent, "items", &json!({"projectId":"pa"})).unwrap();
+        assert_eq!(page.as_object().unwrap().keys().cloned().collect::<Vec<_>>(), ["hasMore","items","nextCursor","revision","totalCount"]);
+        for row in page["items"].as_array().unwrap() { assert_eq!(row.as_object().unwrap().keys().cloned().collect::<Vec<_>>(), card_keys); }
+        // The UI sees the same item and page byte for byte.
+        assert_eq!(store.read(&ui, "item", &json!({"id":"ia"})).unwrap().to_string(), item.to_string());
+        assert_eq!(store.read(&ui, "items", &json!({"projectId":"pa"})).unwrap()["items"].to_string(), page["items"].to_string());
+        // Only the UI board shows the footer.
+        let board = store.read(&ui, "board", &json!({"projectId":"pa"})).unwrap();
+        assert_eq!(board["columns"]["doing"]["items"][0]["session"], json!({"id":"s-a-phase","source":"link"}));
+    }
+
+    #[test]
     fn board_card_footer_statement_uses_item_index_without_sorting() {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let p = plan(&store, BOARD_CARDS_SQL, [r#"["a","b"]"#]);
