@@ -22,6 +22,8 @@ export type PulsoPanelOptions = {
   backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
+  /** Board selection or saved data changed (read-only signal for the sidebar summary). */
+  onChange?: () => void;
 };
 type Page<T> = { rows: T[]; hasMore: boolean; cursor?: string | number };
 const labels = { todo: 'Por hacer', doing: 'En curso', waiting: 'En espera', done: 'Hecho' };
@@ -40,7 +42,7 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; dispose(): void } {
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
   }
@@ -60,12 +62,12 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     input.value = values.some(([id]) => id === value) ? value : values[0]?.[0] ?? ''; wrap.append(input); return { wrap, input };
   }
   const root = el('section', '', 'pulso-panel'); root.hidden = true; root.setAttribute('aria-label', 'Pulso');
-  const header = el('header', '', 'pulso-header'); const heading = el('div');
-  heading.append(el('h1', 'Pulso'), el('p', 'Tu trabajo, de una fase a la siguiente.', 'pulso-muted'));
+  // The workbench header already names Pulso; no second title or permanent tagline.
+  const header = el('header', '', 'pulso-header');
   const headerActions=el('div','','pulso-header-actions');
   if(options.backToTerminal)headerActions.append(button('Volver a terminal',()=>options.backToTerminal!(),'quiet'));
   headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'));
-  header.append(heading,headerActions);
+  header.append(headerActions);
   const feedback = el('div', '', 'pulso-feedback'); feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   const errors = el('div', '', 'pulso-error'); errors.hidden = true; errors.setAttribute('role', 'alert');
   const undoSlot = el('div', '', 'pulso-undo');
@@ -171,7 +173,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (disposed) return;
       await m.apply(data);
       if (disposed) return;
-      say('Guardado.');
+      say('Guardado.');notifyChange();
     } catch (error) {
       if (disposed) return;
       failed = m; errors.hidden = false;
@@ -551,7 +553,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     }
     void check();
   }
-  function rememberBoard(){restoreBoardId=null;try{saveLastBoard(localStorage,options.persistenceKey?.()??null,selectedProject?.id??null);}catch{/* Optional view metadata. */}}
+  function notifyChange(){try{options.onChange?.();}catch{/* Observers never block Pulso. */}}
+  function rememberBoard(){notifyChange();restoreBoardId=null;try{saveLastBoard(localStorage,options.persistenceKey?.()??null,selectedProject?.id??null);}catch{/* Optional view metadata. */}}
   async function copy(value: string) {
     try { await navigator.clipboard.writeText(value); if (!disposed) options.notice('Copiado. Pégalo cuando estés listo.'); }
     catch { say('No se pudo copiar. Selecciona el texto y cópialo manualmente.'); }
@@ -581,7 +584,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       }
       const changed=await readBoard(selectedProject?.id??null,boardRevision);
       if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
-      const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed||sessionsChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
+      const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed)notifyChange();if(changed||sessionsChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
       if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem){
         if(changed){
           const data=await request('item',{id:selectedItem.id});
@@ -631,6 +634,14 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
     hide() {if(disposed)return;visible=false;cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
+    /** Sidebar entry: same guards as the tabs; a draft or failed save keeps the current board. */
+    async openBoard(projectId){
+      if(disposed||!visible)return;restoreBoardId=null;
+      if(refreshing)await refreshing.catch(()=>{});
+      if(disposed||!visible)return;
+      if(projectId===null)await choosePending();else await chooseProject(projectId);
+    },
+    currentBoard(){return selectedProject?.id??null;},
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
     dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };

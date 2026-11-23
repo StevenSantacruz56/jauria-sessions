@@ -93,7 +93,8 @@ async function counts(page: Page, total: number, unseen: number) {
       && header.hidden === (total === 0)
       && header.dataset.total === String(total) && header.dataset.unread === String(unseen)
       && document.querySelector<HTMLElement>('#session-alerts-count')!.hidden === (unseen === 0)
-      && banner.hidden === (!['attention', 'activity'].some(filter => document.querySelector(`[data-filter=${filter}]`)?.getAttribute('aria-pressed') === 'true') || total === 0);
+      // The banner belongs to the attention list and to Abiertas · Por estado (filter 'activity').
+      && banner.hidden === (!['attention', 'activity'].includes(document.querySelector<HTMLElement>('.workspace-navigation')?.dataset.filter ?? '') || total === 0);
   }, { total, unseen });
   assert.equal(await page.title(), unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría');
   const dock = await page.evaluate(() => (window as any).attentionFixture.badges.at(-1) ?? 0);

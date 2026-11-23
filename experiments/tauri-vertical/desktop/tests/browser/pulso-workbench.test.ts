@@ -290,6 +290,63 @@ try{
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='item_update').length),0);assert.deepEqual(errors,[]);
     }finally{await browser.close();}
   });
+  await test(`${engine.name()}: sidebar lists Pulso boards and groups agents by project or by state`,async()=>{
+    const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+    try{
+      await install(page);await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
+      // Proyectos: existing reads only; progress is Hecho/total and Pendientes counts unfinished cards.
+      await page.waitForFunction(()=>document.querySelector('#sidebar-project-list button[data-board="plan"] .sidebar-row-meta')?.textContent==='1/4');
+      assert.equal(await page.locator('#sidebar-project-list button[data-board="plan"]').getAttribute('aria-label'),'Abrir tablero Integrar Pulso en Jauria, 1 de 4 hechas');
+      assert.equal(await page.locator('#sidebar-project-list button[data-board=""]').getAttribute('aria-label'),'Abrir tablero Pendientes, 1 sin terminar');
+      assert.equal(await page.locator('#register-project').isVisible(),false,'Git repositories are not offered in the sidebar');
+      assert.deepEqual(await page.evaluate(()=>[...new Set((window as any).pulsoFixture.calls.map((c:any)=>c.op))].sort()),['items','links','projects']);
+      // Por proyecto is the default: the main session sits under its project, the rest under Sin proyecto.
+      assert.equal(await page.locator('[data-grouping="project"]').getAttribute('aria-pressed'),'true');
+      await page.locator('.session-group[data-project="plan"] .session-item[data-session-id="main"]').waitFor();
+      await page.locator('.session-group[data-project="none"] .session-item[data-session-id="related"]').waitFor();
+      assert.deepEqual(await page.locator('#session-list .group-heading > span:first-child').allTextContents(),['Integrar Pulso en Jauria','Sin proyecto']);
+      const related=page.locator('.session-item[data-session-id="related"]');const main=page.locator('.session-item[data-session-id="main"]');
+      assert.equal(Math.round((await related.boundingBox())!.height),30,'one-line 30px agent rows');
+      assert.equal(await related.locator('.agent-indicator').getAttribute('data-shape'),'ring','an open process without a declared state never spins');
+      assert.equal(await related.locator('.session-item-state-label').textContent(),'Abierta');
+      assert.equal(await related.locator('.provider-badge').getAttribute('data-provider'),'codex');
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=working\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='spinner');
+      assert.equal(await main.locator('.agent-indicator').getAttribute('title'),'Trabajando');
+      assert.equal(await main.locator('.session-item-state-label').textContent(),'Trabajando','state is available as text, not only colour');
+      assert.equal(await main.locator('.session-item-duration').textContent(),'<1 min');
+      // Compact header: the search field opens from its button or ⌘K and closes with Escape.
+      assert.equal(await page.locator('#session-search').isVisible(),false);
+      await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.blur());await page.keyboard.press('Meta+k');
+      await page.waitForFunction(()=>document.activeElement?.id==='session-search');
+      assert.equal(await page.locator('#toggle-search').getAttribute('aria-expanded'),'true');
+      await page.keyboard.type('Validación');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===1);
+      await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===2);
+      assert.equal(await page.locator('#session-search').isVisible(),false);
+      await page.locator('#toggle-search').click();await page.waitForFunction(()=>document.activeElement?.id==='session-search');await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#new-session').getAttribute('aria-label'),'Nueva sesión');
+      const shots=process.env.PULSO_SCREENSHOT_DIR;
+      if(shots){await mkdir(shots,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-project-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      // Por estado keeps Abiertas, reuses the activity sections and is remembered per profile.
+      await page.locator('[data-grouping="state"]').click();
+      await page.locator('.session-group[data-activity="working"] .session-item[data-session-id="main"]').waitFor();
+      assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true');
+      assert.equal(await page.evaluate(()=>localStorage.getItem('jauria:agent-grouping:/synthetic')),JSON.stringify({schemaVersion:1,grouping:'state'}));
+      if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-state-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.reload();await page.waitForFunction(()=>document.querySelector('[data-grouping="state"]')?.getAttribute('aria-pressed')==='true'&&!!document.querySelector('.session-group[data-activity] .session-item'));
+      assert.equal(await page.locator('.session-group[data-project]').count(),0);
+      // A project row opens that board; Pendientes opens the standalone board.
+      await page.waitForFunction(()=>!(document.querySelector('#sidebar-project-list button[data-board="plan"]')as HTMLButtonElement|null)?.disabled);
+      await page.locator('#sidebar-project-list button[data-board="plan"]').click();
+      await page.waitForFunction(()=>document.querySelector('.pulso-board')?.getAttribute('data-project-id')==='plan'&&document.querySelector('#sidebar-project-list button[data-board="plan"]')?.getAttribute('aria-current')==='true');
+      assert.equal(await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).getAttribute('aria-current'),'true');
+      if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-pulso-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.locator('#sidebar-project-list button[data-board=""]').click();
+      await page.waitForFunction(()=>document.querySelector('.pulso-board')?.getAttribute('data-project-id')===''&&document.querySelector('#sidebar-project-list button[data-board=""]')?.getAttribute('aria-current')==='true');
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
+      assert.deepEqual(errors,[]);
+    }finally{await browser.close();}
+  });
   await test(`${engine.name()}: a reported blocker stays visible and reappears after new work`,async()=>{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     try{
@@ -302,7 +359,8 @@ try{
       await emit('working');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='false'));
       await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes('Solicita atención')&&n.getAttribute('data-attention')==='true'));
       assert.equal(await session.getAttribute('data-unseen'),'true');
-      await page.locator('#activity-filter').click();
+      await page.locator('[data-grouping="state"]').click();
+      assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true','Por estado stays inside Abiertas');
       await page.locator('.session-group[data-activity="needs"]').waitFor();
       assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
       const screenshotDir=process.env.PULSO_SCREENSHOT_DIR;

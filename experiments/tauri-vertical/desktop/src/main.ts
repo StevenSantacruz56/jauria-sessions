@@ -29,8 +29,10 @@ import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Tas
 import { shell, paneMarkup, icon } from './ui';
 import { mountPulsoPanel } from './pulso-panel';
 import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
-import { activitySections, sessionActivity } from './session-activity';
-import { statusLabel, providerLabel, groupSessions, matchesSession, type SessionFilter } from './workspace';
+import { sessionActivity } from './session-activity';
+import { agentIndicator, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
+import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
+import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
 
 type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -99,8 +101,22 @@ let replayThrough = 0;
 let split = false;
 let focusedPane = 0;
 let filter: SessionFilter = 'open';
+// Agentes: Abiertas uses 'open' (Por proyecto) or 'activity' (Por estado).
+let grouping: AgentGrouping = 'project';
+let groupingProfile: string | null | undefined;
+const openFilter = (): SessionFilter => grouping === 'state' ? 'activity' : 'open';
 let query = '';
+let searchOpen = false;
 let sidebarKey = '';
+let projectListKey = '';
+let sessionSetKey = '';
+// Pulso summary for the sidebar. Event-driven, never a timer: see sidebar-projects.ts.
+const sidebarProjects = new SidebarProjects((op, args) => requestPulso(op, args));
+function pulsoReadable() { return connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable; }
+function loadSidebarProjects() {
+  if (disposed || !pulsoReadable()) return;
+  void sidebarProjects.load().then(changed => { if (changed && !disposed) refresh(); }).catch(() => { /* Keep the last summary; the next trigger retries. */ });
+}
 let selectKey = '';
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
@@ -254,6 +270,33 @@ async function request<T = unknown>(op: string, args: object): Promise<T> {
   return response.result;
 }
 function isLive(session: Session) { return ['running', 'starting'].includes(session.status); }
+/** Proyectos: Pulso boards from the read-only sidebar summary; rows open the board. */
+function renderProjectList(planning: boolean) {
+  const summary = sidebarProjects.snapshot;
+  const disabled = !connected || runner?.pulsoBoardVersion !== 1 || !runner?.pulsoAvailable;
+  const current = planning && pulsoPanel ? pulsoPanel.currentBoard() ?? '' : null;
+  const key = JSON.stringify([disabled, current, summary.projects.map(p => [p.id, p.title, p.done, p.total]), summary.pendingOpen, summary.hasMore, summary.revision === null]);
+  if (key === projectListKey) return;
+  projectListKey = key;
+  const list = $('#sidebar-project-list'); list.replaceChildren();
+  const row = (board: string, name: string, initial: string, meta: string, label: string) => {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'sidebar-row project-row'; button.dataset.board = board;
+    button.disabled = disabled; button.setAttribute('aria-current', String(current === board)); button.setAttribute('aria-label', label); button.title = label;
+    const badge = document.createElement('span'); badge.className = 'project-initial'; badge.setAttribute('aria-hidden', 'true'); badge.textContent = initial;
+    const text = document.createElement('span'); text.className = 'sidebar-row-name'; text.textContent = name;
+    const progress = document.createElement('span'); progress.className = 'sidebar-row-meta'; progress.setAttribute('aria-hidden', 'true'); progress.textContent = meta;
+    button.append(badge, text, progress); list.append(button);
+  };
+  for (const project of summary.projects) {
+    const progress = projectProgressLabel(project);
+    row(project.id, project.title, Array.from(project.title.trim())[0]?.toLocaleUpperCase() ?? '·', progress,
+      `Abrir tablero ${project.title}${progress ? `, ${project.done} de ${project.total} hechas` : ''}`);
+  }
+  const pending = summary.pendingOpen === null ? '' : String(summary.pendingOpen);
+  row('', 'Pendientes', '·', pending, `Abrir tablero Pendientes${pending ? `, ${pending} sin terminar` : ''}`);
+  if (summary.hasMore) { const more = document.createElement('p'); more.className = 'sidebar-hint'; more.textContent = 'Hay más proyectos en Pulso.'; list.append(more); }
+  else if (disabled) { const hint = document.createElement('p'); hint.className = 'sidebar-hint'; hint.textContent = connected ? 'Pulso necesita el runner actualizado.' : 'Pulso sin conexión.'; list.append(hint); }
+}
 function refresh() {
   const handoffContext=handoffContexts.get(activeView()?.session.id??'');
   $('#handoff-context').hidden=taskScreen!=='terminal' || !handoffContext;
@@ -262,7 +305,8 @@ function refresh() {
   $('#open-pulso').setAttribute('aria-pressed', String(planning));
   $<HTMLButtonElement>('#open-pulso').disabled = !connected || runner?.pulsoBoardVersion !== 1 || !runner?.pulsoAvailable;
   $('#open-pulso').title = runner?.pulsoBoardVersion !== 1 ? 'El tablero necesita el runner actualizado; tus sesiones se conservan' : runner?.pulsoAvailable ? 'Planes y pendientes en este Mac' : 'Pulso no disponible; sus datos se conservan';
-  if (planning !== pulsoShown) { pulsoShown = planning; if (planning) pulsoPanel?.show(); else pulsoPanel?.hide(); }
+  if (planning !== pulsoShown) { pulsoShown = planning; if (planning) pulsoPanel?.show(); else { pulsoPanel?.hide(); loadSidebarProjects(); } }
+  renderProjectList(planning);
 
   if(handoffContext && $<HTMLTextAreaElement>('#handoff-context-text').value!==handoffContext){$<HTMLTextAreaElement>('#handoff-context-text').value=handoffContext;text('#handoff-context-status','');}
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
@@ -315,15 +359,19 @@ function refresh() {
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
   const occupied=sessions.filter(s=>!['exited','stopped','failed','interrupted','released'].includes(s.status)).length;
-  if (filter === 'attention' && count('attention') === 0) filter = 'open';
-  text('#capacity', `${occupied} de ${sessionLimit()} plazas ocupadas`);
+  if (filter === 'attention' && count('attention') === 0) filter = openFilter();
+  text('#capacity', `${occupied} de ${sessionLimit()} plazas`);
+  $('#capacity').title = `${occupied} de ${sessionLimit()} plazas ocupadas`;
   text('#open-count', String(open)); text('#closed-count', String(count('closed')));
-  const workingCount = [...activityById.values()].filter(item => item.kind === 'working').length;
-  text('#activity-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'} · ${workingCount} en curso`);
   text('#attention-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
   text('#session-total', `${open} abiertas · ${count('closed')} en historial`);
-  document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter)));
+  const tab = filter === 'activity' ? 'open' : filter;
+  document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === tab)));
+  document.querySelectorAll<HTMLButtonElement>('[data-grouping]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grouping === grouping)));
+  // Sidebar Pulso summary: reread when Pulso becomes readable or the session set changes.
+  const nextSessionSet = `${pulsoReadable()}|${runner?.generation ?? ''}|${sessions.map(s => s.id).join(',')}`;
+  if (nextSessionSet !== sessionSetKey) { sessionSetKey = nextSessionSet; loadSidebarProjects(); }
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
   for (const id of ['new-session', 'welcome-create']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying || occupied >= sessionLimit();
@@ -414,29 +462,37 @@ function refresh() {
   $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying;
   refreshTasks(sessions);
   const visibleSessions = sessions.filter(s => matches(s, filter, query));
-  $('.workspace-navigation').dataset.sessionView = filter === 'activity' || filter === 'attention' ? 'priority' : 'folders';
-  const groups = filter === 'activity'
-    ? activitySections.map(section => ({key: section.kind, path: null, name: section.label, kind: section.kind,
-      sessions: visibleSessions.filter(s => activityById.get(s.id)?.kind === section.kind)})).filter(group => group.sessions.length)
-    : groupSessions(visibleSessions).map(group => ({...group, kind: null}));
-  $('#session-list').setAttribute('aria-label', filter === 'activity' ? 'Actividad por prioridad' : filter === 'attention' ? 'Sesiones con avisos' : 'Sesiones por carpeta');
+  const navigation = $('.workspace-navigation');
+  navigation.dataset.sessionView = filter === 'activity' || filter === 'attention' ? 'priority' : 'projects';
+  navigation.dataset.filter = filter;
+  const kindOf = (id: string) => activityById.get(id)?.kind ?? 'unreported';
+  const summary = sidebarProjects.snapshot;
+  // Attention and Por estado reuse the activity sections; Abiertas/Historial
+  // Por proyecto use the Pulso main session and project links known locally.
+  const groups = filter === 'activity' || filter === 'attention'
+    ? groupAgents(visibleSessions, 'state', kindOf)
+    : groupAgents(visibleSessions, grouping, kindOf, summary.projects, projectSessionIndex(summary.projects, summary.links));
+  $('#session-list').setAttribute('aria-label', filter === 'attention' ? 'Sesiones con avisos' : filter === 'activity' ? 'Agentes por estado' : filter === 'closed' ? (grouping === 'state' ? 'Historial por estado' : 'Historial por proyecto') : 'Agentes por proyecto');
   // Keep the button itself mounted while status, output metadata or attention
   // changes. Replacing it between pointer down and up loses the user's click.
-  const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.sessions.map(s => s.id)])]);
+  const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
   if (sidebarKey !== key) {
     sidebarKey = key;
     const list = $('#session-list'); list.replaceChildren();
     for (const group of groups) {
-      const section = document.createElement('section'); section.className = 'session-group'; if (group.kind) section.dataset.activity = group.kind;
+      const section = document.createElement('section'); section.className = 'session-group';
+      if (group.kind) section.dataset.activity = group.kind; else section.dataset.project = group.projectId ?? 'none';
       const heading = document.createElement('div'); heading.className = 'group-heading';
-      if (group.kind) { const marker = document.createElement('span'); marker.className = 'activity-group-marker'; marker.dataset.activity = group.kind; heading.append(marker); }
-      else heading.innerHTML = icon('folder');
-      const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.path ?? group.name;
-      if (group.kind) { const count = document.createElement('span'); count.className = 'activity-group-count'; count.textContent = String(group.sessions.length); heading.append(count); }
+      if (group.kind) { const marker = document.createElement('span'); marker.className = 'activity-group-marker'; marker.dataset.activity = group.kind; marker.setAttribute('aria-hidden', 'true'); heading.append(marker); }
+      const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.name;
+      const count = document.createElement('span'); count.className = 'activity-group-count'; count.textContent = String(group.sessions.length); heading.append(count);
+      section.setAttribute('aria-label', `${group.name}: ${group.sessions.length}`);
       section.append(heading);
       for (const s of group.sessions) {
         const button = document.createElement('button'); button.className = 'session-item'; button.dataset.sessionId = s.id;
-        button.innerHTML = `<span class="session-item-copy"><span class="session-item-title"></span><span class="session-item-state"><span class="state-dot"></span><span class="session-item-state-label"></span></span><span class="session-item-meta"></span></span>`;
+        // One visual line. State text stays in the DOM for assistive technology;
+        // the indicator shape and its title carry it visually.
+        button.innerHTML = `<span class="provider-badge" aria-hidden="true"></span><span class="session-item-title"></span><span class="session-item-duration"></span><span class="session-item-state"><span class="agent-indicator" aria-hidden="true"></span><span class="session-item-state-label sr-only"></span></span><span class="session-item-meta sr-only"></span>`;
         button.addEventListener('click', () => selectSession(s.id)); section.append(button);
       }
       list.append(section);
@@ -456,15 +512,24 @@ function refresh() {
     button.setAttribute('aria-current', String(selected));
     button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
     button.dataset.activity = activity.kind;
-    (button.querySelector('.state-dot') as HTMLElement).dataset.state = activity.kind;
+    const badge = button.querySelector<HTMLElement>('.provider-badge')!;
+    const provider = s.kind === 'claude' || s.kind === 'codex' ? s.kind : 'terminal';
+    if (badge.dataset.provider !== provider) { badge.dataset.provider = provider; badge.textContent = provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$'; }
+    const indicator = button.querySelector<HTMLElement>('.agent-indicator')!;
+    const shape = agentIndicator(activity.kind);
+    indicator.dataset.state = activity.kind; indicator.dataset.shape = shape.shape; indicator.dataset.tone = shape.tone;
+    if (indicator.title !== activity.label) indicator.title = activity.label;
     const title = button.querySelector('.session-item-title')!;
     if (title.textContent !== s.title) title.textContent = s.title;
+    const duration = isLive(s) ? compactDuration(programStatuses.changedAt(s.id)) : '';
+    const time = button.querySelector('.session-item-duration')!;
+    if (time.textContent !== duration) time.textContent = duration;
     const state = button.querySelector('.session-item-state-label')!;
     if (state.textContent !== activity.label) state.textContent = activity.label;
     const meta = `${providerLabel(s.kind)} · ${alert ? `${alert.unseen ? 'Sin ver · ' : 'Visto · '}${alert.reason}` : activity.detail}`;
     const description = button.querySelector('.session-item-meta')!;
     if (description.textContent !== meta) description.textContent = meta;
-    const tooltip = `${s.title} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
+    const tooltip = `${s.title} · ${activity.label} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
     if (button.title !== tooltip) button.title = tooltip;
   }
 }
@@ -597,7 +662,7 @@ function presentSession(session: Session, pane: Pane) {
   if (other) assign(other, null);
   assign(pane, id); focusedPane = panes.indexOf(pane);
   if (focusedPane === 1) split = true;
-  filter = 'open'; refresh(); scheduleResize(view); focusView(view);
+  filter = openFilter(); refresh(); scheduleResize(view); focusView(view);
 }
 function lines(view: View) {
   const buffer = view.term.buffer.active;
@@ -920,6 +985,11 @@ async function connect() {
     replayThrough = config.status.lastSeq;
     replaying = replayThrough > 0;
     profileDataDir = config.dataDir;
+    if (groupingProfile !== profileDataDir) {
+      groupingProfile = profileDataDir; sidebarProjects.reset(); projectListKey = '';
+      try { grouping = readAgentGrouping(localStorage, profileDataDir); } catch { grouping = 'project'; }
+      if (filter === 'open' || filter === 'activity') filter = openFilter();
+    }
     $('#layout').textContent = `Datos: ${config.dataDir}`;
     $('#layout').title = `Socket: ${config.socket}`;
     updateStatus(config.status);
@@ -931,7 +1001,7 @@ async function connect() {
     if (!panes.some(pane => pane.id) && views.size) {
       const preferred = [...views.values()].find(v => isLive(v.session)) ?? [...views.values()][0];
       assign(panes[0], preferred.session.id);
-      if (!matchesSession(preferred.session, filter, query)) filter = isLive(preferred.session) ? 'open' : matchesSession(preferred.session, 'attention', '') ? 'attention' : 'closed';
+      if (!matchesSession(preferred.session, filter, query)) filter = isLive(preferred.session) ? openFilter() : matchesSession(preferred.session, 'attention', '') ? 'attention' : 'closed';
     }
     if (!split) assign(panes[1], null);
     $('#notice').hidden = replayThrough === 0; syncMessageRail();
@@ -1275,6 +1345,24 @@ $('#toggle-sidebar').addEventListener('click', () => {
 });
 $('#sidebar-scrim').addEventListener('click', closeSidebar);
 $('#session-search').addEventListener('input', () => { query = $<HTMLInputElement>('#session-search').value; refresh(); });
+function setSearchOpen(open: boolean) {
+  searchOpen = open || !!query;
+  $('#session-search-field').hidden = !searchOpen;
+  $('#toggle-search').setAttribute('aria-expanded', String(searchOpen));
+}
+$('#toggle-search').addEventListener('click', () => {
+  if (!searchOpen) { setSearchOpen(true); $<HTMLInputElement>('#session-search').focus(); return; }
+  if (query) { $<HTMLInputElement>('#session-search').focus(); return; }
+  setSearchOpen(false);
+});
+$('#session-search').addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  const input = $<HTMLInputElement>('#session-search');
+  if (input.value) { input.value = ''; query = ''; refresh(); }
+  setSearchOpen(false); $('#toggle-search').focus();
+});
+$('#session-search').addEventListener('blur', () => { if (!query) setSearchOpen(false); });
 window.addEventListener('focus', refresh);
 window.addEventListener('blur', refresh);
 document.addEventListener('visibilitychange', refresh);
@@ -1282,7 +1370,7 @@ document.addEventListener('visibilitychange', refresh);
 document.addEventListener('close', refresh, true);
 function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && taskScreen === 'terminal' && activeView()?.session.id === id; }
 function showAttention() {
-  filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = '';
+  filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = ''; setSearchOpen(false);
   $('.workspace-navigation').scrollTop = 0;
   $('.workspace-shell').classList.add('sidebar-open'); $('#sidebar-scrim').hidden = false;
   $('#toggle-sidebar').setAttribute('aria-expanded', 'true'); refresh();
@@ -1308,7 +1396,19 @@ $('#open-attention-session').addEventListener('click', () => { const id = $('#op
 $('#see-attention').addEventListener('click', () => {
   attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh(); ($('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
 });
-document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { if (button.dataset.filter === 'attention') showAttention(); else { filter = button.dataset.filter as SessionFilter; $('.workspace-navigation').scrollTop = 0; refresh(); } }));
+document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => {
+  if (button.dataset.filter === 'attention') showAttention();
+  else { filter = button.dataset.filter === 'open' ? openFilter() : button.dataset.filter as SessionFilter; $('.workspace-navigation').scrollTop = 0; refresh(); }
+}));
+// Por proyecto / Por estado: a remembered per-profile view preference.
+document.querySelectorAll<HTMLButtonElement>('[data-grouping]').forEach(button => button.addEventListener('click', () => {
+  const next = button.dataset.grouping === 'state' ? 'state' : 'project';
+  if (next === grouping) return;
+  grouping = next;
+  try { saveAgentGrouping(localStorage, profileDataDir, grouping); } catch { /* Optional view preference. */ }
+  if (filter === 'open' || filter === 'activity') filter = openFilter();
+  $('.workspace-navigation').scrollTop = 0; refresh();
+}));
 $('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
 const theme = $<HTMLSelectElement>('#theme-select');
 try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }
@@ -1444,6 +1544,7 @@ function handleAppShortcut(event: KeyboardEvent): boolean {
     // Blur immediately; a guarded retry after the drawer settles never sends
     // intervening keystrokes to the CLI or steals a later deliberate focus.
     const search = $<HTMLInputElement>('#session-search');
+    setSearchOpen(true);
     (document.activeElement as HTMLElement | null)?.blur();
     void getComputedStyle($('#sidebar')).visibility;
     search.focus();
@@ -1495,6 +1596,7 @@ pulsoPanel = mountPulsoPanel({
   backToTerminal: () => {taskScreen='terminal';refresh();for(const pane of panes)if(pane.id)scheduleResize(views.get(pane.id)!);focusView(activeView());},
   notice: text => notice(text),
   binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
+  onChange: () => { loadSidebarProjects(); if (!disposed) refresh(); },
   resumeSession: async sourceId => {
     if (runner?.nativeResumeVersion !== 1 || !connected) throw new Error('Este runner no permite reanudar conversaciones nativas.');
     const check=workspaceContext();
@@ -1510,7 +1612,15 @@ pulsoPanel = mountPulsoPanel({
     ensure(session); resumeAttempts.delete(sourceId); selectSession(session.id); return session.id;
   },
 });
-$('#open-pulso').addEventListener('click', () => { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); });
+function showPulso() { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
+$('#open-pulso').addEventListener('click', showPulso);
+$('#sidebar-project-list').addEventListener('click', event => {
+  const row = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-board]');
+  if (!row || row.disabled || !pulsoPanel) return;
+  if (taskScreen === 'pulso' && !pulsoPanel.prepareNavigation()) return;
+  showPulso();
+  void pulsoPanel.openBoard(row.dataset.board === '' ? null : row.dataset.board!).finally(() => { if (!disposed) refresh(); });
+});
 window.addEventListener('beforeunload', () => { disposed = true; loopVersion++; pulsoPanel?.dispose(); });
 refresh();
 // Connect is safe at launch: replay only. All start operations require visible controls.
