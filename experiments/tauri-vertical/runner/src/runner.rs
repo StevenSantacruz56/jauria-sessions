@@ -910,6 +910,8 @@ impl Runner {
                     Err(e)=>{eprintln!("read PTY: {e}");child.output_lost.store(true,Ordering::Release);break;}
                 }
             }
+            // Before reader_done: the wait thread publishes the end after it.
+            runner.attention.reader_closed(&id);
             child.reader_done.store(true,Ordering::Release);
         });
     }

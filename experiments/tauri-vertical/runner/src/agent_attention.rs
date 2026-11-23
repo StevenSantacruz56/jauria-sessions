@@ -209,9 +209,14 @@ struct Entry { record: Record, generation: String }
 
 struct Inner {
     records: HashMap<String, Entry>,
-    /// PTY sessions whose process ended in this generation: their late
-    /// output is never interpreted (no state, turn, BEL or notify).
+    /// PTY sessions whose process ended while their reader may still drain:
+    /// that late output is never interpreted (no state, turn, BEL or notify).
+    /// An id leaves when its reader closes, because the reader is the only
+    /// caller of `pty`; so the set holds at most the readers still open.
     sealed: std::collections::HashSet<String>,
+    /// Readers that closed before their process end was published. The end
+    /// consumes the entry and seals nothing: no more output can arrive.
+    drained: std::collections::HashSet<String>,
     deleted: BTreeSet<String>,
     /// At most one mark_seen waits for durability; others answer at once.
     waiting: bool,
@@ -320,7 +325,7 @@ impl Attention {
         });
         let durable = conn.is_some();
         let attention = Arc::new(Self { shared: Arc::new(Shared {
-            inner: Mutex::new(Inner { records, sealed: Default::default(), deleted: BTreeSet::new(), waiting: false, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
+            inner: Mutex::new(Inner { records, sealed: Default::default(), drained: Default::default(), deleted: BTreeSet::new(), waiting: false, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
                 urgent: false, durable, stop: None, #[cfg(test)] crash: false }),
             wake: Condvar::new(), flushed: Condvar::new(), generation, clock, config }), done: Mutex::new(None),
         });
@@ -430,7 +435,8 @@ impl Attention {
         let now = (self.clock)();
         let mut m = lock(&self.inner);
         // Sealed first: a reader still draining after finish cannot reopen it.
-        m.sealed.insert(id.to_owned());
+        // A reader that already closed cannot emit again: nothing to seal.
+        if !m.drained.remove(id) { m.sealed.insert(id.to_owned()); }
         let confirmed = matches!(status, "exited" | "stopped" | "failed");
         if !confirmed && !m.records.contains_key(id) { return; }
         let record = self.entry(&mut m, id);
@@ -440,6 +446,14 @@ impl Attention {
         record.updated_at = now.0;
         self.touch(&mut m, id);
         self.prune(&mut m);
+    }
+
+    /// The PTY reader of `id` stopped for good (EOF, EIO or error): no later
+    /// `pty` call can come from it, so its seal is no longer needed. If the
+    /// process end is still unpublished, remember it so the end seals nothing.
+    pub fn reader_closed(&self, id: &str) {
+        let mut m = lock(&self.inner);
+        if !m.sealed.remove(id) { m.drained.insert(id.to_owned()); }
     }
 
     /// Hot cap with hysteresis: above IDLE_ROWS + IDLE_SLACK fully seen rows of
@@ -566,6 +580,8 @@ impl Attention {
 
     #[cfg(test)]
     pub fn durable(&self) -> bool { lock(&self.inner).durable }
+    #[cfg(test)]
+    fn seal_sets(&self) -> (usize, usize) { let m = lock(&self.inner); (m.sealed.len(), m.drained.len()) }
     /// Test-only crash: the writer exits without committing what is dirty.
     #[cfg(test)]
     pub fn crash(&self) {
@@ -1085,6 +1101,30 @@ mod tests {
         a.pty("s", &[(State(Working), None), (Bell, None)]);
         let v = agent(&a, "s");
         assert!(v["state"].is_null() && v["turnOpen"] == false, "late PTY bytes reopened the record: {v}");
+    }
+
+    #[test]
+    fn seal_lasts_only_while_the_reader_can_emit() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        // End published while the reader drains: sealed until the reader closes.
+        a.pty("s", &[(State(Working), Some(1))]);
+        a.process_ended("s", "exited");
+        a.pty("s", &[(State(Working), None), (Bell, None)]);
+        assert!(agent(&a, "s")["state"].is_null(), "still sealed while the reader drains");
+        assert_eq!(a.seal_sets(), (1, 0));
+        a.reader_closed("s");
+        assert_eq!(a.seal_sets(), (0, 0), "a closed reader needs no seal");
+        // Reader closes first (the usual EOF before wait): nothing is ever sealed.
+        a.pty("t", &[(State(Working), Some(1))]);
+        a.reader_closed("t");
+        assert_eq!(a.seal_sets(), (0, 1));
+        a.process_ended("t", "exited");
+        assert_eq!(a.seal_sets(), (0, 0));
+        assert!(agent(&a, "t")["pending"]["ended"].is_object());
+        // Many finished sessions leave no trace in either set.
+        for n in 0..2000 { let id = format!("x{n}"); a.pty(&id, &[(Bell, None)]); if n % 2 == 0 { a.reader_closed(&id); a.process_ended(&id, "exited"); } else { a.process_ended(&id, "exited"); a.reader_closed(&id); } }
+        assert_eq!(a.seal_sets(), (0, 0));
     }
 
     #[test]
