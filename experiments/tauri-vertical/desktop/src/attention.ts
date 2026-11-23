@@ -1,8 +1,12 @@
 import { matchesSession, statusLabel, type WorkspaceSession } from './workspace';
 import type { ProgramState } from './program-status';
-type Session = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
+export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
+type Session = AttentionSession;
 type Observation = { generation: number; count: number; keys: string[]; stale: boolean };
-export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[] };
+export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[]; unseenKeys?: string[] };
+/** A cause owned by another source (runner 1.4 E): its own unseen flag, never the window baseline. Full key, empty reason = no text. */
+export type ExternalCause = { key: string; reason: string; unseen: boolean };
+export type ExternalCauses = { causes(session: Session): ExternalCause[]; permissionsSeen?: boolean };
 
 /** Window-local observations. Acknowledgement never changes custody or permissions. */
 export class SessionAttention {
@@ -23,26 +27,32 @@ export class SessionAttention {
     values.add(kind); this.signals.set(id, values);
   }
   invalidate() { for (const p of this.permissions.values()) p.stale = true; }
-  list(sessions: readonly Session[]): Attention[] {
+  pendingPermissions(id: string): number { return this.permissions.get(id)?.count ?? 0; }
+  list(sessions: readonly Session[], external?: ExternalCauses): Attention[] {
     const next = new Set<string>();
     const result: Attention[] = [];
     const ids = new Set(sessions.map(s => s.id));
     for (const id of this.permissions.keys()) if (!ids.has(id)) this.permissions.delete(id);
     for (const s of sessions) {
       const reasons: string[] = [], keys: string[] = [];
-      const add = (key: string, reason: string) => { keys.push(`${s.id}:${key}`); reasons.push(reason); };
+      const outside = new Map<string, boolean>();
+      const add = (key: string, reason: string) => { keys.push(`${s.id}:${key}`); if (reason) reasons.push(reason); };
       if (matchesSession(s, 'attention', '')) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : statusLabel(s.status));
       const p = s.transport === 'app-server' ? this.permissions.get(s.id) : undefined;
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');
+      // With the runner, «arrived and not seen» is its pending.permission, not a window diff.
+      if (p?.count && external?.permissionsSeen) this.seen.add(`${s.id}:permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`);
       if (p?.count) add(`permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`, `${p.count} ${p.count === 1 ? 'permiso pendiente' : 'permisos pendientes'}${p.generation !== s.codex?.generation ? ' · generación anterior, caducado' : stale ? ' · sin confirmar' : ''}`);
       if (s.programState === 'blocked' || s.programState === 'error') add('program:needs', s.programState === 'error' ? 'El agente informó un error' : 'El agente solicita atención');
       if (s.programFinishedUnseen) add('program:done', 'El agente terminó su turno');
       for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
+      for (const cause of external?.causes(s) ?? []) { keys.push(cause.key); outside.set(cause.key, cause.unseen); if (cause.reason) reasons.push(cause.reason); }
       for (const key of keys) next.add(key);
       // Initial lifecycle snapshot is quiet, but remains available in the list.
-      if (!this.initialized.has(s.id)) { for (const key of keys) this.seen.add(key); this.initialized.add(s.id); }
-      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: keys.some(k => !this.seen.has(k)), stale, keys });
+      if (!this.initialized.has(s.id)) { for (const key of keys) if (!outside.has(key)) this.seen.add(key); this.initialized.add(s.id); }
+      const unseenKeys = keys.filter(k => outside.get(k) ?? !this.seen.has(k));
+      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale, keys, unseenKeys });
     }
     for (const key of this.seen) if (!next.has(key)) this.seen.delete(key);
     return result;
