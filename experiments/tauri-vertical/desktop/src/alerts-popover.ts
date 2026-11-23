@@ -93,9 +93,9 @@ export class AlertsPopover {
     this.options.onToggle?.();
   }
 
-  /** Rows keep their buttons mounted while only metadata changes. */
-  render(rows: readonly AlertRow[]) {
-    const key = JSON.stringify(rows.map(row => row.id));
+  /** Rows keep their buttons mounted while only metadata changes. `more`: runner alerts not listed (hasMore). */
+  render(rows: readonly AlertRow[], more = 0) {
+    const key = JSON.stringify([rows.map(row => row.id), more]);
     const list = this.options.list;
     if (key !== this.renderedKey) {
       this.renderedKey = key;
@@ -110,6 +110,12 @@ export class AlertsPopover {
         copy.append(title, reason);
         const open = document.createElement('button'); open.type = 'button'; open.className = 'quiet alerts-row-open'; open.dataset.sessionId = row.id; open.textContent = 'Abrir';
         item.append(indicator, copy, open); list.append(item);
+      }
+      if (more) {
+        // Discreet and non-interactive: the list is not complete.
+        const hint = document.createElement('li'); hint.className = 'alerts-more';
+        hint.textContent = `y ${more} más sin listar`; hint.title = 'El runner tiene más sesiones con avisos de las que envió. Abrir y marcar vistas las de la lista deja sitio a las demás.';
+        list.append(hint);
       }
       if (focused) list.querySelector<HTMLElement>(`button[data-session-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
     }

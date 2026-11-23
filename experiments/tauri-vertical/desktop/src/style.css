@@ -587,6 +587,7 @@ html[data-theme="dark"] .brand-dark { display: block; }
 .alerts-row[data-unseen="true"] .alerts-row-title { font-weight: 600; }
 .alerts-row-reason { color: var(--muted); font-size: 11px; }
 .alerts-row-open { flex: 0 0 auto; min-height: 26px; padding: 3px 8px; font-size: 11px; }
+.alerts-more { padding: 6px 8px; color: var(--muted); font-size: 11px; }
 .alerts-popover-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--border); }
 .alerts-popover-actions button { min-height: 28px; padding: 4px 10px; font-size: 12px; }
 #attention-show-list { margin-right: auto; color: var(--muted); }

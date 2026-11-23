@@ -5,6 +5,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import { NativeAttention } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
 import { SessionAttention } from './attention';
+import { RunnerAttentionSource, WindowAttentionSource, type AttentionSource } from './attention-source';
 import { DockBadge, dockUnreadCount } from './dock-badge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mountCodexConversation } from './codex-conversation';
@@ -29,8 +30,8 @@ import { SessionPicker, sessionPickerOptions } from './session-picker';
 import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, needsLabel, finishedLabel, workingLabel, quietLabel } from './alerts-popover';
 import { renderSessionTabs, sessionTabs } from './top-bar';
 import { mountPulsoPanel } from './pulso-panel';
-import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
-import { sessionActivity, type ActivityKind } from './session-activity';
+import { programStateLabel, type ProgramState } from './program-status';
+import type { ActivityKind } from './session-activity';
 import { paintAgentIndicator, providerBadge, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
 import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
@@ -38,8 +39,8 @@ import { CommandPalette, type PaletteItem } from './command-palette';
 import { appCommands, newSessionUnavailable, paletteEntries, type AppCommandContext, type Theme } from './app-commands';
 import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcutAria, shortcutHint } from './shortcuts';
 
-type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type Session = { agent?: unknown; programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
+type RunnerStatus = { agentAttentionVersion?: number; agentAttention?: object; settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; trigger: HTMLButtonElement; picker: SessionPicker; id: string | null };
@@ -139,11 +140,16 @@ let announcedAlerts = new Set<string>();
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
 const stopping = new Set<string>();
-const programStatuses=new ProgramStatusTracker();
+// One source feeds every surface: the runner's `agent` (1.4 E) or the 1.3 window-local model.
+const windowAttention = new WindowAttentionSource(attention);
+const runnerAttention = new RunnerAttentionSource(attention, { request: (op, args) => request(op, args), isAttended: id => isAttended(id), changed: () => { if (!disposed) refresh(); },
+  canMark: id => { const view = views.get(id); return connected && !connecting && !replaying && !!view && !streamReplaying(view); },
+  consumedFrame: id => { const stream = views.get(id)?.stream; return stream && stream.generation === runner?.generation ? stream.lastFrame : null; } });
+let source: AttentionSource = windowAttention;
 let programRefresh:ReturnType<typeof setTimeout>|undefined;
 function scheduleProgramRefresh(){if(programRefresh!==undefined)return;programRefresh=setTimeout(()=>{programRefresh=undefined;if(connected&&!disposed)refresh();},100);}
-function programLabel(id:string){const state=programStatuses.display(id);return state?programStateLabel(state):'';}
-function attentionSessions(): Session[] { return [...views.values()].map(v => ({...v.session, programState:programStatuses.get(v.session.id), programFinishedUnseen:programStatuses.finishedUnseen(v.session.id)})); }
+function programLabel(id:string){const state=source.display(id);return state?programStateLabel(state):'';}
+function attentionSessions(): Session[] { return source.sessions([...views.values()].map(v => v.session)); }
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const newDialog = $<HTMLDialogElement>('#new-session-dialog');
 const alertsPopover = new AlertsPopover({ button: $<HTMLButtonElement>('#session-alerts'), panel: $('#attention-banner'), list: $('#attention-list'),
@@ -185,8 +191,7 @@ function setSessionDirectory(directory: string) {
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
 function selectSession(id: string) {
-  attention.see(attention.list(attentionSessions()).filter(item => item.id === id));
-  programStatuses.markSeen(id); attention.seeProgram(id);
+  source.select(id, attentionSessions());
   stageView = 'terminal';
   const target = panes[focusedPane];
   const other = panes.find(p => p !== target && p.id === id);
@@ -228,8 +233,8 @@ for (let i = 0; i < 2; i++) {
   });
   const pane: Pane = { root, host: root.querySelector('.terminal-host')!, trigger, picker, id: null };
   panes.push(pane);
-  root.addEventListener('pointerdown', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
-  root.addEventListener('focusin', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
+  root.addEventListener('pointerdown', () => { const consumed = pane.id ? source.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
+  root.addEventListener('focusin', () => { const consumed = pane.id ? source.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     if (button.dataset.action === 'rename') {
       button.addEventListener('click', () => {
@@ -365,35 +370,38 @@ function refresh() {
   const attended = activeView()?.session.id;
   // Viewing consumes transient activity even when no new focus event occurs
   // (for example, the currently focused process exits). Persistent causes stay.
-  if (attended && isAttended(attended)) attention.consumeActivity(attended);
-  const alerts = attention.list(sessions);
+  if (attended && isAttended(attended)) source.consumeActivity(attended);
+  source.paint(attended ? [attended] : []);
+  const alerts = source.list(sessions);
+  // Runner hasMore: sessions with pending alerts that status did not list.
+  const hidden = source.hiddenUnseen();
   const unread = alerts.filter(item => item.unseen && !item.stale && !isAttended(item.id));
-  dockBadge.setCount(connected && !replaying ? dockUnreadCount(unread) : 0);
+  dockBadge.setCount(connected && !replaying ? dockUnreadCount(unread) + hidden : 0);
   const alertById = new Map(alerts.map(item => [item.id, item]));
-  const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
+  const activityById = new Map(sessions.map(s => [s.id, source.activity(s, alertById.get(s.id))]));
   currentActivity = activityById;
-  const unseen = unread.length;
+  const unseen = unread.length + hidden, total = alerts.length + hidden;
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
     ? alertById.has(s.id) && matchesSession(s, 'all', q)
     : f === 'activity' ? (isLive(s) || alertById.has(s.id)) && matchesSession(s, 'all', q)
     : matchesSession(s, f, q);
   const count = (f: SessionFilter) => sessions.filter(s => matches(s, f, '')).length;
-  $('#session-alerts').hidden = alerts.length === 0;
+  $('#session-alerts').hidden = total === 0;
   const alertButton = $('#session-alerts');
-  alertButton.dataset.total = String(alerts.length); alertButton.dataset.unread = String(unseen);
-  const alertLabel = `Avisos: ${alerts.length} sesiones requieren atención; ${unseen} nuevas`;
+  alertButton.dataset.total = String(total); alertButton.dataset.unread = String(unseen);
+  const alertLabel = `Avisos: ${total} sesiones requieren atención; ${unseen} nuevas`;
   alertButton.setAttribute('aria-label', alertLabel);
   text('#session-alerts-count', String(unseen)); $('#session-alerts-count').hidden = unseen === 0;
-  $('#session-alerts').title = `${alertLabel}. ${alerts.length - unseen} ya vistas o atendidas.\n` + alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
+  $('#session-alerts').title = `${alertLabel}. ${total - unseen} ya vistas o atendidas.\n` + alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n') + (hidden ? `\ny ${hidden} más sin listar` : '');
   // Same priority as the sidebar: action, notices, unseen finish, working, waiting, no report.
   const rows = alertRows(alerts, id => views.get(id)?.session.title, id => activityById.get(id));
   const firstAlert = rows[0];
-  if (!firstAlert && alertsPopover.isOpen) alertsPopover.close(document.activeElement instanceof HTMLElement && $('#attention-banner').contains(document.activeElement));
+  if (!total && alertsPopover.isOpen) alertsPopover.close(document.activeElement instanceof HTMLElement && $('#attention-banner').contains(document.activeElement));
   // The popover floats over the workbench; showing or hiding it never resizes a pane.
-  $('#attention-banner').hidden = !alertsPopover.isOpen || !firstAlert;
-  $('#attention-banner').dataset.open = String(alertsPopover.isOpen && !!firstAlert);
-  alertsPopover.render(rows);
-  text('#attention-summary', firstAlert ? `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}; ${unseen} sin ver.` : 'Sin avisos nuevos.');
+  $('#attention-banner').hidden = !alertsPopover.isOpen || !total;
+  $('#attention-banner').dataset.open = String(alertsPopover.isOpen && !!total);
+  alertsPopover.render(rows, hidden);
+  text('#attention-summary', total ? `${total} ${total === 1 ? 'aviso' : 'avisos'}; ${unseen} sin ver.` : 'Sin avisos nuevos.');
   $('#open-attention-session').dataset.sessionId = firstAlert?.id ?? '';
   $('#open-attention-session').setAttribute('aria-label', firstAlert ? `Abrir sesión ${firstAlert.title}` : 'Abrir sesión');
   $('#see-attention').hidden = unseen === 0;
@@ -411,10 +419,10 @@ function refresh() {
   $('#status-needs').title = needsTarget ? `Abrir ${needsTarget.title} · ${activityById.get(needsTarget.id)?.label ?? ''}` : '';
   $('#status-finished').hidden = counts.finished === 0; text('#status-finished-text', finishedLabel(counts.finished));
   $('#status-working').hidden = counts.working === 0; text('#status-working-text', workingLabel(counts.working));
-  const quiet = quietLabel(alerts.length, counts);
+  const quiet = quietLabel(total, counts);
   $('#status-quiet').hidden = quiet === null; text('#status-quiet', quiet ?? '');
   syncMessageRail();
-  nativeAttention.update(alerts);
+  nativeAttention.update(source.nativeItems(alerts));
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
   const occupied=sessions.filter(s=>!['exited','stopped','failed','interrupted','released'].includes(s.status)).length;
@@ -422,7 +430,7 @@ function refresh() {
   text('#capacity', `${occupied} de ${sessionLimit()} plazas`);
   $('#capacity').title = `${occupied} de ${sessionLimit()} plazas ocupadas`;
   text('#open-count', String(open)); text('#closed-count', String(count('closed')));
-  text('#attention-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}`);
+  text('#attention-count', `${total} ${total === 1 ? 'aviso' : 'avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
   const tab = filter === 'activity' ? 'open' : filter;
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === tab)));
@@ -440,7 +448,7 @@ function refresh() {
   // Pulso through MCP. With pulsoRevisionVersion the status revision says so.
   let turnEnded = false;
   for (const s of sessions) {
-    const state = programStatuses.display(s.id) ?? '';
+    const state = source.display(s.id) ?? '';
     const previous = programSeen.get(s.id);
     if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) turnEnded = true;
     programSeen.set(s.id, state);
@@ -466,7 +474,7 @@ function refresh() {
     paintPaneHeader(pane.root, {
       paneIndex: index, kind: view?.session.kind ?? null, title: view?.session.title ?? null, cwd: view?.session.cwd ?? null,
       state: view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
-      stateKey: view && isLive(view.session) ? programStatuses.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
+      stateKey: view && isLive(view.session) ? source.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
       activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
       history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
     });
@@ -582,7 +590,7 @@ function refresh() {
     paintAgentIndicator(button.querySelector<HTMLElement>('.agent-indicator')!, activity.kind, activity.label);
     const title = button.querySelector('.session-item-title')!;
     if (title.textContent !== s.title) title.textContent = s.title;
-    const duration = isLive(s) ? compactDuration(programStatuses.changedAt(s.id)) : '';
+    const duration = isLive(s) ? compactDuration(source.since(s.id)) : '';
     const time = button.querySelector('.session-item-duration')!;
     if (time.textContent !== duration) time.textContent = duration;
     const state = button.querySelector('.session-item-state-label')!;
@@ -652,17 +660,14 @@ function ensure(session: Session): View {
       catch (e) { notice(message(e), true); }
     }
   });
-  const signal = () => { if (!replaying && !streamReplaying(views.get(session.id)) && connected && inputVersion === loopVersion && !isAttended(session.id)) attention.signal(session.id, 'bell'); };
+  // With a runner that reports agent attention, the source ignores these (no duplicate alerts).
+  const signal = () => { if (!replaying && !streamReplaying(views.get(session.id)) && connected && inputVersion === loopVersion && !isAttended(session.id)) source.signal(session.id); };
   const terminalAttention = attachTerminalAttention(term, signal);
   const programReport=term.parser.registerOscHandler(7501,data=>{
-    const state=parseProgramStatus(data);if(state===null)return true;
     if(replaying||streamReplaying(views.get(session.id))||!connected||inputVersion!==loopVersion||!isLive(views.get(session.id)?.session??session))return true;
-    const attended=isAttended(session.id);
-    const result=programStatuses.set(session.id,state,attended);
-    if(attended){programStatuses.markSeen(session.id);attention.seeProgram(session.id);}
-    if(result.changed)scheduleProgramRefresh();return true;
+    if(source.program(session.id,data,isAttended(session.id)))scheduleProgramRefresh();return true;
   });
-  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose();programReport.dispose();programStatuses.clear(session.id);attention.clearProgram(session.id); } };
+  const view:View = { session, term, fit, host, input, sentSize: `${session.cols}x${session.rows}`, lastAttemptSize: '', resizeBusy: false, resizeAgain: false, disposal: () => { subscription.dispose(); keyboard.dispose(); terminalAttention.dispose();programReport.dispose();windowAttention.forget(session.id); } };
   term.options.disableStdin = replaying;
   views.set(session.id, view);configureConversation(view);
   return view;
@@ -670,7 +675,9 @@ function ensure(session: Session): View {
 function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   runner = status;
-  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);attention.clearProgram(session.id);}}
+  source = status.agentAttentionVersion === 1 ? runnerAttention : windowAttention;
+  if (source === runnerAttention) runnerAttention.ingestStatus(status);
+  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') source.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);windowAttention.forget(session.id);}}
   refresh();
   // Runner 1.4: Pulso changes arrive as a revision in status (sidebar and board).
   if (statusPulsoRevision() !== null) loadSidebarProjects();
@@ -738,8 +745,8 @@ async function evidence(force = false) {
   lastEvidence = Date.now();
   await invoke('record_ui_evidence', { payload: { ready: true, streamMetrics:smoke?streamMetrics:undefined, renderedSeq, connection: connected ? 'connected' : 'disconnected', runnerPid: runner?.pid, generation: runner?.generation, sessions: [...views].map(([id, view]) => ({ id, rows: view.term.rows, cols: view.term.cols, status: view.session.status, lastLines: lines(view) })) } });
 }
-type TerminalArchivedOnly = { archivedOnly: true; sessionId: string; generation: string };
-type TerminalLive = { archivedOnly?: false; generation: string; frames: TerminalFrame[]; gap: TerminalGap | null; firstFrame: number; lastFrame: number; durableFrame: number; hasMore: boolean; session: Session; history: TerminalHistory };
+type TerminalArchivedOnly = { archivedOnly: true; sessionId: string; generation: string; agent?: unknown };
+type TerminalLive = { archivedOnly?: false; generation: string; frames: TerminalFrame[]; gap: TerminalGap | null; firstFrame: number; lastFrame: number; durableFrame: number; hasMore: boolean; session: Session; history: TerminalHistory; agent?: unknown };
 async function consumeNative(view: View, generation: string, frames: TerminalFrame[], historical: boolean, gap: TerminalGap | null = null) {
   const metadata = streamMetadata(view.session);
   if (metadata && metadata.generation !== generation) throw new Error('Terminal generation changed');
@@ -762,7 +769,7 @@ async function consumeNative(view: View, generation: string, frames: TerminalFra
             preserveTerminalViewport(view.term, () => view.term.resize(frame.data.cols, frame.data.rows));
           }
         } else if (!historical) {
-          attention.observeEnd(view.session.id, view.session.status, frame.data.status);
+          source.observeEnd(view.session.id, view.session.status, frame.data.status);
           view.session.status = frame.data.status;
         }
       },
@@ -790,6 +797,7 @@ async function pollNativeView(view: View, version: number, stale = () => false):
     if (page.archivedOnly === true) {
       if (page.sessionId !== view.session.id) throw new Error('Invalid archived terminal session');
       view.archivedOnly = true; view.liveReady = true;
+      if (source === runnerAttention && 'agent' in page) runnerAttention.ingest(view.session.id, page.agent);
       ensure(view.session);
       if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
       return {more:false,changed:true};
@@ -825,12 +833,15 @@ async function pollNativeView(view: View, version: number, stale = () => false):
     }
     if (liveFrames.length || !historical) await consumeNative(view, page.generation, liveFrames, false, historical ? null : page.gap);
     if (version !== loopVersion) return {more:false,changed:false};
-    if (!historical) attention.observeEnd(view.session.id, view.session.status, session.status);
+    if (!historical) source.observeEnd(view.session.id, view.session.status, session.status);
+    // terminal_live carries the session's agent; an attended frame alert that became consumable repaints (and may mark seen).
+    const agentChanged = source === runnerAttention && (('agent' in page && runnerAttention.ingest(view.session.id, page.agent)) ||
+      (isAttended(view.session.id) && runnerAttention.wantsFrame(view.session.id, view.stream?.lastFrame ?? 0)));
     ensure({ ...session, terminalStream:{ generation:page.generation, history:page.history } });
     if ((view.stream?.lastFrame ?? 0) >= (view.liveReplayThrough ?? 0)) view.liveReady = true;
     if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
     if (!isLive(view.session)) stopping.delete(view.session.id);
-    const changed = wasReady !== view.liveReady || previousStatus !== view.session.status || previousHistory !== JSON.stringify(page.history) ||
+    const changed = agentChanged || wasReady !== view.liveReady || previousStatus !== view.session.status || previousHistory !== JSON.stringify(page.history) ||
       !!page.gap || page.frames.some(frame => frame.index > after && frame.kind !== 'output');
     if (!wasReady && view.liveReady) scheduleResize(view);
     return {more:page.hasMore,changed};
@@ -1039,7 +1050,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();programStatuses.reset();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1179,7 +1190,7 @@ $('#enable-native-notifications').addEventListener('click', async () => {
     nativeAttention.disable(); text('#enable-native-notifications', 'Activar avisos de macOS…'); text('#native-notification-status', 'Desactivadas. Los avisos dentro de Jauría siguen disponibles.'); return;
   }
   const button = $<HTMLButtonElement>('#enable-native-notifications'); button.disabled = true;
-  await nativeAttention.enableFromClick(attention.list(attentionSessions())); button.disabled = false;
+  await nativeAttention.enableFromClick(source.nativeItems(source.list(attentionSessions()))); button.disabled = false;
 });
 window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
 window.addEventListener('beforeunload', () => { void dockBadge.dispose(); }, { once: true });
@@ -1191,7 +1202,7 @@ $('#attention-show-list').addEventListener('click', () => { alertsPopover.close(
 $('#status-needs').addEventListener('click', () => { const id = $('#status-needs').dataset.sessionId; if (id && views.has(id)) selectSession(id); });
 $('#open-attention-session').addEventListener('click', () => { const id = $('#open-attention-session').dataset.sessionId; alertsPopover.close(false); if (id && views.has(id)) selectSession(id); });
 /** Marking seen is presentation only; persistent causes stay. */
-function markAlertsSeen() { attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh(); }
+function markAlertsSeen() { source.markAll(attentionSessions()); refresh(); }
 $('#see-attention').addEventListener('click', () => {
   markAlertsSeen();
   // Persistent causes keep the popover open on its next action.
@@ -1400,8 +1411,8 @@ installShortcutListeners(window, handleAppShortcut, mac);
 /** Palette entries from data the client already holds (no Pulso read per key). */
 function paletteItems(): PaletteItem[] {
   const sessions = attentionSessions();
-  const alertById = new Map(attention.list(sessions).map(item => [item.id, item]));
-  const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
+  const alertById = new Map(source.list(sessions).map(item => [item.id, item]));
+  const activityById = new Map(sessions.map(s => [s.id, source.activity(s, alertById.get(s.id))]));
   const summary = sidebarProjects.snapshot;
   return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => activityById.get(id)!,
     projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null,
@@ -1482,7 +1493,7 @@ pulsoPanel = mountPulsoPanel({
   persistenceKey: () => profileDataDir,
   bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,
   onOpenPermissions: openPermissions,
-  sessions: () => [...views.values()].map(view => ({...view.session,programState:programStatuses.display(view.session.id)})),
+  sessions: () => [...views.values()].map(view => ({...view.session,programState:source.display(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
   newSession: cwd => openNew(cwd ?? null),
