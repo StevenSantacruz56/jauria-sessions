@@ -270,6 +270,7 @@ impl Store {
                     }
                     columns.insert(status.into(), page);
                 }
+                self.card_footers(&mut columns)?;
                 Ok(json!({"revision":revision,"columns":columns}))
             }
 
@@ -407,6 +408,33 @@ impl Store {
             }
             _ => bail!("unknown operation"),
         }
+    }
+    /// Adds `session` and `checkpointCount` to every visible board card with one
+    /// statement for the whole page (at most 80 cards): per card, indexed
+    /// lookups on pulso_docs_item, newest first by rowid like `item`.
+    fn card_footers(&self, columns: &mut serde_json::Map<String, Value>) -> Result<()> {
+        let ids: Vec<&str> = columns.values().flat_map(|c| c["items"].as_array().into_iter().flatten()).filter_map(|i| i["id"].as_str()).collect();
+        let mut footers = std::collections::HashMap::new();
+        let mut q = self.0.prepare(BOARD_CARDS_SQL)?;
+        for row in q.query_map([serde_json::to_string(&ids)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?))
+        })? {
+            let (id, link, checkpoint, count) = row?;
+            let session = match (link, checkpoint) {
+                (Some(id), _) => json!({"id":id,"source":"link"}),
+                (None, Some(id)) => json!({"id":id,"source":"checkpoint"}),
+                (None, None) => Value::Null,
+            };
+            footers.insert(id, (session, count));
+        }
+        for column in columns.values_mut() {
+            for item in column["items"].as_array_mut().into_iter().flatten() {
+                let (session, count) = item["id"].as_str().and_then(|id| footers.remove(id)).unwrap_or((Value::Null, 0));
+                item["session"] = session;
+                item["checkpointCount"] = json!(count);
+            }
+        }
+        Ok(())
     }
     /// Sidebar snapshot in four statements under the caller's service mutex:
     /// the first page of non-archived projects (same order as `projects`),
@@ -746,6 +774,16 @@ impl Store {
         }
     }
 }
+// Board card footer, one row per visible card: the session of its newest
+// phase link, else of its newest checkpoint that names a session, and the
+// total number of checkpoints. `j.value` has no affinity, so each subquery
+// is a range on pulso_docs_item walked backwards by rowid.
+const BOARD_CARDS_SQL: &str = "SELECT j.value,
+    (SELECT json_extract(body,'$.sessionId') FROM docs WHERE kind='link' AND json_extract(body,'$.itemId')=j.value ORDER BY rowid DESC LIMIT 1),
+    (SELECT json_extract(body,'$.sessionId') FROM docs WHERE kind='checkpoint' AND json_extract(body,'$.itemId')=j.value
+       AND json_extract(body,'$.sessionId') IS NOT NULL ORDER BY rowid DESC LIMIT 1),
+    (SELECT count(*) FROM docs WHERE kind='checkpoint' AND json_extract(body,'$.itemId')=j.value)
+    FROM json_each(?) AS j";
 // sidebar_summary bounds: at most 50 projects (the UI shows 20) and 2,048
 // distinct session/project pairs within 256 KiB, far below RESPONSE_MAX.
 const SUMMARY_PROJECTS: usize = 50;
@@ -1186,6 +1224,125 @@ mod store_tests {
             let wire = serde_json::to_vec(&json!({"ok":true,"result":summary})).unwrap().len();
             eprintln!("docs={docs} items={items} links={} truncated={} pendingOpen={} wire={wire} B time/op={per:?}",
                 summary["links"].as_array().unwrap().len(), summary["linksTruncated"], summary["pendingOpen"]);
+            assert!(wire < 512 * 1024);
+        }
+    }
+
+    #[test]
+    fn board_cards_carry_session_footer_and_total_checkpoints() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        write(&mut store, &mut ui, "project_create", json!({"id":"p","requestId":"p","title":"P"}));
+        for id in ["linked", "checkpointed", "both", "bare", "anonymous"] {
+            write(&mut store, &mut ui, "item_create", json!({"id":id,"requestId":id,"projectId":"p","title":id}));
+        }
+        let mut checkpoint = |store: &mut Store, item: &str, n: usize, session: Option<&str>| {
+            let current = store.get("item", item).unwrap();
+            let mut a = json!({"id":format!("cp-{item}-{n}"),"requestId":format!("cp-{item}-{n}"),"itemId":item,"expectedRevision":current["revision"],"brief":"b","nextAction":"n"});
+            if let Some(s) = session { a["sessionId"] = json!(s); }
+            write(store, &mut ui, "checkpoint_create", a);
+        };
+        for n in 0..12 { checkpoint(&mut store, "checkpointed", n, Some(if n == 11 { "s-cp-new" } else { "s-cp-old" })); }
+        checkpoint(&mut store, "checkpointed", 12, None); // newest has no session: skipped
+        checkpoint(&mut store, "both", 0, Some("s-cp"));
+        checkpoint(&mut store, "anonymous", 0, None);
+        let mut ui2 = Principal::ui();
+        for (n, item, session) in [(0, "linked", "s-old"), (1, "linked", "s-new"), (2, "both", "s-link")] {
+            write(&mut store, &mut ui2, "link", json!({"requestId":format!("l{n}"),"itemId":item,"sessionId":session}));
+        }
+        // A project link is not a phase link.
+        write(&mut store, &mut ui2, "link", json!({"requestId":"lp","projectId":"p","sessionId":"s-project"}));
+        let board = store.read(&ui, "board", &json!({"projectId":"p"})).unwrap();
+        let cards = board["columns"]["todo"]["items"].as_array().unwrap();
+        let card = |id: &str| cards.iter().find(|c| c["id"] == id).unwrap().clone();
+        assert_eq!(card("linked")["session"], json!({"id":"s-new","source":"link"}));
+        assert_eq!(card("linked")["checkpointCount"], 0);
+        assert_eq!(card("checkpointed")["session"], json!({"id":"s-cp-new","source":"checkpoint"}));
+        assert_eq!(card("checkpointed")["checkpointCount"], 13);
+        assert_eq!(card("both")["session"], json!({"id":"s-link","source":"link"}));
+        assert_eq!(card("both")["checkpointCount"], 1);
+        assert_eq!(card("bare")["session"], Value::Null);
+        assert_eq!(card("bare")["checkpointCount"], 0);
+        assert_eq!(card("anonymous")["session"], Value::Null);
+        assert_eq!(card("anonymous")["checkpointCount"], 1);
+        // Only board cards change; item detail and pages keep their shape.
+        let detail = store.read(&ui, "item", &json!({"id":"checkpointed"})).unwrap();
+        assert_eq!(detail["checkpoints"].as_array().unwrap().len(), 10);
+        assert!(detail["item"].get("session").is_none() && detail["item"].get("checkpointCount").is_none());
+        let page = store.read(&ui, "items", &json!({"projectId":"p"})).unwrap();
+        assert!(page["items"].as_array().unwrap().iter().all(|i| i.get("session").is_none() && i.get("checkpointCount").is_none()));
+        // Agents still have no board access, so nothing new reaches them.
+        let agent = Principal { id:"a".into(), session:Some("agent".into()), projects:HashSet::new(), create:true, all_projects:true };
+        assert_eq!(store.read(&agent, "board", &json!({"projectId":"p"})).unwrap_err().to_string(), "unauthorized");
+        let agent_item = store.read(&agent, "item", &json!({"id":"checkpointed"})).unwrap();
+        assert_eq!(agent_item, detail);
+        // Empty columns and the unchanged shortcut are unaffected.
+        assert_eq!(board["columns"]["done"]["items"], json!([]));
+        let revision = store.revision().unwrap();
+        assert_eq!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision})).unwrap(), json!({"revision":revision,"unchanged":true}));
+    }
+
+    #[test]
+    fn board_card_footer_statement_uses_item_index_without_sorting() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let p = plan(&store, BOARD_CARDS_SQL, [r#"["a","b"]"#]);
+        eprintln!("board cards: {p}");
+        assert_eq!(p.matches("pulso_docs_item (kind=? AND <expr>=?)").count(), 3, "{p}");
+        assert!(!p.contains("SCAN docs") && !p.contains("TEMP B-TREE"), "{p}");
+    }
+
+    #[test]
+    fn board_with_80_footers_stays_bounded() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        write(&mut store, &mut ui, "project_create", json!({"id":"p","requestId":"p","title":"P"}));
+        let long = |prefix: &str, n: usize| format!("{prefix}{n:02}{}", "x".repeat(80 - prefix.len() - 2));
+        for (c, status) in ["todo", "doing", "waiting", "done"].into_iter().enumerate() {
+            for n in 0..20 {
+                let id = long(&format!("c{c}"), n);
+                write(&mut store, &mut ui, "item_create", json!({"id":id,"requestId":id,"projectId":"p","status":status,"title":"\u{0001}".repeat(240),"note":"\u{0002}".repeat(1000)}));
+                write(&mut store, &mut ui, "link", json!({"requestId":format!("l-{status}-{n}"),"itemId":id,"sessionId":long("s", n)}));
+            }
+        }
+        let board = store.read(&ui, "board", &json!({"projectId":"p"})).unwrap();
+        let cards: Vec<_> = board["columns"].as_object().unwrap().values().flat_map(|c| c["items"].as_array().unwrap().clone()).collect();
+        assert_eq!(cards.len(), 80);
+        assert!(cards.iter().all(|c| c["session"]["source"] == "link" && c["checkpointCount"] == 0));
+        let wire = serde_json::to_vec(&json!({"ok":true,"result":board})).unwrap().len();
+        eprintln!("board with 80 footers: {wire} bytes");
+        assert!(wire + 1 <= 512 * 1024, "{wire}");
+    }
+
+    /// Opt-in measurement: `cargo test --release --locked pulso_board_cards_scale -- --ignored --nocapture`.
+    /// 80 visible cards (20 per column), each with `per` checkpoints; half also have links.
+    #[test]
+    #[ignore]
+    fn pulso_board_cards_scale() {
+        for per in [0usize, 12, 100] {
+            let store = Store::open(Path::new(":memory:")).unwrap();
+            store.0.execute_batch("DELETE FROM pulso_budget; DROP TRIGGER pulso_budget_docs_INSERT;").unwrap();
+            let ui = Principal::ui();
+            store.0.execute_batch("BEGIN").unwrap();
+            put_raw(&store, "project", json!({"id":"p","title":"P","archived":false,"createdAt":0}));
+            for (c, status) in ["todo","doing","waiting","done"].iter().enumerate() {
+                for n in 0..25 {
+                    let id = format!("item-{c}-{n}");
+                    put_raw(&store, "item", json!({"id":id,"projectId":"p","title":"🦊".repeat(240),"note":"🦊".repeat(1000),"status":status,"position":n,"archived":false,"createdAt":n}));
+                    for k in 0..per { put_raw(&store, "checkpoint", json!({"id":format!("cp-{id}-{k}"),"itemId":id,"brief":"b","nextAction":"n","sessionId":format!("{k:08}-2222-4000-8000-000000000000"),"createdAt":k})); }
+                    if n % 2 == 0 { for k in 0..3 { put_raw(&store, "link", json!({"id":format!("link-{id}-{k}"),"itemId":id,"sessionId":format!("{k:08}-3333-4000-8000-000000000000")})); } }
+                }
+            }
+            // Unrelated history elsewhere in the profile.
+            for n in 0..20_000 { put_raw(&store, "checkpoint", json!({"id":format!("other-{n}"),"itemId":format!("other-{}", n % 500),"brief":"b","nextAction":"n","createdAt":n})); }
+            store.0.execute_batch("COMMIT").unwrap();
+            let runs = 50;
+            let started = std::time::Instant::now();
+            let mut board = Value::Null;
+            for _ in 0..runs { board = store.read(&ui, "board", &json!({"projectId":"p"})).unwrap(); }
+            let per_op = started.elapsed() / runs;
+            let wire = serde_json::to_vec(&json!({"ok":true,"result":board})).unwrap().len();
+            let card = &board["columns"]["todo"]["items"][0];
+            eprintln!("checkpoints/card={per} cards=80 wire={wire} B time/op={per_op:?} session={} checkpointCount={}", card["session"], card["checkpointCount"]);
             assert!(wire < 512 * 1024);
         }
     }
