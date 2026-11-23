@@ -36,13 +36,7 @@ node --test tests/*.test.ts
 
 The runner release was built solely to provide the configured Tauri bundle resource, then `cargo test --locked` in `desktop/src-tauri` passed all 35 bridge tests. Notification plugin, capability identifiers and frontend compile successfully; this is not a packaged native delivery test.
 
-For the synthetic Chromium integration harness, run Vite on port 5189, then from repository root:
-
-```sh
-JAURIA_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node experiments/tauri-vertical/desktop/tests/attention-browser.mjs
-```
-
-The harness uses an isolated browser context and a synthetic Tauri RPC adapter; no runner/profile/provider or native permission API. It checks raw PTY progress suppression and explicit BEL, navigation, consumption, hidden structured permission deltas, seen versus resolved, quiet historical replay, and no horizontal page overflow at the minimum supported width. Screenshots are local ignored evidence in `.impeccable/review/desktop.png` and `minimum-window.png`; the fixture intentionally includes three synthetic sessions to exercise cross-session collection, not production capacity acceptance.
+The MVP's synthetic Chromium harness (`tests/attention-browser.mjs`) was retired in 1.4: it expected the message rail and the review button removed in 1.4 B. Its checks now live in the current suites: quiet first snapshot, raw output, spinner redraws and OSC 9;4 progress without alerts, explicit BEL/OSC 9/777 alerting bell, title, Dock and macOS with opening consuming them, and quiet replay in `tests/browser/agent-attention.test.ts` (degraded mode); seen permissions and custody staying pending and the process end in `tests/attention-consistency.test.ts`; no horizontal overflow at the minimum width in `tests/browser/notification-geometry.test.ts`.
 
 ## Review and integration
 

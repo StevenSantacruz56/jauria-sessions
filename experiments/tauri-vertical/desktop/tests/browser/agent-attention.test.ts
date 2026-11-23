@@ -368,6 +368,47 @@ try {
         });
       });
 
+      // Formerly tests/attention-browser.mjs: raw output never alerts; explicit BEL/OSC 9/777 do, everywhere; replay is quiet.
+      await t.test('degraded: replayed BEL/OSC and raw redraws/progress stay quiet; live BEL, OSC 9 and OSC 777 alert bell, title, Dock and macOS, and opening consumes', async () => {
+        await fixture({ runner: false }, async page => {
+          await page.addInitScript(() => { (window as any).agentFixture.output('background', '\u0007\u001b]9;historia\u0007\u001b]777;notify;t;b\u001b\\'); });
+          const quiet = async (label: string) => {
+            assert.equal(await page.locator('#session-alerts').isHidden(), true, `${label}: bell`);
+            assert.equal(await page.title(), 'Jauría', `${label}: title`);
+            assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.badges.filter((n: number) => n > 0)), [], `${label}: Dock`);
+            assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.notices), [], `${label}: macOS`);
+            assert.equal(await page.locator('#session-list [data-unseen="true"]').count(), 0, `${label}: list`);
+          };
+          await open(page);
+          await page.waitForTimeout(1500);
+          await quiet(page, 'historical BEL/OSC 9/777 replay');
+          await page.locator('#open-settings').click();
+          await page.locator('#enable-native-notifications').click();
+          await page.waitForFunction(() => document.querySelector('#enable-native-notifications')?.textContent?.startsWith('Desactivar'));
+          await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+          for (const id of ['foreground', 'background']) {
+            for (const data of ['ordinary output\r\n', '\r| working\u001b[K', '\r/ working\u001b[2K\u001b[1G', '\u001b]9;4;1;75\u0007', '\u001b]9;4;0;0\u001b\\']) {
+              await page.evaluate(([id, data]) => (window as any).agentFixture.output(id, data.repeat(25)), [id, data]);
+            }
+          }
+          await page.waitForTimeout(1800); // beyond the 1.5 s native grouping
+          await quiet(page, 'raw output, spinner redraws and OSC 9;4 progress');
+          for (const data of ['\u0007', '\u001b]9;aviso explícito\u0007', '\u001b]777;notify;Codex;revisión\u001b\\']) {
+            const before = await page.evaluate(() => (window as any).agentFixture.notices.length);
+            await page.evaluate(data => (window as any).agentFixture.output('background', data), data);
+            await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '1');
+            assert.equal(await page.title(), '(1) Avisos · Jauría');
+            await page.waitForFunction(() => (window as any).agentFixture.badges.at(-1) === 1);
+            await page.waitForFunction(n => (window as any).agentFixture.notices.length > n, before);
+            assert.equal(JSON.stringify(await page.evaluate(() => (window as any).agentFixture.notices.at(-1))).includes('background'), false, 'generic copy');
+            await row(page, 'background').click();
+            await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.hidden === true);
+            assert.equal(await page.title(), 'Jauría', 'opening the session consumes the alert');
+            await row(page, 'foreground').click();
+          }
+        });
+      });
+
       await t.test('degraded (runner without the capability): client parser, no mark_seen, window-local seen as before', async () => {
         await fixture({ runner: false }, async page => {
           await open(page);
