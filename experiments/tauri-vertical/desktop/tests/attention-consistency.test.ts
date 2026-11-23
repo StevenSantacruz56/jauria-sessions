@@ -89,12 +89,14 @@ async function counts(page: Page, total: number, unseen: number) {
   await page.waitForFunction(({ total, unseen }) => {
     const header = document.querySelector<HTMLElement>('#session-alerts')!;
     const banner = document.querySelector<HTMLElement>('#attention-banner')!;
+    const pressed = (selector: string) => document.querySelector(selector)?.getAttribute('aria-pressed') === 'true';
     return document.querySelector('#attention-count')?.textContent === `${total} ${total === 1 ? 'aviso' : 'avisos'}`
       && header.hidden === (total === 0)
       && header.dataset.total === String(total) && header.dataset.unread === String(unseen)
       && document.querySelector<HTMLElement>('#session-alerts-count')!.hidden === (unseen === 0)
-      // The banner belongs to the attention list and to Abiertas · Por estado (filter 'activity').
-      && banner.hidden === (!['attention', 'activity'].includes(document.querySelector<HTMLElement>('.workspace-navigation')?.dataset.filter ?? '') || total === 0);
+      // The banner belongs to the visible controls that show it: the attention
+      // list, or the Abiertas tab while the grouping button is in Por estado.
+      && banner.hidden === (!(pressed('[data-filter="attention"]') || (pressed('[data-filter="open"]') && pressed('#agent-grouping'))) || total === 0);
   }, { total, unseen });
   assert.equal(await page.title(), unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría');
   const dock = await page.evaluate(() => (window as any).attentionFixture.badges.at(-1) ?? 0);

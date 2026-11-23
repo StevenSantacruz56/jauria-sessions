@@ -1,8 +1,9 @@
 import { appVersion } from './app-version';
 // Workbench direction: native macOS conventions from the user's Conductor,
 // Nimbalyst and Claude Squad references. Operate mode; real session data only.
-export type IconName = 'bell' | 'layers' | 'plus' | 'search' | 'folder' | 'terminal' | 'spark' | 'split' | 'info' | 'sidebar' | 'close' | 'more' | 'stop' | 'interrupt' | 'chevron' | 'settings' | 'refresh' | 'copy' | 'clock' | 'arrow';
+export type IconName = 'rows' | 'bell' | 'layers' | 'plus' | 'search' | 'folder' | 'terminal' | 'spark' | 'split' | 'info' | 'sidebar' | 'close' | 'more' | 'stop' | 'interrupt' | 'chevron' | 'settings' | 'refresh' | 'copy' | 'clock' | 'arrow';
 const paths: Record<IconName, string> = {
+  rows: '<path d="M10 6h10M10 12h10M10 18h10"/><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
   layers: '<path d="m3 7 9-4 9 4-9 4-9-4Zm0 5 9 4 9-4M3 17l9 4 9-4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -36,8 +37,8 @@ export const shell = `
       <label id="session-search-field" class="search-field" hidden>${icon('search')}<input id="session-search" type="search" placeholder="Buscar sesiones" aria-label="Buscar sesiones"><kbd>⌘K</kbd></label>
       <section class="sidebar-section sidebar-projects" aria-labelledby="sidebar-projects-heading"><div class="sidebar-section-heading"><h2 id="sidebar-projects-heading">Proyectos</h2><button id="open-pulso" class="icon-button" aria-label="Abrir Pulso" aria-pressed="false" title="Abrir Pulso">${icon('layers')}</button></div><nav id="sidebar-project-list" class="sidebar-project-list" aria-label="Tableros de Pulso"></nav></section>
       <section class="sidebar-section sidebar-agents" aria-labelledby="sidebar-agents-heading">
-        <div class="sidebar-section-heading"><h2 id="sidebar-agents-heading">Agentes</h2><span id="capacity" class="capacity">Límite según el runner</span></div>
-        <div class="agent-controls"><div class="session-filters" role="group" aria-label="Filtrar sesiones"><button data-filter="open" aria-pressed="true">Abiertas <span id="open-count">0</span></button><button data-filter="closed" aria-pressed="false">Historial <span id="closed-count">0</span></button></div><div class="agent-grouping" role="group" aria-label="Agrupar agentes"><button data-grouping="project" aria-pressed="true">Por proyecto</button><button data-grouping="state" aria-pressed="false">Por estado</button></div></div>
+        <div class="sidebar-section-heading"><h2 id="sidebar-agents-heading">Agentes</h2><span class="sidebar-section-tools"><span id="capacity" class="capacity">Límite según el runner</span><button id="agent-grouping" class="icon-button" data-grouping="" aria-label="Agrupar por estado" aria-pressed="false" title="Agrupados por proyecto. Pulsa para agrupar por estado.">${icon('folder')}</button></span></div>
+        <div class="agent-controls"><div class="session-filters" role="group" aria-label="Filtrar sesiones"><button data-filter="open" aria-pressed="true">Abiertas <span id="open-count">0</span></button><button data-filter="closed" aria-pressed="false">Historial <span id="closed-count">0</span></button></div></div>
         <button id="attention-filter" class="attention-filter quiet" data-filter="attention" aria-pressed="false" hidden><span class="state-dot"></span><span id="attention-count">Requieren atención</span>${icon('chevron')}</button>
         <div class="workspace-navigation"><section class="project-navigation" aria-label="Repositorios y tareas Git" hidden><div class="project-actions"><button id="register-project" class="quiet">${icon('folder')}Registrar repositorio…</button><button id="new-task" class="quiet">${icon('plus')}Nueva tarea Git</button></div><p id="workspace-upgrade" class="workspace-hint" hidden></p><p id="project-error" class="form-error" role="alert" hidden></p><nav id="project-list" aria-label="Proyectos Git y tareas"></nav><details id="closed-projects" class="closed-projects" hidden><summary id="closed-projects-summary">Repositorios cerrados</summary><div id="closed-project-list" aria-label="Proyectos cerrados"></div></details></section><nav id="session-list" class="session-list" aria-label="Agentes por proyecto"></nav></div>
       </section>

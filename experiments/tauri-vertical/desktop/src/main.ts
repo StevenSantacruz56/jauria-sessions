@@ -110,6 +110,7 @@ let searchOpen = false;
 let sidebarKey = '';
 let projectListKey = '';
 let sessionSetKey = '';
+const programSeen = new Map<string, string>();
 // Pulso summary for the sidebar. Event-driven, never a timer: see sidebar-projects.ts.
 const sidebarProjects = new SidebarProjects((op, args) => requestPulso(op, args));
 function pulsoReadable() { return connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable; }
@@ -278,7 +279,11 @@ function renderProjectList(planning: boolean) {
   const key = JSON.stringify([disabled, current, summary.projects.map(p => [p.id, p.title, p.done, p.total]), summary.pendingOpen, summary.hasMore, summary.revision === null]);
   if (key === projectListKey) return;
   projectListKey = key;
-  const list = $('#sidebar-project-list'); list.replaceChildren();
+  const list = $('#sidebar-project-list');
+  // Rebuilding must not drop keyboard focus (e.g. Enter on a row that opens its board).
+  const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('[data-board],[data-more]') : null;
+  const focusKey = focused?.dataset.board ?? (focused?.dataset.more !== undefined ? 'more' : null);
+  list.replaceChildren();
   const row = (board: string, name: string, initial: string, meta: string, label: string) => {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'sidebar-row project-row'; button.dataset.board = board;
     button.disabled = disabled; button.setAttribute('aria-current', String(current === board)); button.setAttribute('aria-label', label); button.title = label;
@@ -294,8 +299,12 @@ function renderProjectList(planning: boolean) {
   }
   const pending = summary.pendingOpen === null ? '' : String(summary.pendingOpen);
   row('', 'Pendientes', '·', pending, `Abrir tablero Pendientes${pending ? `, ${pending} sin terminar` : ''}`);
-  if (summary.hasMore) { const more = document.createElement('p'); more.className = 'sidebar-hint'; more.textContent = 'Hay más proyectos en Pulso.'; list.append(more); }
+  if (summary.hasMore) {
+    const more = document.createElement('button'); more.type = 'button'; more.className = 'sidebar-row project-more'; more.dataset.more = '';
+    more.disabled = disabled; more.textContent = 'Más proyectos…'; more.title = 'Abrir Pulso para ver todos los proyectos'; list.append(more);
+  }
   else if (disabled) { const hint = document.createElement('p'); hint.className = 'sidebar-hint'; hint.textContent = connected ? 'Pulso necesita el runner actualizado.' : 'Pulso sin conexión.'; list.append(hint); }
+  if (focusKey !== null) (focusKey === 'more' ? list.querySelector<HTMLElement>('[data-more]') : Array.from(list.querySelectorAll<HTMLElement>('[data-board]')).find(n => n.dataset.board === focusKey))?.focus({ preventScroll: true });
 }
 function refresh() {
   const handoffContext=handoffContexts.get(activeView()?.session.id??'');
@@ -368,10 +377,25 @@ function refresh() {
   text('#session-total', `${open} abiertas · ${count('closed')} en historial`);
   const tab = filter === 'activity' ? 'open' : filter;
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === tab)));
-  document.querySelectorAll<HTMLButtonElement>('[data-grouping]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.grouping === grouping)));
+  const groupingButton = $('#agent-grouping');
+  if (groupingButton.dataset.grouping !== grouping) {
+    groupingButton.dataset.grouping = grouping;
+    groupingButton.setAttribute('aria-pressed', String(grouping === 'state'));
+    groupingButton.title = grouping === 'state' ? 'Agrupados por estado. Pulsa para agrupar por proyecto.' : 'Agrupados por proyecto. Pulsa para agrupar por estado.';
+    groupingButton.innerHTML = icon(grouping === 'state' ? 'rows' : 'folder');
+  }
   // Sidebar Pulso summary: reread when Pulso becomes readable or the session set changes.
   const nextSessionSet = `${pulsoReadable()}|${runner?.generation ?? ''}|${sessions.map(s => s.id).join(',')}`;
   if (nextSessionSet !== sessionSetKey) { sessionSetKey = nextSessionSet; loadSidebarProjects(); }
+  // An agent that reports done/idle has often just written to Pulso through MCP.
+  let turnEnded = false;
+  for (const s of sessions) {
+    const state = programStatuses.display(s.id) ?? '';
+    const previous = programSeen.get(s.id);
+    if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) turnEnded = true;
+    programSeen.set(s.id, state);
+  }
+  if (turnEnded) loadSidebarProjects();
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
   for (const id of ['new-session', 'welcome-create']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying || occupied >= sessionLimit();
@@ -478,7 +502,9 @@ function refresh() {
   const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
   if (sidebarKey !== key) {
     sidebarKey = key;
-    const list = $('#session-list'); list.replaceChildren();
+    const list = $('#session-list');
+    const focusedSession = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('.session-item')?.dataset.sessionId ?? null : null;
+    list.replaceChildren();
     for (const group of groups) {
       const section = document.createElement('section'); section.className = 'session-group';
       if (group.kind) section.dataset.activity = group.kind; else section.dataset.project = group.projectId ?? 'none';
@@ -501,6 +527,7 @@ function refresh() {
       const empty = document.createElement('p'); empty.className = 'list-empty';
       empty.textContent = query ? 'No hay sesiones que coincidan.' : filter === 'closed' ? 'Las sesiones cerradas aparecerán aquí.' : filter === 'attention' ? 'Sin avisos. Los agentes sin OSC 7501 no informan su progreso.' : filter === 'activity' ? 'Abre una sesión para ver su actividad. El progreso aparece cuando el agente lo informa.' : 'Inicia una sesión para verla aquí.'; list.append(empty);
     }
+    if (focusedSession) Array.from(list.querySelectorAll<HTMLElement>('.session-item')).find(n => n.dataset.sessionId === focusedSession)?.focus({ preventScroll: true });
   }
   const sessionById = new Map(sessions.map(session => [session.id, session]));
   for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('#session-list .session-item'))) {
@@ -517,7 +544,12 @@ function refresh() {
     if (badge.dataset.provider !== provider) { badge.dataset.provider = provider; badge.textContent = provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$'; }
     const indicator = button.querySelector<HTMLElement>('.agent-indicator')!;
     const shape = agentIndicator(activity.kind);
-    indicator.dataset.state = activity.kind; indicator.dataset.shape = shape.shape; indicator.dataset.tone = shape.tone;
+    indicator.dataset.state = activity.kind; indicator.dataset.tone = shape.tone;
+    if (indicator.dataset.shape !== shape.shape) {
+      indicator.dataset.shape = shape.shape;
+      // The check is drawn; other shapes are CSS. All share one 12px box.
+      indicator.innerHTML = shape.shape === 'check' ? '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.3 5 8.7l4.5-5.2"/></svg>' : '';
+    }
     if (indicator.title !== activity.label) indicator.title = activity.label;
     const title = button.querySelector('.session-item-title')!;
     if (title.textContent !== s.title) title.textContent = s.title;
@@ -1365,9 +1397,9 @@ $('#session-search').addEventListener('keydown', event => {
   setSearchOpen(false); $('#toggle-search').focus();
 });
 $('#session-search').addEventListener('blur', () => { if (!query) setSearchOpen(false); });
-window.addEventListener('focus', refresh);
+window.addEventListener('focus', () => { loadSidebarProjects(); refresh(); });
 window.addEventListener('blur', refresh);
-document.addEventListener('visibilitychange', refresh);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSidebarProjects(); refresh(); });
 // close does not bubble; capture refreshes Dock/header after native focus restoration.
 document.addEventListener('close', refresh, true);
 function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && taskScreen === 'terminal' && activeView()?.session.id === id; }
@@ -1403,14 +1435,12 @@ document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => 
   else { filter = button.dataset.filter === 'open' ? openFilter() : button.dataset.filter as SessionFilter; $('.workspace-navigation').scrollTop = 0; refresh(); }
 }));
 // Por proyecto / Por estado: a remembered per-profile view preference.
-document.querySelectorAll<HTMLButtonElement>('[data-grouping]').forEach(button => button.addEventListener('click', () => {
-  const next = button.dataset.grouping === 'state' ? 'state' : 'project';
-  if (next === grouping) return;
-  grouping = next;
+$('#agent-grouping').addEventListener('click', () => {
+  grouping = grouping === 'state' ? 'project' : 'state';
   try { saveAgentGrouping(localStorage, profileDataDir, grouping); } catch { /* Optional view preference. */ }
   if (filter === 'open' || filter === 'activity') filter = openFilter();
   $('.workspace-navigation').scrollTop = 0; refresh();
-}));
+});
 $('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
 const theme = $<HTMLSelectElement>('#theme-select');
 try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }
@@ -1617,6 +1647,8 @@ pulsoPanel = mountPulsoPanel({
 function showPulso() { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
 $('#open-pulso').addEventListener('click', showPulso);
 $('#sidebar-project-list').addEventListener('click', event => {
+  const more = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-more]');
+  if (more && !more.disabled) { showPulso(); return; }
   const row = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-board]');
   if (!row || row.disabled || !pulsoPanel) return;
   // openBoard keeps Pulso's draft guards: a dirty or failed draft keeps the current board.

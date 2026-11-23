@@ -301,7 +301,9 @@ try{
       assert.equal(await page.locator('#register-project').isVisible(),false,'Git repositories are not offered in the sidebar');
       assert.deepEqual(await page.evaluate(()=>[...new Set((window as any).pulsoFixture.calls.map((c:any)=>c.op))].sort()),['items','links','projects']);
       // Por proyecto is the default: the main session sits under its project, the rest under Sin proyecto.
-      assert.equal(await page.locator('[data-grouping="project"]').getAttribute('aria-pressed'),'true');
+      const groupingButton=page.locator('#agent-grouping');
+      await page.waitForFunction(()=>document.querySelector('#agent-grouping')?.getAttribute('data-grouping')==='project');
+      assert.equal(await groupingButton.getAttribute('aria-pressed'),'false');assert.match(await groupingButton.getAttribute('title')??'',/Agrupados por proyecto/);
       await page.locator('.session-group[data-project="plan"] .session-item[data-session-id="main"]').waitFor();
       await page.locator('.session-group[data-project="none"] .session-item[data-session-id="related"]').waitFor();
       assert.deepEqual(await page.locator('#session-list .group-heading > span:first-child').allTextContents(),['Integrar Pulso en Jauria','Sin proyecto']);
@@ -315,6 +317,21 @@ try{
       assert.equal(await main.locator('.agent-indicator').getAttribute('title'),'Trabajando');
       assert.equal(await main.locator('.session-item-state-label').textContent(),'Trabajando','state is available as text, not only colour');
       assert.equal(await main.locator('.session-item-duration').textContent(),'<1 min');
+      // Each state has its own shape inside the same 12px box.
+      const box=async()=>main.locator('.session-item-state').evaluate(n=>{const r=n.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)];});
+      const spinnerBox=await box();
+      await page.evaluate(()=>Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>false}));
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=idle\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='check');
+      assert.equal(await main.locator('.agent-indicator svg').count(),1,'finished draws a check mark');
+      assert.deepEqual(await box(),spinnerBox,'the indicator box does not change with the state');
+      if(process.env.PULSO_SCREENSHOT_DIR){const dir=process.env.PULSO_SCREENSHOT_DIR;await mkdir(dir,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.locator('#sidebar').screenshot({path:`${dir}/${engine.name()}-sidebar-finished-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=blocked\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='halo');
+      assert.equal(await main.locator('.agent-indicator svg').count(),0);
+      await page.evaluate(()=>Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>true}));
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=working\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='spinner');
       // Compact header: the search field opens from its button or ⌘K and closes with Escape.
       assert.equal(await page.locator('#session-search').isVisible(),false);
       await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.blur());await page.keyboard.press('Meta+k');
@@ -328,17 +345,20 @@ try{
       const shots=process.env.PULSO_SCREENSHOT_DIR;
       if(shots){await mkdir(shots,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-project-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
       // Por estado keeps Abiertas, reuses the activity sections and is remembered per profile.
-      await page.locator('[data-grouping="state"]').click();
+      await groupingButton.click();
+      assert.equal(await groupingButton.getAttribute('aria-pressed'),'true');assert.match(await groupingButton.getAttribute('title')??'',/Agrupados por estado/);
       await page.locator('.session-group[data-activity="working"] .session-item[data-session-id="main"]').waitFor();
       assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true');
       assert.equal(await page.evaluate(()=>localStorage.getItem('jauria:agent-grouping:/synthetic')),JSON.stringify({schemaVersion:1,grouping:'state'}));
       if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-state-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
-      await page.reload();await page.waitForFunction(()=>document.querySelector('[data-grouping="state"]')?.getAttribute('aria-pressed')==='true'&&!!document.querySelector('.session-group[data-activity] .session-item'));
+      await page.reload();await page.waitForFunction(()=>document.querySelector('#agent-grouping')?.getAttribute('aria-pressed')==='true'&&!!document.querySelector('.session-group[data-activity] .session-item'));
       assert.equal(await page.locator('.session-group[data-project]').count(),0);
       // A project row opens that board; Pendientes opens the standalone board.
       await page.waitForFunction(()=>!(document.querySelector('#sidebar-project-list button[data-board="plan"]')as HTMLButtonElement|null)?.disabled);
-      await page.locator('#sidebar-project-list button[data-board="plan"]').click();
+      // Keyboard activation keeps focus on the row although the list is rebuilt.
+      await page.locator('#sidebar-project-list button[data-board="plan"]').focus();await page.keyboard.press('Enter');
       await page.waitForFunction(()=>document.querySelector('.pulso-board')?.getAttribute('data-project-id')==='plan'&&document.querySelector('#sidebar-project-list button[data-board="plan"]')?.getAttribute('aria-current')==='true');
+      assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.dataset.board),'plan','focus stays on the activated project row');
       assert.equal(await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).getAttribute('aria-current'),'true');
       if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-pulso-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
       await page.locator('#sidebar-project-list button[data-board=""]').click();
@@ -359,7 +379,7 @@ try{
       await emit('working');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='false'));
       await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes('Solicita atención')&&n.getAttribute('data-attention')==='true'));
       assert.equal(await session.getAttribute('data-unseen'),'true');
-      await page.locator('[data-grouping="state"]').click();
+      await page.locator('#agent-grouping').click();
       assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true','Por estado stays inside Abiertas');
       await page.locator('.session-group[data-activity="needs"]').waitFor();
       assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
