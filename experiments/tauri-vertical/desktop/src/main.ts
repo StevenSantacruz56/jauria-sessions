@@ -11,8 +11,6 @@ import { mountCodexConversation } from './codex-conversation';
 import './codex-conversation.css';
 import { validateSequence } from './events';
 import { TerminalStreamCursor, isLocalHistoryLimit, historyUsage, deferTerminalGap, terminalFramesPayload, terminalGapNotice, historyLabel, historyReasonLabel, type TerminalStream, type TerminalFrame, type TerminalGap, type TerminalHistory } from './terminal-stream';
-import { mountVerificationPanel } from './verification-panel';
-import { mountReviewPanel } from './review-panel';
 import { mountTelemetry, formatTelemetryCpu, formatTelemetryBytes } from './telemetry';
 import './telemetry.css';
 import { invoke } from '@tauri-apps/api/core';
@@ -25,7 +23,6 @@ import { InteractivePoll } from './interactive-poll';
 import { attachTerminalKeyboard } from './terminal-keyboard';
 import { preserveTerminalViewport, syncTerminalViewport } from './terminal-viewport';
 import { terminalTheme, terminalTypography } from './terminal-theme';
-import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
 import { shell, icon } from './ui';
 import { paneMarkup, paintPaneHeader } from './pane-header';
 import { SessionPicker, sessionPickerOptions } from './session-picker';
@@ -38,8 +35,8 @@ import { paintAgentIndicator, providerBadge, compactDuration, groupAgents, proje
 import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
 
-type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; taskId?: string | null; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
+type RunnerStatus = { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; trigger: HTMLButtonElement; picker: SessionPicker; id: string | null };
@@ -58,11 +55,8 @@ const attention = new SessionAttention();
 const dockBadge = new DockBadge(count => getCurrentWindow().setBadgeCount(count));
 let attentionAt = 0;
 let attentionReading = false;
-const handoffContexts=new Map<string,string>();
-let handoffOpen=false;
 const codexDrafts=new Map<string,unknown>();
 const panes: Pane[] = [];
-let reviewPanel: ReturnType<typeof mountReviewPanel> | null = null;
 let connected = false;
 let profileDataDir: string | null = null;
 let connecting = false;
@@ -86,20 +80,10 @@ let archiveHasMore = false;
 let busyAction = false;
 let disposed = false;
 let selectedDirectory: string | null = null;
-let selectedTaskId: string | null = null;
-let taskScreen: 'terminal' | 'draft' | 'detail' | 'pulso' = 'terminal';
+let stageView: 'terminal' | 'pulso' = 'terminal';
 let pulsoPanel: ReturnType<typeof mountPulsoPanel> | null = null;
 let pulsoShown = false;
 const resumeAttempts = new Map<string,string>();
-let workspaceBusy = false;
-const preparingTasks = new Set<string>();
-const taskErrors = new Map<string, string>();
-let projectNavKey = '';
-let projectOptionsKey = '';
-let taskSessionsKey = '';
-let lastTaskDetailKey = '';
-let savedDraftId: string | null = null;
-let draftSubmission: { key: string; id: string } | null = null;
 // Historical terminal queries (DSR/DA/colors) must not become fresh input.
 let replaying = false;
 let replayThrough = 0;
@@ -175,7 +159,7 @@ function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.f
 function selectSession(id: string) {
   attention.see(attention.list(attentionSessions()).filter(item => item.id === id));
   programStatuses.markSeen(id); attention.seeProgram(id);
-  taskScreen = 'terminal';
+  stageView = 'terminal';
   const target = panes[focusedPane];
   const other = panes.find(p => p !== target && p.id === id);
   if (other && split) { focusedPane = panes.indexOf(other); }
@@ -321,12 +305,7 @@ function renderProjectList(planning: boolean) {
   if (focusKey !== null) (focusKey === 'more' ? list.querySelector<HTMLElement>('[data-more]') : Array.from(list.querySelectorAll<HTMLElement>('[data-board]')).find(n => n.dataset.board === focusKey))?.focus({ preventScroll: true });
 }
 function refresh() {
-  const handoffContext=handoffContexts.get(activeView()?.session.id??'');
-  // Floating panel with a fixed-height opener in the top bar; never in the terminal's flow.
-  $('#handoff-toggle').hidden=taskScreen!=='terminal' || !handoffContext;
-  $('#handoff-context').hidden=$('#handoff-toggle').hidden || !handoffOpen;
-  $('#handoff-toggle').setAttribute('aria-expanded',String(!$('#handoff-context').hidden));
-  const planning = taskScreen === 'pulso';
+  const planning = stageView === 'pulso';
   $('#pulso-panel-host').hidden = !planning;
   $('#open-pulso').setAttribute('aria-pressed', String(planning));
   $<HTMLButtonElement>('#open-pulso').disabled = !connected || runner?.pulsoBoardVersion !== 1 || !runner?.pulsoAvailable;
@@ -334,14 +313,13 @@ function refresh() {
   if (planning !== pulsoShown) { pulsoShown = planning; if (planning) pulsoPanel?.show(); else { pulsoPanel?.hide(); loadSidebarProjects(); } }
   renderProjectList(planning);
 
-  if(handoffContext && $<HTMLTextAreaElement>('#handoff-context-text').value!==handoffContext){$<HTMLTextAreaElement>('#handoff-context-text').value=handoffContext;text('#handoff-context-status','');}
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
   else if ($('#telemetry-summary').textContent === 'Recursos sin conexión') text('#telemetry-summary','CPU — · RAM —');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'}${runner.runnerVersion ? ` · v${runner.runnerVersion}` : ''} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
-  const capabilities=runner as RunnerStatus & {telemetryVersion?:number;verificationVersion?:number;recoveryVersion?:number;handoffVersion?:number;codexVersion?:number;terminalSessionVersion?:number;projectLifecycleVersion?:number};
-  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.verificationVersion === 1 && capabilities?.recoveryVersion === 1 && capabilities?.handoffVersion===1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && capabilities?.projectLifecycleVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===2 && runner?.sessionRenameVersion===1);
+  const capabilities=runner as RunnerStatus & {telemetryVersion?:number;codexVersion?:number;terminalSessionVersion?:number};
+  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===2 && runner?.sessionRenameVersion===1);
   $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
   text('#cursor', `Eventos procesados: ${renderedSeq}`);
   const retained=runner?.retention;
@@ -476,10 +454,10 @@ function refresh() {
   }
   const focusedView = activeView();
   text('#terminal-size', focusedView?.session.transport === 'app-server' ? 'Conversación' : focusedView ? `${focusedView.term.cols} × ${focusedView.term.rows}` : '—');
-  for(const view of views.values())view.chat?.select(connected && !replaying && taskScreen==='terminal' && panes.some((pane,index)=>pane.id===view.session.id && (index===0||split))?view.session:null);
+  for(const view of views.values())view.chat?.select(connected && !replaying && stageView==='terminal' && panes.some((pane,index)=>pane.id===view.session.id && (index===0||split))?view.session:null);
   const hasVisibleSession = panes.some((pane, index) => !!pane.id && (index === 0 || split));
-  $('#welcome').hidden = hasVisibleSession || taskScreen !== 'terminal';
-  $('#panes').hidden = !hasVisibleSession || taskScreen !== 'terminal';
+  $('#welcome').hidden = hasVisibleSession || stageView !== 'terminal';
+  $('#panes').hidden = !hasVisibleSession || stageView !== 'terminal';
   $('#panes').dataset.split = String(split);
   $('#toggle-split').setAttribute('aria-pressed', String(split));
   $('#toggle-split').hidden = planning;
@@ -488,7 +466,7 @@ function refresh() {
   // Top bar: session tabs in terminal views, Pulso board tabs while planning.
   $('#session-tabs').hidden = planning; $('#tab-new-session').hidden = planning; $('#pulso-tabs-host').hidden = !planning; $('#pulso-back-terminal').hidden = !planning;
   $('.workbench-header').dataset.view = planning ? 'pulso' : 'terminal';
-  if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), taskScreen === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
+  if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), stageView === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
   text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
   text('#workspace-breadcrumb', current?.cwd?.split('/').filter(Boolean).pop() ?? (current ? providerLabel(current.kind) : 'Sesiones locales'));
   text('#inspector-provider', current ? providerLabel(current.kind) : '');
@@ -505,7 +483,8 @@ function refresh() {
   text('#inspector-cwd', current?.cwd ?? '—'); text('#inspector-id', current?.id ?? '—');
   $<HTMLButtonElement>('#copy-session-id').disabled = !current;
   $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying;
-  refreshTasks(sessions);
+  $('#workspace-breadcrumb').hidden = planning;
+  if (planning) text('#workspace-title', 'Pulso');
   const visibleSessions = sessions.filter(s => matches(s, filter, query));
   const navigation = $('.workspace-navigation');
   navigation.dataset.sessionView = filter === 'activity' || filter === 'attention' ? 'priority' : 'projects';
@@ -555,7 +534,7 @@ function refresh() {
     const s = sessionById.get(button.dataset.sessionId!)!;
     const alert = alertById.get(s.id);
     const activity = activityById.get(s.id)!;
-    const selected = taskScreen === 'terminal' && s.id === current?.id;
+    const selected = stageView === 'terminal' && s.id === current?.id;
     button.dataset.selected = String(selected);
     button.setAttribute('aria-current', String(selected));
     button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
@@ -651,7 +630,6 @@ function ensure(session: Session): View {
 }
 function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
-  if (status.workspaceNotModified && runner && runner.generation === status.generation) status = { ...status, projects:runner.projects, tasks:runner.tasks };
   runner = status;
   for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);attention.clearProgram(session.id);}}
   refresh();
@@ -661,7 +639,7 @@ function scheduleResize(view: View) {
   resizeTimers.set(view.session.id, setTimeout(() => { resizeTimers.delete(view.session.id); resizeView(view); }, 80));
 }
 function resizeView(view: View) {
-  if (!view || taskScreen !== 'terminal' || replaying || streamReplaying(view) || (streamMetadata(view.session) && !isLive(view.session)) || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
+  if (!view || stageView !== 'terminal' || replaying || streamReplaying(view) || (streamMetadata(view.session) && !isLive(view.session)) || !connected || !view.host.isConnected || view.host.clientWidth < 20 || view.host.clientHeight < 20) return;
   if (view.resizeBusy) { view.resizeAgain = true; return; }
   const dimensions = view.fit.proposeDimensions();
   if (dimensions && (dimensions.cols !== view.term.cols || dimensions.rows !== view.term.rows)) {
@@ -685,11 +663,6 @@ async function action(work: () => Promise<void>) {
 }
 function occupiedSessions() { return [...views.values()].filter(v => !['exited','stopped','failed','interrupted','released'].includes(v.session.status)).length; }
 function sessionLimit() { return runner?.settingsVersion === 1 || runner?.settingsVersion === 2 ? runner.settings?.maxConcurrentSessions ?? 2 : 2; }
-function taskLaunchBlock(task: Task, sessions: Session[]): string | null {
-  if (task.state !== 'ready') return 'Prepara el worktree antes de iniciar un proveedor.';
-  if (sessions.some(s => s.taskId === task.id && ['running','starting','needs_attention'].includes(s.status))) return 'Esta tarea ya tiene una sesión abierta o pendiente de atención. Vuelve a su terminal.';
-  return occupiedSessions() >= sessionLimit() ? `Se alcanzó el límite de ${sessionLimit()} sesiones simultáneas. Ajústalo en Configuración.` : null;
-}
 function requireSessionCapacity() {
   if (occupiedSessions() >= sessionLimit()) throw new Error(`Se alcanzó el límite de ${sessionLimit()} sesiones simultáneas. Ajústalo en Configuración o termina una sesión.`);
 }
@@ -700,7 +673,7 @@ async function start(id: string, kind: string, title: string, pane: Pane, cwd?: 
   notice(`${title}: inicio solicitado. Esperando salida y estado reales.`);
 }
 function presentSession(session: Session, pane: Pane) {
-  taskScreen = 'terminal';
+  stageView = 'terminal';
   const id = session.id;
   const view = ensure(session);
   const other = panes.find(p => p !== pane && p.id === id);
@@ -862,7 +835,7 @@ async function poll(version: number) {
       if (backgroundNativeError) throw backgroundNativeError;
       if (Date.now() - statusAt > 1000) {
         let status: RunnerStatus | undefined;
-        try { status = await request<RunnerStatus>('status', runner?.statusVersion === 2 ? {workspaceAfter:runner.workspaceRevision} : {}); }
+        try { status = await request<RunnerStatus>('status', {}); }
         catch (e) { if (runner?.terminalStreamVersion !== 1) throw e; archiveUnavailable = true; }
         if (version !== loopVersion) return;
         if (status) updateStatus(status);
@@ -1057,288 +1030,12 @@ async function connect() {
   } catch (e) { connected = false; notice(`No se pudo conectar: ${message(e)}`, true); }
   finally { connecting = false; refresh(); }
 }
-function taskData() {
-  return hasTaskWorkspace(runner) ? { projects: runner!.projects!, tasks: runner!.tasks! } : { projects: [], tasks: [] };
-}
-function selectedTask() { return taskData().tasks.find(task => task.id === selectedTaskId); }
-function returnToTerminal() {
-  taskScreen = 'terminal'; refresh();
-  for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
-  if (activeView()) focusView(activeView());
-  else if (panes.some(pane => pane.id)) panes[focusedPane].trigger.focus();
-  else $('#welcome-create').focus();
-}
-function showTask(id: string) {
-  const task = taskData().tasks.find(item => item.id === id);
-  if (taskData().projects.find(project => project.id === task?.projectId)?.closed) { notice('Reabre el proyecto desde Proyectos cerrados para volver a sus tareas.'); return; }
-  selectedTaskId = id; taskScreen = 'detail'; closeSidebar(); refresh(); $('#task-detail-title').focus();
-}
-function openTaskDraft() {
-  if (!hasTaskWorkspace(runner) || workspaceBusy || !taskData().projects.some(project => !project.closed)) return;
-  taskScreen = 'draft'; closeSidebar(); refresh();
-  $<HTMLSelectElement>('#task-project').focus();
-}
-function refreshTasks(sessions: Session[]) {
-  const supported = hasTaskWorkspace(runner);
-  const { projects, tasks } = taskData();
-  const openProjects = projects.filter(project => !project.closed);
-  const closedProjects = projects.filter(project => project.closed);
-  const lifecycleSupported = runner?.projectLifecycleVersion === 1;
-  if (taskScreen !== 'pulso' && projects.find(project => project.id === selectedTask()?.projectId)?.closed) { selectedTaskId = null; taskScreen = 'terminal'; }
-  const available = supported && connected && !connecting && !replaying;
-  $('#workspace-upgrade').hidden = supported || !runner;
-  text('#workspace-upgrade', 'Proyectos y tareas requieren un runner actualizado (workspace v1). Las sesiones siguen disponibles.');
-  $<HTMLButtonElement>('#register-project').disabled = !available || workspaceBusy;
-  $<HTMLButtonElement>('#new-task').disabled = !supported || workspaceBusy || openProjects.length === 0;
-  const optionsKey = JSON.stringify(openProjects.map(project => [project.id, project.name, project.root]));
-  if (supported && optionsKey !== projectOptionsKey) {
-    projectOptionsKey = optionsKey;
-    const select = $<HTMLSelectElement>('#task-project'); const previous = select.value;
-    const blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Elegir proyecto';
-    select.replaceChildren(blank);
-    for (const project of openProjects) {
-      const option = document.createElement('option'); option.value = project.id; option.textContent = `${project.name} · ${project.root}`; select.append(option);
-    }
-    select.value = openProjects.some(project => project.id === previous) ? previous : openProjects.length === 1 ? openProjects[0].id : '';
-  }
-  const key = JSON.stringify([supported, available, lifecycleSupported, workspaceBusy, busyAction, projects, tasks, selectedTaskId, taskScreen]);
-  if (key !== projectNavKey) {
-    projectNavKey = key;
-    const nav = $('#project-list'); nav.replaceChildren();
-    if (supported && openProjects.length === 0) {
-      const hint = document.createElement('p'); hint.className = 'workspace-hint'; hint.textContent = closedProjects.length ? 'No hay proyectos abiertos. Reabre uno abajo o registra otra carpeta.' : 'Registra una carpeta Git para crear tareas con su propio worktree.'; nav.append(hint);
-    }
-    for (const project of openProjects) {
-      const group = document.createElement('section'); group.className = 'project-group';
-      const heading = document.createElement('div'); heading.className = 'group-heading'; heading.innerHTML = icon('folder');
-      const name = document.createElement('span'); name.textContent = project.name;
-      const meta = document.createElement('small'); meta.textContent = `Al registrar: ${project.head.slice(0, 10)}`;
-      heading.append(name);
-      if (lifecycleSupported) {
-        const close = document.createElement('button'); close.type = 'button'; close.className = 'quiet project-close'; close.textContent = 'Cerrar';
-        close.dataset.projectId = project.id; close.setAttribute('aria-label', `Cerrar proyecto ${project.name}`); close.title = 'Ocultar proyecto conservando tareas, archivos e historial';
-        close.disabled = !available || workspaceBusy || busyAction;
-        close.addEventListener('click', () => { void setProjectClosed(project.id, true); }); heading.append(close);
-      }
-      heading.append(meta); heading.title = `${project.root}\n${project.commonDir}\nReferencia al registrar: ${project.branch ?? 'HEAD separado'} · ${project.head}`; group.append(heading);
-      const projectTasks = tasks.filter(task => task.projectId === project.id);
-      for (const task of projectTasks) {
-        const button = document.createElement('button'); button.className = 'session-item task-item';
-        const selected = taskScreen === 'detail' && task.id === selectedTaskId;
-        button.dataset.selected = String(selected); button.setAttribute('aria-current', String(selected));
-        const dot = document.createElement('span'); dot.className = 'state-dot'; dot.dataset.state = task.state;
-        const copy = document.createElement('span'); copy.className = 'session-item-copy';
-        const title = document.createElement('span'); title.className = 'session-item-title'; title.textContent = task.title;
-        const state = document.createElement('span'); state.className = 'session-item-meta'; state.textContent = taskStateLabel(task.state);
-        copy.append(title, state); button.append(dot, copy); button.title = task.title;
-        button.addEventListener('click', () => showTask(task.id)); group.append(button);
-      }
-      if (!projectTasks.length) {
-        const hint = document.createElement('p'); hint.className = 'workspace-hint'; hint.textContent = 'Sin tareas. Crea un borrador con Nueva tarea.'; group.append(hint);
-      }
-      nav.append(group);
-    }
-    $('#closed-projects').hidden = closedProjects.length === 0;
-    text('#closed-projects-summary', `Repositorios cerrados (${closedProjects.length})`);
-    const closedList = $('#closed-project-list'); closedList.replaceChildren();
-    for (const project of closedProjects) {
-      const row = document.createElement('div'); row.className = 'closed-project-row';
-      const name = document.createElement('span'); name.textContent = project.name; name.title = project.root;
-      const reopen = document.createElement('button'); reopen.type = 'button'; reopen.textContent = 'Reabrir'; reopen.className = 'quiet';
-      reopen.setAttribute('aria-label', `Reabrir proyecto ${project.name}`); reopen.disabled = !available || !lifecycleSupported || workspaceBusy || busyAction;
-      reopen.addEventListener('click', () => { void setProjectClosed(project.id, false); }); row.append(name, reopen); closedList.append(row);
-    }
-  }
-  $('#task-panel').hidden = taskScreen !== 'draft' && taskScreen !== 'detail';
-  $('#task-form').hidden = taskScreen !== 'draft';
-  const task = selectedTask();
-  $('#task-detail').hidden = taskScreen !== 'detail' || !task;
-  $('#show-task').hidden = !task || taskScreen !== 'terminal';
-  $('#workspace-breadcrumb').hidden = taskScreen !== 'terminal';
-  if (taskScreen !== 'terminal') {
-    text('#workspace-title', taskScreen === 'pulso' ? 'Pulso' : taskScreen === 'draft' ? 'Nueva tarea Git' : task?.title ?? 'Tarea no disponible');
-  }
-  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('#task-form input, #task-form textarea, #task-form select').forEach(field => field.disabled = workspaceBusy || !!savedDraftId || !supported);
-  $<HTMLButtonElement>('#save-task').disabled = !available || workspaceBusy || openProjects.length === 0;
-  text('#save-task', workspaceBusy && taskScreen === 'draft' ? 'Guardando…' : savedDraftId ? 'Consultar borrador guardado' : 'Guardar borrador');
-  $('#review-panel-host').hidden=(runner as RunnerStatus & {workflowVersion?:number})?.workflowVersion!==1;
-  reviewPanel?.select(taskScreen === 'detail' && (runner as RunnerStatus & {workflowVersion?:number})?.workflowVersion === 1 ? task ?? null : null);
-  if (!task) return;
-  const detailKey = JSON.stringify(task);
-  if (detailKey !== lastTaskDetailKey) {
-    lastTaskDetailKey = detailKey;
-    text('#task-detail-title', task.title);
-    text('#task-project-name', projects.find(project => project.id === task.projectId)?.name ?? task.projectId);
-    text('#task-state', taskStateLabel(task.state));
-    text('#task-branch-label', task.state === 'draft' ? 'Rama prevista' : 'Rama de tarea');
-    text('#task-path-label', task.state === 'draft' ? 'Carpeta prevista' : 'Carpeta aislada');
-    text('#task-base', task.baseSha ? task.baseSha.slice(0, 10) : 'Sin base registrada'); $('#task-base').title = task.baseSha;
-    text('#task-branch', task.branch || 'Sin rama preparada');
-    text('#task-worktree', task.worktreePath || 'Sin carpeta preparada');
-    text('#task-detail-objective', task.objective);
-    text('#task-detail-criteria', task.acceptanceCriteria || 'Sin criterios de aceptación.');
-    text('#task-backend-error', task.error ?? ''); $('#task-backend-error').hidden = !task.error;
-  }
-  text('#task-action-error', taskErrors.get(task.id) ?? ''); $('#task-action-error').hidden = !taskErrors.has(task.id);
-  const preparing = preparingTasks.has(task.id) || task.state === 'preparing';
-  const prepare = $<HTMLButtonElement>('#prepare-task');
-  prepare.hidden = task.state === 'ready'; prepare.disabled = !available || workspaceBusy || preparing || task.state === 'needs_attention';
-  prepare.textContent = preparing ? 'Preparando worktree…' : task.state === 'needs_attention' ? 'Preparación bloqueada' : 'Preparar worktree';
-  const revalidate=$<HTMLButtonElement>('#revalidate-task');
-  revalidate.hidden=task.state!=='needs_attention' || (runner as RunnerStatus & {recoveryVersion?:number})?.recoveryVersion!==1;
-  revalidate.disabled=!available || workspaceBusy || preparing || busyAction;
-  const blocked = taskLaunchBlock(task, sessions);
-  for (const kind of ['codex', 'claude']) {
-    const button = $<HTMLButtonElement>(`#start-task-${kind}`);
-    button.hidden = task.state !== 'ready'; button.disabled = !available || workspaceBusy || busyAction || !!blocked;
-  }
-  text('#task-action-hint', preparing ? 'Preparación solicitada; puede tardar unos segundos. No inicia un proveedor.' : task.state === 'ready' ? blocked ?? 'Iniciar abre la sesión del proveedor. Copia el objetivo cuando quieras; no se envía automáticamente.' : task.state === 'needs_attention' ? 'La preparación requiere atención. Los recursos parciales se conservan. Revisa la carpeta y la rama; Revalidar comprueba su identidad sin recrear ni limpiar archivos.' : 'Preparar crea una rama y un worktree aislado desde la base registrada.');
-  const related = sessions.filter(session => session.taskId === task.id);
-  const sessionKey = JSON.stringify([task.id, related.map(session => [session.id, session.title, session.status])]);
-  if (sessionKey !== taskSessionsKey) {
-    taskSessionsKey = sessionKey;
-    const list = $('#task-sessions'); list.replaceChildren();
-    for (const session of related) {
-      const button = document.createElement('button'); button.textContent = `${session.title} · ${statusLabel(session.status)}`;
-      button.addEventListener('click', () => selectSession(session.id)); list.append(button);
-    }
-    if (!related.length) { const hint = document.createElement('p'); hint.className = 'task-help'; hint.textContent = 'Todavía no hay sesiones para esta tarea.'; list.append(hint); }
-  }
-}
 function workspaceContext() {
   const version = loopVersion; const generation = runner?.generation;
   return () => {
     if (version !== loopVersion || generation !== runner?.generation) throw new Error('La conexión cambió. Consulta el estado actual antes de continuar.');
   };
 }
-async function refreshWorkspace(check: () => void) {
-  check(); const status = await request<RunnerStatus>('status', {}); check(); updateStatus(status);
-}
-// Task launch shares terminal creation, assignment and focus with standalone start.
-// Only the explicit provider buttons call this; no objective is sent as PTY input.
-export async function startTask(id: string, kind: 'codex' | 'claude') {
-  if (!hasTaskWorkspace(runner) || !connected || connecting || replaying || workspaceBusy || busyAction) return;
-  const task = taskData().tasks.find(item => item.id === id);
-  if (!task) throw new Error('La tarea ya no está disponible.');
-  const blocked = taskLaunchBlock(task, [...views.values()].map(view => view.session));
-  if (blocked) throw new Error(blocked);
-  requireSessionCapacity();
-  const pane = panes[focusedPane]; const check = workspaceContext();
-  const sessionId = `${kind}-${crypto.randomUUID()}`;
-  workspaceBusy = true; taskErrors.delete(id); refresh();
-  try {
-    const session = await request<Session>('start_task', { id, sessionId, kind, rows: 24, cols: 80 }); check();
-    presentSession(session, pane);
-    notice(`${providerLabel(kind)}: sesión abierta. El objetivo no se ha enviado.`);
-  } catch (e) {
-    taskErrors.set(id, message(e)); notice(message(e), true);
-  } finally {
-    // A failed RPC may still persist task/session resources on the runner.
-    try { await refreshWorkspace(check); } catch (e) {
-      if (!taskErrors.has(id)) { taskErrors.set(id, message(e)); notice(`Consulta el estado antes de reintentar: ${message(e)}`, true); }
-    }
-    workspaceBusy = false; refresh();
-  }
-}
-async function setProjectClosed(id: string, closed: boolean) {
-  if (workspaceBusy || busyAction || !connected || connecting || replaying || runner?.projectLifecycleVersion !== 1) return;
-  const check = workspaceContext(); workspaceBusy = true; $('#project-error').hidden = true; refresh();
-  let confirmed = false;
-  try {
-    const project = await request<Project>(closed ? 'close_project' : 'reopen_project', { id }); check();
-    confirmed = project.closed === closed;
-    notice(closed ? 'Proyecto cerrado. Puedes reabrirlo en Proyectos cerrados; sus tareas, archivos e historial se conservan.' : 'Proyecto reabierto. Sus tareas vuelven a estar disponibles.');
-  } catch (e) { text('#project-error', message(e)); $('#project-error').hidden = false; }
-  finally {
-    try { await refreshWorkspace(check); } catch (e) { confirmed = false; text('#project-error', `Consulta el estado antes de reintentar: ${message(e)}`); $('#project-error').hidden = false; }
-    workspaceBusy = false; refresh();
-    if (confirmed) {
-      if (closed) $('#closed-projects-summary').focus();
-      else document.querySelector<HTMLButtonElement>(`.project-close[data-project-id="${id}"]`)?.focus();
-    }
-  }
-}
-$('#register-project').addEventListener('click', async () => {
-  if (workspaceBusy || !hasTaskWorkspace(runner) || !connected || connecting || replaying) return;
-  const check = workspaceContext(); workspaceBusy = true; $('#project-error').hidden = true; refresh();
-  try {
-    const directory = await invoke<string | null>('select_directory'); check();
-    if (directory === null) return;
-    const project = await request<Project>('register_project', { id: `project-${crypto.randomUUID()}`, path: directory }); check();
-    if (project.closed) notice('Este proyecto está cerrado. Reábrelo desde Proyectos cerrados.');
-    await refreshWorkspace(check);
-  } catch (e) { text('#project-error', message(e)); $('#project-error').hidden = false; try { await refreshWorkspace(check); } catch { /* preserve picker/registration error */ } }
-  finally { workspaceBusy = false; refresh(); }
-});
-$('#new-task').addEventListener('click', openTaskDraft);
-$('#cancel-task').addEventListener('click', returnToTerminal);
-$('#back-terminal').addEventListener('click', returnToTerminal);
-$('#show-task').addEventListener('click', () => { if (selectedTaskId) showTask(selectedTaskId); });
-$('#task-form').addEventListener('submit', event => {
-  event.preventDefault();
-  if (workspaceBusy || !hasTaskWorkspace(runner) || !connected || connecting || replaying) return;
-  const projectId = $<HTMLSelectElement>('#task-project').value;
-  const title = $<HTMLInputElement>('#task-title').value;
-  const objective = $<HTMLTextAreaElement>('#task-objective').value;
-  const acceptanceCriteria = $<HTMLTextAreaElement>('#task-criteria').value;
-  const error = validateDraft(projectId, title, objective, acceptanceCriteria);
-  if (error) { text('#task-form-error', error); $('#task-form-error').hidden = false; return; }
-  const check = workspaceContext(); workspaceBusy = true; refresh();
-  void (async () => {
-    try {
-      if (!savedDraftId) {
-        const payloadKey = JSON.stringify([projectId, title, objective, acceptanceCriteria]);
-        if (!draftSubmission || draftSubmission.key !== payloadKey) draftSubmission = { key: payloadKey, id: `task-${crypto.randomUUID()}` };
-        const task = await request<Task>('create_task', { id: draftSubmission.id, projectId, title, objective, acceptanceCriteria }); check(); savedDraftId = task.id;
-      }
-      await refreshWorkspace(check);
-      const id = savedDraftId!;
-      if (!taskData().tasks.some(task => task.id === id)) throw new Error('El borrador se guardó; vuelve a consultar su estado.');
-      savedDraftId = null; draftSubmission = null;
-      $<HTMLFormElement>('#task-form').reset(); $('#task-form-error').hidden = true;
-      if (taskScreen === 'draft') showTask(id);
-      notice('Borrador guardado. Puedes preparar el worktree cuando quieras.');
-    } catch (e) {
-      text('#task-form-error', `${savedDraftId ? 'El borrador ya se guardó. ' : ''}${message(e)}`); $('#task-form-error').hidden = false;
-      try { await refreshWorkspace(check); } catch { /* keep all draft values and its error */ }
-    }
-    finally { workspaceBusy = false; refresh(); }
-  })();
-});
-$('#prepare-task').addEventListener('click', () => {
-  const task = selectedTask();
-  if (!task || !hasTaskWorkspace(runner) || !connected || connecting || replaying || workspaceBusy || preparingTasks.has(task.id) || task.state !== 'draft') return;
-  const id = task.id; const check = workspaceContext(); preparingTasks.add(id); taskErrors.delete(id); refresh();
-  void (async () => {
-    try { await request<Task>('prepare_task', { id }); check(); notice('Worktree preparado. Inicia un proveedor cuando quieras.'); }
-    catch (e) { taskErrors.set(id, message(e)); }
-    finally {
-      // Partial preparation is persisted even when the RPC returns an error.
-      try { await refreshWorkspace(check); } catch (e) { if (!taskErrors.has(id)) taskErrors.set(id, message(e)); }
-      preparingTasks.delete(id); refresh();
-    }
-  })();
-});
-$('#revalidate-task').addEventListener('click', () => {
-  const task=selectedTask();
-  if (!task || task.state!=='needs_attention' || !connected || connecting || replaying || workspaceBusy || busyAction) return;
-  const id=task.id; const check=workspaceContext(); workspaceBusy=true; taskErrors.delete(id); refresh();
-  void (async () => {
-    try {await request<Task>('revalidate_task',{id});check();notice('Carpeta validada. Los archivos y la rama se conservan.');}
-    catch(e){taskErrors.set(id,message(e));}
-    finally {try {await refreshWorkspace(check);} catch(e){if(!taskErrors.has(id))taskErrors.set(id,message(e));} workspaceBusy=false;refresh();}
-  })();
-});
-for (const kind of ['codex', 'claude'] as const) $(`#start-task-${kind}`).addEventListener('click', () => {
-  const id = selectedTaskId; if (id) void startTask(id, kind).catch(e => { taskErrors.set(id, message(e)); refresh(); });
-});
-$('#copy-task-objective').addEventListener('click', () => {
-  const task = selectedTask(); if (task) void navigator.clipboard.writeText(task.objective).then(() => notice('Objetivo copiado.')).catch(e => notice(message(e), true));
-});
-$('#task-panel').addEventListener('keydown', event => {
-  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); returnToTerminal(); }
-});
-
 $('#choose-directory').addEventListener('click', () => action(async () => {
   const directory = await invoke<string | null>('select_directory');
   if (directory !== null) setSessionDirectory(directory);
@@ -1421,7 +1118,7 @@ window.addEventListener('blur', refresh);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSidebarProjects(); refresh(); });
 // close does not bubble; capture refreshes Dock/header after native focus restoration.
 document.addEventListener('close', refresh, true);
-function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && taskScreen === 'terminal' && activeView()?.session.id === id; }
+function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && stageView === 'terminal' && activeView()?.session.id === id; }
 function showAttention() {
   filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = ''; setSearchOpen(false);
   $('.workspace-navigation').scrollTop = 0;
@@ -1607,7 +1304,7 @@ function handleAppShortcut(event: KeyboardEvent): boolean {
     void getComputedStyle($('#sidebar')).visibility;
     search.focus();
     setTimeout(() => {
-      if (!document.querySelector('dialog[open]') && taskScreen === 'terminal' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
+      if (!document.querySelector('dialog[open]') && stageView === 'terminal' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
     }, 200);
   }
   if (key === 'i') setInspector($('#inspector').hidden);
@@ -1671,17 +1368,17 @@ pulsoPanel = mountPulsoPanel({
     ensure(session); resumeAttempts.delete(sourceId); selectSession(session.id); return session.id;
   },
 });
-function showPulso() { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
+function showPulso() { stageView = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
 /** Same as the former «Volver a terminal»: a Pulso draft or failed save keeps the board. */
 function leavePulso() {
-  if (taskScreen !== 'pulso') return;
+  if (stageView !== 'pulso') return;
   if (pulsoPanel && !pulsoPanel.prepareNavigation()) { notice('Guarda o descarta el borrador de Pulso antes de volver a la terminal.'); return; }
-  taskScreen = 'terminal'; refresh();
+  stageView = 'terminal'; refresh();
   for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
   if (activeView()) focusView(activeView()); else if (!$<HTMLButtonElement>('#welcome-create').disabled) $('#welcome-create').focus(); else $('#open-pulso').focus();
 }
 // The Pulso button toggles between the board and the terminal view.
-$('#open-pulso').addEventListener('click', () => { if (taskScreen === 'pulso') leavePulso(); else showPulso(); });
+$('#open-pulso').addEventListener('click', () => { if (stageView === 'pulso') leavePulso(); else showPulso(); });
 $('#pulso-back-terminal').addEventListener('click', leavePulso);
 $('#sidebar-project-list').addEventListener('click', event => {
   const more = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-more]');
@@ -1717,38 +1414,11 @@ $('#export-diagnostic').addEventListener('click', () => action(async () => {
   text('#diagnostic-export-state',saved?'Diagnóstico guardado.':'Exportación cancelada.');
 }));
 
-const verificationHost=$('#verification-panel-host');
-const verificationPanel=mountVerificationPanel(verificationHost,request,async<T>(op:string,args:Record<string,unknown>):Promise<T>=>{
-  const response=await invoke<{ok:boolean;result:T;error?:string}>(op==='run_verification'?'confirm_verification':'confirm_workflow',op==='run_verification'?{args}:{op,args});
-  if(!response.ok)throw new Error(response.error??'No se pudo completar la verificación.');return response.result;
-},(id,runs)=>reviewPanel?.setVerifications(id,runs));
-window.addEventListener('beforeunload',()=>verificationPanel.dispose(),{once:true});
-reviewPanel = mountReviewPanel($('#review-panel-host'), request, async <T>(op: string, args: Record<string, unknown>): Promise<T> => {
-  const response = await invoke<{ok:boolean;result:T;error?:string}>('confirm_workflow',{op,args});
-  if (!response.ok) throw new Error(response.error ?? 'No se pudo registrar la decisión.');
-  return response.result;
-},{host:verificationHost,select:(task,snapshotId)=>{
-  const supported=(runner as RunnerStatus & {verificationVersion?:number})?.verificationVersion===1;
-  verificationHost.hidden=!supported;verificationPanel.select(supported?task:null,snapshotId);
-}},{available:()=>(runner as RunnerStatus & {handoffVersion?:number;terminalSessionVersion?:number})?.handoffVersion===1 && (runner as RunnerStatus & {terminalSessionVersion?:number})?.terminalSessionVersion===1,opened:(data,context)=>{
-  const session=data as Session;
-  if(!session.id || !['codex','claude'].includes(session.kind))throw new Error('Sesión de destino inválida. Consulta el historial.');
-  handoffContexts.set(session.id,context);handoffOpen=true;presentSession(session,panes[focusedPane]);notice('Destino abierto. El contexto está listo para copiar; no se ha enviado.');
-}});
-$('#handoff-toggle').addEventListener('click',()=>{handoffOpen=!handoffOpen;refresh();if(handoffOpen)$<HTMLTextAreaElement>('#handoff-context-text').focus();});
-$('#close-handoff-context').addEventListener('click',()=>{handoffOpen=false;refresh();$('#handoff-toggle').focus();});
-$('#handoff-context').addEventListener('keydown',event=>{if(event.key!=='Escape')return;event.preventDefault();event.stopPropagation();handoffOpen=false;refresh();$('#handoff-toggle').focus();});
-$('#copy-handoff-context').addEventListener('click',()=>{
-  const id=activeView()?.session.id;const context=id?handoffContexts.get(id):null;if(!context)return;
-  void navigator.clipboard.writeText(context).then(()=>text('#handoff-context-status','Contexto copiado. Pégalo y envíalo cuando quieras.')).catch(()=>text('#handoff-context-status','No se pudo copiar. Puedes seleccionar el texto y copiarlo con el teclado.'));
-});
-window.addEventListener('beforeunload',()=>reviewPanel?.dispose(),{once:true});
-
 $('#purge-history').addEventListener('click',()=>action(async()=>{
   const id=activeView()?.session.id;if (!id) throw new Error('Selecciona un historial.');
-  const response=await invoke<{ok:boolean;error?:string}>('confirm_workflow',{op:'purge_history',args:{id}});
+  const response=await invoke<{ok:boolean;error?:string}>('confirm_history',{op:'purge_history',args:{id}});
   if (!response.ok) throw new Error(response.error??'No se pudo eliminar la salida.');
-  await connect();notice('Salida eliminada explícitamente. Se conservan estados, tarea y archivos.');
+  await connect();notice('Salida eliminada explícitamente. Se conservan estados y archivos.');
 }));
 
 $('#restart-runner').addEventListener('click',()=>action(async()=>{
@@ -1757,7 +1427,7 @@ $('#restart-runner').addEventListener('click',()=>action(async()=>{
 
 $('#compact-history').addEventListener('click',()=>action(async()=>{
   const id=activeView()?.session.id;if (!id) throw new Error('Selecciona un historial.');
-  const response=await invoke<{ok:boolean;error?:string}>('confirm_workflow',{op:'compact_history',args:{id}});
+  const response=await invoke<{ok:boolean;error?:string}>('confirm_history',{op:'compact_history',args:{id}});
   if (!response.ok) throw new Error(response.error??'No se pudo compactar el historial.');
   await connect();notice('Eventos antiguos compactados explícitamente. Archivos y último estado conservados.');
 }));

@@ -4,9 +4,8 @@ pub fn validate_start_mode(
     args: &serde_json::Value,
     smoke: bool,
 ) -> Result<(), String> {
-    if matches!(op, "start" | "start_task")
-        && !matches!(args["kind"].as_str(), Some("codex" | "claude"))
-        && !(op == "start" && args["kind"] == "terminal")
+    if op == "start"
+        && !matches!(args["kind"].as_str(), Some("codex" | "claude" | "terminal"))
         && !smoke
     {
         return Err("Herramientas de prueba deshabilitadas en esta ventana".into());
@@ -84,23 +83,6 @@ mod tests {
                         "op={op}, args={args}, smoke={smoke}"
                     );
                 }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod task_tests {
-    #[test]
-    fn task_sessions_cannot_bypass_the_production_smoke_guard() {
-        assert!(super::validate_start_mode("start_task",&serde_json::json!({"kind":"terminal"}),false).is_err());
-        for op in ["start","start_task"] {
-            for kind in ["fixture","shell","unknown"] {
-                assert!(super::validate_start_mode(op,&serde_json::json!({"kind":kind}),false).is_err());
-                assert!(super::validate_start_mode(op,&serde_json::json!({"kind":kind}),true).is_ok());
-            }
-            for kind in ["codex","claude"] {
-                assert!(super::validate_start_mode(op,&serde_json::json!({"kind":kind}),false).is_ok());
             }
         }
     }

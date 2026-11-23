@@ -89,29 +89,13 @@ fn rpc_timeout(layout: &Layout, op: &str, args: Value, timeout: Duration) -> Res
 fn validate(op: &str, args: &Value) -> Result<()> {
     let obj = args.as_object().ok_or("args debe ser objeto")?;
     let fields: &[&str] = match op {
-        "status" => &["workspaceAfter"],
-        "telemetry" | "refresh_quotas" | "get_settings" => &[],
+        "status" | "telemetry" | "refresh_quotas" | "get_settings" => &[],
         "set_settings" => &["maxConcurrentSessions"],
         "rename_session" => &["id","title"],
         "native_binding" => &["id"],
         "resume_native" => &["id","sourceId","rows","cols"],
-        "register_project" => &["id","path"],
-        "close_project" | "reopen_project" => &["id"],
-        "create_task" => &["id","projectId","title","objective","acceptanceCriteria"],
-        "prepare_task" | "revalidate_task" | "workflow" | "reopen_task" | "verifications" => &["id"],
-        "verification" | "cancel_verification" => &["id","runId"],
-        "prepare_verification" => &["id","requestId","snapshotId","argv"],
-        "begin_verification" => &["id","runId","approvalNonce"],
-        "release_verification" => &["id","runId","confirmed"],
-        "purge_verifications" => &["id","confirmed"],
-        "snapshot_task" | "workflow_artifact" => &["id","artifactId"],
-        "review_task" => &["id","artifactId","snapshotId","verdict","notes","confirmed","verificationId"],
-        "handoff_task" => &["id","artifactId","snapshotId","destination","notes"],
-        "archive_task" | "purge_history" | "compact_history" | "purge_workflow" => &["id","confirmed"],
-        "start_task" => &["id","sessionId","kind","rows","cols"],
-        "open_handoff" => &["id","artifactId","requestId","sessionId","rows","cols"],
+        "purge_history" | "compact_history" => &["id","confirmed"],
         "start_codex" => &["id","title","kind","cwd","rows","cols"],
-        "start_codex_task" => &["id","sessionId","kind","rows","cols"],
         "codex_state" => &["id"],"codex_request" => &["id","requestId"],
         "codex_resume" => &["id","generation"],
         "codex_turn" | "codex_command" => &["id","commandId","turnId","attemptId","generation","prompt"],
@@ -138,21 +122,6 @@ fn validate(op: &str, args: &Value) -> Result<()> {
             return Err("El título debe contener entre 1 y 120 caracteres, hasta 480 bytes y sin controles".into());
         }
     }
-    if op == "register_project" {
-        let path = args["path"].as_str().ok_or("Selecciona un proyecto")?;
-        if path.len() > 4096 || !Path::new(path).is_absolute() || !Path::new(path).is_dir() { return Err("Ruta de proyecto inválida".into()); }
-    }
-    if op == "create_task" {
-        for (field,maximum,required) in [("projectId",64,true),("title",120,true),("objective",8000,true),("acceptanceCriteria",8000,false)] {
-            let value=args[field].as_str().ok_or("Campo de tarea inválido")?;
-            if value.chars().count()>maximum || (required && value.trim().is_empty()) { return Err("Campo de tarea vacío o demasiado largo".into()); }
-        }
-    }
-    if matches!(op,"start_task"|"start_codex_task") {
-        let session_id=args["sessionId"].as_str().ok_or("Falta ID de sesión")?;
-        if session_id.is_empty() || session_id.len()>80 || !session_id.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-') { return Err("ID de sesión inválido".into()); }
-        if !matches!(args["kind"].as_str(),Some("codex"|"claude"|"fixture"|"shell")) { return Err("Proveedor de tarea inválido".into()); }
-    }
     if matches!(op,"start"|"start_codex") {
         if !matches!(args["kind"].as_str(), Some("fixture" | "shell" | "terminal" | "claude_probe" | "codex_probe" | "claude" | "codex")) { return Err("Tipo de sesión inválido".into()); }
         if matches!(args["kind"].as_str(), Some("claude" | "codex" | "terminal")) || obj.contains_key("cwd") {
@@ -164,10 +133,10 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         }
         if args["title"].as_str().is_none_or(|s| s.len() > 160) { return Err("Título inválido".into()); }
     }
-    if matches!(op, "start" | "start_task" | "start_codex" | "start_codex_task" | "open_handoff" | "resize") {
+    if matches!(op, "start" | "start_codex" | "resize") {
         for field in ["rows", "cols"] { if args[field].as_u64().is_none_or(|n| !(if op=="resize" {1..=1000} else {2..=1000}).contains(&n)) { return Err("Tamaño inválido".into()); } }
     }
-    if matches!(op,"start_codex"|"start_codex_task") && args["kind"]!="codex" {return Err("Proveedor estructurado inválido".into());}
+    if op=="start_codex" && args["kind"]!="codex" {return Err("Proveedor estructurado inválido".into());}
     if matches!(op,"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") && args["generation"].as_i64().is_none_or(|n|n<=0) {return Err("Generación inválida".into());}
     if matches!(op,"codex_turn"|"codex_command") && args["prompt"].as_str().is_none_or(|s|s.is_empty() || s.len()>32768 || s.contains('\0')) {return Err("El mensaje debe contener entre 1 y 32768 bytes UTF8 sin NUL".into());}
     if op=="codex_permission" && !matches!(args["decision"].as_str(),Some("accept"|"deny")){return Err("Decisión inválida".into());}
@@ -213,7 +182,7 @@ async fn connect_runner(app: tauri::AppHandle) -> Result<Value> {
 #[tauri::command]
 async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
     validate(&op, &args)?;
-    if matches!(op.as_str(),"codex_permission"|"review_task"|"archive_task"|"purge_history"|"compact_history"|"purge_workflow"|"prepare_verification"|"begin_verification"|"release_verification"|"purge_verifications") { return Err("Usa la confirmación nativa para esta acción".into()); }
+    if matches!(op.as_str(),"codex_permission"|"purge_history"|"compact_history") { return Err("Usa la confirmación nativa para esta acción".into()); }
     start_policy::validate_start_mode(&op,&args,std::env::var("AW_VERTICAL_SMOKE").as_deref()==Ok("1"))?;
     let layout = state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero al runner")?;
     let sampler=state.resources.clone();
@@ -224,7 +193,7 @@ async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>
         if let Some(rows)=discovery["pids"].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));}
         let mut sample=sampler.lock().map_err(error)?.sample(&pids);sample["discovery"]=discovery;Some(sample)
     }else{None};
-        if matches!(op.as_str(),"workflow_artifact"|"workflow"|"snapshot_task"|"handoff_task"|"reopen_task"|"register_project"|"close_project"|"reopen_project"|"create_task"|"prepare_task"|"revalidate_task"|"open_handoff"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
+        if matches!(op.as_str(),"start_codex"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
         else {
             let mut response=rpc(&layout,&op,args)?;
             if let Some(mut metrics)=app_metrics {
@@ -440,31 +409,11 @@ async fn confirm_codex_permission(app:tauri::AppHandle,mut args:Value,state:taur
     }).await.map_err(error)?
 }
 #[tauri::command]
-async fn confirm_verification(app:tauri::AppHandle,args:Value,state:tauri::State<'_,Bridge>)->Result<Value>{
-    validate("prepare_verification",&args)?;
-    if serde_json::to_vec(&args).map_err(error)?.len()>20*1024 || serde_json::to_vec(&args["argv"]).map_err(error)?.len()>4096{return Err("Comando demasiado largo para mostrarlo íntegro en la confirmación. Usa un script del proyecto más corto.".into());}
-    let executable=args["argv"].as_array().and_then(|values|values.first()).and_then(Value::as_str).ok_or("Selecciona un ejecutable")?;
-    if !Path::new(executable).is_absolute() || !fs::metadata(executable).is_ok_and(|meta|meta.is_file() && meta.mode() & 0o111 != 0){return Err("El ejecutable debe existir, ser absoluto y tener permiso de ejecución.".into());}
-    let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
-    tauri::async_runtime::spawn_blocking(move||{
-        let prepared=rpc_timeout(&layout,"prepare_verification",args,Duration::from_secs(60))?;
-        if prepared["ok"]!=true || prepared["result"]["status"]!="prepared" {return Ok(prepared);}
-        let run=&prepared["result"];
-        let argv=approval_text::visible_json(&run["argv"]).map_err(error)?;
-        if argv.len()>4096{let _=rpc(&layout,"cancel_verification",json!({"id":run["id"],"runId":run["runId"]}));return Err("El comando supera el tamaño que podemos confirmar íntegro. Usa un script del proyecto más corto.".into());}
-        let description=format!("Carpeta: {}\nComando y argumentos exactos: {}\nSnapshot: {}\n\nSe ejecutará con tu usuario y acceso a archivos y red. El entorno está limitado a herramientas locales; no carga scripts de inicio del shell. Puede modificar archivos; cancelar no deshace efectos. El resultado se vincula a este snapshot.",approval_text::visible_json(&run["cwd"]).map_err(error)?,argv,run["snapshotId"]);
-        let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
-        let approved=app.dialog().message(description).parent(&window).title("Ejecutar verificación en Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
-        if !approved{return rpc(&layout,"cancel_verification",json!({"id":run["id"],"runId":run["runId"]}));}
-        rpc_timeout(&layout,"begin_verification",json!({"id":run["id"],"runId":run["runId"],"approvalNonce":run["approvalNonce"]}),Duration::from_secs(60))
-    }).await.map_err(error)?
-}
-#[tauri::command]
 async fn restart_runner(app:tauri::AppHandle,state:tauri::State<'_,Bridge>)->Result<bool>{
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     tauri::async_runtime::spawn_blocking(move|| {
         let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
-        let confirmed=app.dialog().message(format!("Perfil: {}\n\nSe detendrán TODAS las sesiones y verificaciones administradas de este perfil y se reiniciará el runner con la versión de Jauria abierta. Se conservan archivos e historial. Una operación interrumpida puede requerir revisión. Confirma solo cuando puedas detener este trabajo.",layout.data_dir.display())).parent(&window).title("Reiniciar runner de Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
+        let confirmed=app.dialog().message(format!("Perfil: {}\n\nSe detendrán TODAS las sesiones administradas de este perfil y se reiniciará el runner con la versión de Jauria abierta. Se conservan archivos e historial. Una operación interrumpida puede requerir revisión. Confirma solo cuando puedas detener este trabajo.",layout.data_dir.display())).parent(&window).title("Reiniciar runner de Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
         if !confirmed{return Ok(false);}
         let response=rpc(&layout,"shutdown",json!({}))?;
         if response["ok"]!=true{return Err("El runner no confirmó el cierre".into());}
@@ -502,23 +451,16 @@ async fn export_diagnostic(app:tauri::AppHandle, preview_id:String, state:tauri:
     }).await.map_err(error)?
 }
 #[tauri::command]
-async fn confirm_workflow(app: tauri::AppHandle, op: String, mut args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
-    if !matches!(op.as_str(),"review_task"|"archive_task"|"purge_history"|"compact_history"|"purge_workflow"|"release_verification"|"purge_verifications") {return Err("Confirmación no disponible para esta operación".into());}
+async fn confirm_history(app: tauri::AppHandle, op: String, mut args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
+    if !matches!(op.as_str(),"purge_history"|"compact_history") {return Err("Confirmación no disponible para esta operación".into());}
     if !args.is_object(){return Err("Argumentos inválidos".into());}
     args["confirmed"]=json!(true);validate(&op,&args)?;
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     tauri::async_runtime::spawn_blocking(move || {
-        let label=if op=="release_verification" {"Confirma que comprobaste por fuera que los procesos de esta verificación terminaron. Liberar no detiene procesos ni revierte archivos; permite otro escritor administrado."}else if op=="purge_verifications" {"Eliminar la evidencia de verificaciones finalizadas de esta tarea. Sus resultados dejarán de respaldar una revisión; se conservan identificadores para impedir reejecuciones. No es borrado seguro del disco o backups."}else if op=="compact_history" {"Compactar TODOS los eventos antiguos de esta sesión finalizada, incluida la salida y los tamaños. Se conserva el último estado, la tarea y los archivos; se declaran los tramos retirados. No es borrado seguro del disco o backups."}else if op=="purge_workflow" {"Eliminar TODA la evidencia guardada de esta tarea: snapshots, revisiones y manifiestos. Las decisiones históricas perderán su respaldo; se conservan archivos, rama y sesiones. No es un borrado seguro del disco o backups."}else if op=="purge_history" {"Eliminar la salida de esta sesión finalizada y liberar su cuota lógica. Conserva estado, tarea y archivos; el tramo se marcará como eliminado. No es borrado seguro del disco o backups."}else if op=="archive_task" {"Archivar tarea conservando carpeta, rama e historial"}else if args["verdict"]=="accepted" {"Registrar aceptación humana; no ejecuta verificaciones"}else{"Registrar rechazo humano"};
-        let context=if matches!(op.as_str(),"purge_history"|"compact_history") {
-            let status=rpc(&layout,"status",json!({}))?;
-            let selected=status["result"]["sessions"].as_array().and_then(|rows|rows.iter().find(|row|row["id"]==args["id"])).ok_or("Sesión desconocida")?;
-            format!("Sesión: {}\nCarpeta: {}",selected["title"],selected["cwd"])
-        }else{
-            let workflow=rpc_timeout(&layout,"workflow",json!({"id":args["id"]}),Duration::from_secs(60))?;
-            if workflow["ok"]!=true{return Err("No se pudo consultar la tarea para confirmar".into());}
-            format!("Tarea: {}\nCarpeta: {}",workflow["result"]["task"]["title"],workflow["result"]["task"]["worktreePath"])
-        };
-        let description=format!("{}\n\n{}\nID: {}\nSnapshot: {}\nVerificación: {}",label,context,args["id"].as_str().unwrap_or(""),args["snapshotId"].as_str().unwrap_or("no aplica"),args["runId"].as_str().or(args["verificationId"].as_str()).unwrap_or("no aplica"));
+        let label=if op=="compact_history" {"Compactar TODOS los eventos antiguos de esta sesión finalizada, incluida la salida y los tamaños. Se conserva el último estado y los archivos; se declaran los tramos retirados. No es borrado seguro del disco o backups."}else{"Eliminar la salida de esta sesión finalizada y liberar su cuota lógica. Conserva estado y archivos; el tramo se marcará como eliminado. No es borrado seguro del disco o backups."};
+        let status=rpc(&layout,"status",json!({}))?;
+        let selected=status["result"]["sessions"].as_array().and_then(|rows|rows.iter().find(|row|row["id"]==args["id"])).ok_or("Sesión desconocida")?;
+        let description=format!("{}\n\nSesión: {}\nCarpeta: {}\nID: {}",label,selected["title"],selected["cwd"],args["id"].as_str().unwrap_or(""));
         let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
         let approved=app.dialog().message(description).parent(&window).title("Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
         if !approved {return Err("Acción cancelada".into());}
@@ -555,7 +497,7 @@ fn main() {
                 let _ = app.emit("open-settings", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
+        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, restart_runner, preview_diagnostic, export_diagnostic, confirm_history, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }
 
@@ -626,48 +568,6 @@ mod tests {
         args["command"] = json!("ignored");
         assert!(validate("start", &args).is_err());
         assert!(validate("shutdown", &json!({})).is_err());
-    }
-}
-
-#[cfg(test)]
-mod project_task_bridge_tests {
-    use super::*;
-    #[test]
-    fn project_close_and_reopen_allow_only_a_registered_identity() {
-        for op in ["close_project", "reopen_project"] {
-            assert!(validate(op,&json!({"id":"project-123"})).is_ok());
-            for field in ["path","cwd","closed","command","confirmed"] {
-                let mut extra=json!({"id":"project-123"});extra[field]=json!("/arbitrary");
-                assert!(validate(op,&extra).is_err());
-            }
-            assert!(validate(op,&json!({"id":"../project"})).is_err());
-            assert!(validate(op,&json!({})).is_err());
-        }
-    }
-    #[test]
-    fn task_start_accepts_ids_but_never_renderer_chosen_paths_or_process_flags() {
-        let args=json!({"id":"task-123","sessionId":"session-123","kind":"codex","rows":24,"cols":80});
-        assert!(validate("start_task",&args).is_ok());
-        let mut terminal=args.clone();terminal["kind"]=json!("terminal");
-        assert!(validate("start_task",&terminal).is_err());
-        for field in ["cwd","workspace","taskId","command","resume","bypassPermissions"] {
-            let mut extra=args.clone();extra[field]=json!("/arbitrary");
-            assert!(validate("start_task",&extra).is_err(),"{field}");
-        }
-        for bad in [json!("../escape"),json!(""),json!(42)] {
-            let mut extra=args.clone();extra["sessionId"]=bad;
-            assert!(validate("start_task",&extra).is_err());
-        }
-    }
-    #[test]
-    fn drafts_are_bounded_and_preparation_has_no_custom_git_arguments() {
-        let draft=json!({"id":"task-123","projectId":"project-123","title":"Work","objective":"Goal","acceptanceCriteria":""});
-        assert!(validate("create_task",&draft).is_ok());
-        let mut bad=draft.clone();bad["objective"]=json!("");assert!(validate("create_task",&bad).is_err());
-        let mut bad=draft.clone();bad["title"]=json!("x".repeat(121));assert!(validate("create_task",&bad).is_err());
-        let mut bad=draft.clone();bad["baseSha"]=json!("HEAD");assert!(validate("create_task",&bad).is_err());
-        assert!(validate("prepare_task",&json!({"id":"task-123"})).is_ok());
-        assert!(validate("prepare_task",&json!({"id":"task-123","force":true})).is_err());
     }
 }
 

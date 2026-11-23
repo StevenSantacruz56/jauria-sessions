@@ -510,49 +510,8 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
   button { border-color: ButtonText; }
 }
 
-/* Project and task extension inherits the local session workbench. The Git
-   repository entry is hidden from the sidebar in 1.4; its code stays intact. */
 .workspace-navigation .session-list { overflow: visible; }
-.workspace-navigation[data-session-view="priority"] .project-navigation { display: none; }
-.project-navigation { padding: 0 8px 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
-.project-actions { display: flex; flex-direction: column; gap: 4px; padding: 0 4px 8px; }
-.project-actions button { justify-content: flex-start; font-size: 12px; }
-.workspace-hint { margin: 6px 8px 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.project-navigation .form-error { margin: 6px 4px 12px; }
-.project-group + .project-group { margin-top: 12px; }
-.project-group .group-heading { flex-wrap: wrap; }
-.project-group .group-heading small { width: 100%; padding-left: 20px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-item { min-height: 48px; }
-.state-dot[data-state="preparing"] { background: var(--state-attention); }
-.state-dot[data-state="ready"] { background: var(--state-ready); }
-.task-panel { flex: 1; min-height: 0; overflow: auto; background: var(--surface); overscroll-behavior: contain; }
-.task-toolbar { padding: 10px 16px; border-bottom: 1px solid var(--border); }
-.task-content { max-width: 800px; margin: 0 auto; padding: 20px 24px 32px; }
-.task-content h2 { font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
-.task-content h3 { margin-top: 24px; font-size: 13px; font-weight: 600; }
-.task-help { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.task-content .form-field > select, .task-content .form-field > textarea { width: 100%; }
 textarea { padding: 7px 9px; border: 1px solid var(--control-border); border-radius: var(--radius-control); color: var(--text); background: var(--surface); font: inherit; caret-color: var(--focus); }
-.task-content textarea { resize: vertical; min-height: 76px; max-height: 280px; }
-.task-facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; margin: 24px 0 16px; }
-.task-facts dt { font-size: 11px; color: var(--dim); margin-bottom: 5px; }
-.task-facts dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
-.task-mono { font: 11px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.task-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-.task-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; }
-.task-section-heading h3 { margin: 0; }
-.task-section-heading button { font-size: 11px; flex-shrink: 0; }
-.task-prose { margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; line-height: 1.65; max-width: 72ch; }
-.task-sessions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.task-sessions button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
-@media (max-width: 860px), (max-height: 620px) {
-  .task-content { padding: 16px 18px 24px; }
-  .task-facts { gap: 12px; margin-top: 18px; }
-}
-
-.task-content textarea:disabled { opacity: .48; cursor: default; }
-.task-content textarea:hover:not(:disabled) { border-color: var(--dim); }
-@media (forced-colors: active) { .task-item[data-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; } }
 
 /* Lockups retain original whitespace and aspect ratio; no filters or redraws. */
 .brand-lockup { display: block; width: 128px; flex: 0 0 auto; }
@@ -560,7 +519,7 @@ textarea { padding: 7px 9px; border: 1px solid var(--control-border); border-rad
 .brand-dark { display: none; }
 .welcome-mascot { display: block; width: 88px; height: auto; margin: 0 auto; }
 /* Display headings keep the brand display face; it ships only at 700. */
-.welcome h2, .dialog-heading h2, .task-content h2 { font-family: "Bricolage Grotesque", "Inter", sans-serif; font-weight: 700; }
+.welcome h2, .dialog-heading h2 { font-family: "Bricolage Grotesque", "Inter", sans-serif; font-weight: 700; }
 html[data-theme="dark"] .brand-light { display: none; }
 html[data-theme="dark"] .brand-dark { display: block; }
 @media (prefers-color-scheme: dark) {
@@ -577,28 +536,11 @@ html[data-theme="dark"] .brand-dark { display: block; }
 #telemetry-summary { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dim); }
 @media (max-width: 1050px) { #telemetry-summary { display: none; } }
 
-/* Handoff context floats over the stage (absolute) and opens from the top-bar
-   «Contexto» button; showing, expanding or closing it never resizes a terminal. */
-.handoff-context { position: absolute; top: 8px; right: 16px; z-index: 7; display: flex; flex-direction: column; gap: 8px; width: min(480px, calc(100% - 32px)); max-height: calc(100% - 16px); overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--raised); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
-.handoff-context-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.handoff-context h2 { font-size: 13px; font-weight: 600; }
-.handoff-context p { color: var(--muted); }
-.handoff-context textarea { display: block; width: 100%; min-height: 96px; max-height: 240px; resize: vertical; color: var(--text); background: var(--sidebar); border: 1px solid var(--control-border); border-radius: var(--radius-control); padding: 8px; font: 11px/1.4 "JetBrains Mono", ui-monospace, monospace; }
-.handoff-context-actions { display: flex; align-items: center; gap: 10px; }
 .top-back { flex: 0 0 auto; min-height: 28px; height: 28px; padding: 0 8px; gap: 6px; font-size: 12px; color: var(--muted); }
 .top-back .icon { width: 15px; height: 15px; }
 
 .terminal-view[data-transport="app-server"] > .xterm { display:none; }
 .terminal-view[data-transport="app-server"], .codex-host { height:100%; min-height:0; min-width:0; padding:0; box-sizing:border-box; }
-
-/* Project visibility changes never alter the retained task/session history. */
-.project-group .group-heading > span { flex: 1; }
-.project-group .project-close { flex: none; padding: 3px 6px; font-size: 11px; }
-.closed-projects { margin-top: 12px; color: var(--muted); font-size: 12px; }
-.closed-projects > summary { cursor: pointer; padding: 7px 8px; }
-.closed-project-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
-.closed-project-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.closed-project-row > button { flex: none; padding: 4px 7px; font-size: 12px; }
 
 @media (max-width: 440px) {
   .provider-picker { grid-template-columns: 1fr; }

@@ -298,7 +298,7 @@ try{
       await page.waitForFunction(()=>document.querySelector('#sidebar-project-list button[data-board="plan"] .sidebar-row-meta')?.textContent==='1/4');
       assert.equal(await page.locator('#sidebar-project-list button[data-board="plan"]').getAttribute('aria-label'),'Abrir tablero Integrar Pulso en Jauria, 1 de 4 hechas');
       assert.equal(await page.locator('#sidebar-project-list button[data-board=""]').getAttribute('aria-label'),'Abrir tablero Pendientes, 1 sin terminar');
-      assert.equal(await page.locator('#register-project').isVisible(),false,'Git repositories are not offered in the sidebar');
+      assert.equal(await page.locator('#register-project, #new-task, #show-task, #handoff-toggle').count(),0,'Git repositories and tasks were retired');
       assert.deepEqual(await page.evaluate(()=>[...new Set((window as any).pulsoFixture.calls.map((c:any)=>c.op))].sort()),['items','links','projects']);
       // Por proyecto is the default: the main session sits under its project, the rest under Sin proyecto.
       const groupingButton=page.locator('#agent-grouping');

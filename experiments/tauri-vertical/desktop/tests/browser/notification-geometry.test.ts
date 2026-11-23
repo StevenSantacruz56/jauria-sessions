@@ -321,7 +321,7 @@ try {
           });
         }
         for (const viewport of [{ width: 1220, height: 800 }, { width: 760, height: 560 }]) {
-          await t.test(`${viewport.width}x${viewport.height}: two panes, history pane, long names, picker choices and handoff context keep both terminals`, async () => {
+          await t.test(`${viewport.width}x${viewport.height}: two panes, history pane, long names and picker choices keep both terminals`, async () => {
             const page = await browser.newPage({ viewport });
             const errors: string[] = [];
             page.on('pageerror', error => errors.push(error.message));
@@ -363,20 +363,6 @@ try {
               await choose('background');
               await page.waitForFunction(() => document.querySelector('#session-1')?.getAttribute('data-session-id') === 'background');
               await same('live session chosen again');
-              // (2) The handoff context floats: showing it and expanding its text never moves a terminal.
-              const handoff = await page.evaluate(() => {
-                const box = () => Array.from(document.querySelectorAll('.terminal-host')).slice(0, 2).map(h => { const r = h.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(); });
-                const start = box();
-                const toggle = document.querySelector<HTMLElement>('#handoff-toggle')!; const panel = document.querySelector<HTMLElement>('#handoff-context')!;
-                const area = document.querySelector<HTMLTextAreaElement>('#handoff-context-text')!;
-                toggle.hidden = false; panel.hidden = false; area.value = 'Contexto sintético\n'.repeat(40);
-                const shown = box(); area.style.height = '400px'; const expanded = box();
-                panel.hidden = true; toggle.hidden = true; const closedBox = box();
-                return { start, shown, expanded, closed: closedBox, position: getComputedStyle(panel).position };
-              });
-              assert.equal(handoff.position, 'absolute');
-              assert.deepEqual([handoff.shown, handoff.expanded, handoff.closed], [handoff.start, handoff.start, handoff.start], 'handoff context shown, expanded and closed');
-              await same('handoff context');
               assert.deepEqual(errors, []);
             } finally { await page.close(); }
           });

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 
 const source = (name: string) => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8');
-const sheets = ['style.css', 'pulso-panel.css', 'settings-panel.css', 'telemetry.css', 'review-panel.css', 'verification-panel.css', 'codex-conversation.css'];
+const sheets = ['style.css', 'pulso-panel.css', 'settings-panel.css', 'telemetry.css', 'codex-conversation.css'];
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 const block = (css: string, selector: string) => {
   const start = css.indexOf(selector); assert.notEqual(start, -1, selector);
@@ -84,7 +84,7 @@ test('status chrome has fixed heights and never wraps (status changes must never
   // Not positioned: the floating menu anchors to the pane and is not clipped by the heading.
   assert.doesNotMatch(rule('.pane-heading'), /position:/);
   // Popover, picker and notice float; none of them is in the flow above the terminal.
-  for (const selector of ['.alerts-popover', '.session-picker', '.notice', '.handoff-context', '.pane-menu-content']) assert.match(rule(selector), /position: absolute/, selector);
+  for (const selector of ['.alerts-popover', '.session-picker', '.notice', '.pane-menu-content']) assert.match(rule(selector), /position: absolute/, selector);
   assert.doesNotMatch(css, /\.workbench-messages/, 'no message rail');
   // Pane focus changes color and a ring, never border width.
   assert.doesNotMatch(rule('.pane.is-focused'), /border-width|border:/);
