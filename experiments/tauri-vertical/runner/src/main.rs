@@ -8,6 +8,7 @@ mod terminal_stream;
 mod agent_signals;
 mod agent_attention;
 mod app_settings;
+mod rpc_contract;
 mod legacy_tasks;
 mod pulso;
 mod pulso_client;

@@ -24,6 +24,15 @@ type Options = {
   onSaved: (settings: AppSettings) => void;
 };
 
+/**
+ * `set_settings` arguments as the runner's settingsVersion expects them: 2 adds
+ * `pulsoAutoAccess` (always a boolean when present), 1 takes only the limit.
+ * tests/rpc-contract.test.ts checks this against the shared contract table.
+ */
+export function settingsArgs(settingsVersion: 1 | 2, maxConcurrentSessions: number, pulsoAutoAccess?: boolean): { maxConcurrentSessions: number; pulsoAutoAccess?: boolean } {
+  return settingsVersion === 2 && typeof pulsoAutoAccess === 'boolean' ? { maxConcurrentSessions, pulsoAutoAccess } : { maxConcurrentSessions };
+}
+
 let instance = 0;
 const themes = ['system', 'light', 'dark'];
 const themeValue = (value: string) => themes.includes(value) ? value : 'system';

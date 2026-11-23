@@ -1,6 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
 import { appVersion } from './app-version';
-import { mountSettings, type AppSettings } from './settings-panel';
+import { mountSettings, settingsArgs, type AppSettings } from './settings-panel';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { NativeAttention } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
@@ -1249,9 +1249,7 @@ const settingsPanel = mountSettings({
   async save(maxConcurrentSessions, pulsoAutoAccess) {
     if (!connected || connecting || (runner?.settingsVersion !== 1 && runner?.settingsVersion !== 2)) throw new Error('El runner no permite editar la configuración.');
     const check = workspaceContext();
-    const result = await request<AppSettings>('set_settings', runner.settingsVersion === 2
-      ? { maxConcurrentSessions, pulsoAutoAccess }
-      : { maxConcurrentSessions }); check(); return result;
+    const result = await request<AppSettings>('set_settings', settingsArgs(runner.settingsVersion, maxConcurrentSessions, pulsoAutoAccess)); check(); return result;
   },
   getTheme: () => theme.value, setTheme: applyTheme, version: appVersion,
   canEdit: () => connected && !connecting && (runner?.settingsVersion === 1 || runner?.settingsVersion === 2),

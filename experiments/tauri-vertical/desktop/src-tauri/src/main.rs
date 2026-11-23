@@ -86,11 +86,13 @@ fn rpc_timeout(layout: &Layout, op: &str, args: Value, timeout: Duration) -> Res
     if response.last() != Some(&b'\n') { return Err("Respuesta del runner incompleta o demasiado grande".into()); }
     serde_json::from_slice(&response).map_err(|_| "Respuesta JSON del runner inválida".into())
 }
-fn validate(op: &str, args: &Value) -> Result<()> {
-    let obj = args.as_object().ok_or("args debe ser objeto")?;
-    let fields: &[&str] = match op {
+/// Keys runner_request lets through for each operation; `None` = not allowed.
+/// Each list must stay within the runner's (rpc_contract_tests checks it).
+fn bridge_fields(op: &str) -> Option<&'static [&'static str]> {
+    Some(match op {
         "status" | "telemetry" | "refresh_quotas" | "get_settings" => &[],
-        "set_settings" => &["maxConcurrentSessions"],
+        // settingsVersion 2 adds pulsoAutoAccess; settingsVersion 1 sends only the limit.
+        "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
         "rename_session" => &["id","title"],
         "native_binding" => &["id"],
         "resume_native" => &["id","sourceId","rows","cols"],
@@ -106,8 +108,12 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         "stop" => &["id","generation"], "interrupt" => &["id"], "events" => &["after","limit"],
         "terminal_live" => &["id","after","limit"],
         "mark_seen" => &["items"],
-        _ => return Err("Operación no permitida".into()),
-    };
+        _ => return None,
+    })
+}
+fn validate(op: &str, args: &Value) -> Result<()> {
+    let obj = args.as_object().ok_or("args debe ser objeto")?;
+    let fields = bridge_fields(op).ok_or("Operación no permitida")?;
     if obj.keys().any(|k| !fields.contains(&k.as_str())) { return Err("Argumento no permitido".into()); }
     if fields.contains(&"id") {
         let id = args["id"].as_str().ok_or("Falta id")?;
@@ -115,6 +121,9 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     }
     if op == "set_settings" && args["maxConcurrentSessions"].as_u64().is_none_or(|n| !(1..=8).contains(&n)) {
         return Err("El límite de sesiones debe ser un entero entre 1 y 8".into());
+    }
+    if op == "set_settings" && obj.get("pulsoAutoAccess").is_some_and(|v| !v.is_boolean()) {
+        return Err("El acceso automático a Pulso debe ser verdadero o falso".into());
     }
     if op == "rename_session" {
         let title = args["title"].as_str().ok_or("Falta título de sesión")?;
@@ -552,6 +561,27 @@ mod tests {
         assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"force":true})).is_err());
     }
     #[test]
+    fn settings_bridge_accepts_the_v2_payload_the_app_sends() {
+        // settingsVersion 2 (runner 1.3.3+): the app always sends both keys.
+        for limit in [1, 4, 8] { for auto in [true, false] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":limit,"pulsoAutoAccess":auto})).is_ok(), "{limit} {auto}");
+        } }
+        // settingsVersion 1: only the limit.
+        assert!(validate("set_settings", &json!({"maxConcurrentSessions":3})).is_ok());
+        // pulsoAutoAccess is strictly boolean and never stands for the limit.
+        for value in [json!(null), json!(1), json!(0), json!("true"), json!([]), json!({})] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"pulsoAutoAccess":value})).is_err(), "{value}");
+        }
+        for value in [json!(0), json!(9), json!(2.5), json!("2"), json!(null)] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":value,"pulsoAutoAccess":true})).is_err(), "{value}");
+        }
+        assert!(validate("set_settings", &json!({"pulsoAutoAccess":true})).is_err(), "the limit stays required");
+        for extra in [json!({"maxConcurrentSessions":2,"pulsoAutoAccess":true,"force":true}),
+            json!({"maxConcurrentSessions":2,"pulsoAutoAccess":true,"schemaVersion":2}), json!({"maxConcurrentSessions":2,"maxSupportedSessions":8})] {
+            assert!(validate("set_settings", &extra).is_err(), "{extra}");
+        }
+    }
+    #[test]
     fn rename_bridge_requires_bounded_nonempty_title_without_controls() {
         for title in [" Nuevo título ".to_owned(), "x".repeat(120), "🦊".repeat(120), format!(" {} ", "🦊".repeat(120))] {
             assert!(validate("rename_session", &json!({"id":"session-1","title":title})).is_ok());
@@ -600,6 +630,75 @@ mod tests {
         args["command"] = json!("ignored");
         assert!(validate("start", &args).is_err());
         assert!(validate("shutdown", &json!({})).is_err());
+    }
+}
+
+/// Every payload the app sends (tests/fixtures/rpc-contract.json, which
+/// tests/rpc-contract.test.ts keeps in sync with the client sources) must pass
+/// the bridge validation and the runner allowlist. A bridge allowlist narrower
+/// than the runner's broke Configuración in 1.3.3 without any test noticing.
+#[cfg(test)]
+#[path = "../../../runner/src/rpc_contract.rs"]
+mod rpc_contract;
+#[cfg(test)]
+mod rpc_contract_tests {
+    use super::*;
+    use super::rpc_contract;
+    fn contract() -> Value { serde_json::from_str(include_str!("../../tests/fixtures/rpc-contract.json")).unwrap() }
+    fn with_cwd(mut args: Value) -> Value {
+        if args["cwd"] == "$CWD" { args["cwd"] = json!(fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap()); }
+        args
+    }
+    #[test]
+    fn every_runner_payload_the_app_sends_passes_bridge_and_runner() {
+        let contract = contract();
+        let entries = contract["runner"].as_array().unwrap();
+        assert!(entries.len() > 20);
+        for entry in entries {
+            let op = entry["op"].as_str().unwrap();
+            let mut args = with_cwd(entry["args"].clone());
+            match entry["via"].as_str() {
+                // Native commands that validate (and complete) the payload themselves.
+                Some("confirm_history") => { args["confirmed"] = json!(true); validate(op, &args).unwrap_or_else(|e| panic!("bridge {op}: {e}")); }
+                Some("confirm_codex_permission") => {
+                    validate(op, &args).unwrap_or_else(|e| panic!("bridge {op}: {e}"));
+                    // runner_request itself refuses it: only the native confirmation may send it.
+                    if args["decision"] == "accept" { args["nativeConfirmed"] = json!(true); }
+                }
+                // release_session builds {id, confirmed, generation?} natively.
+                Some("release_session") => { args["confirmed"] = json!(true); args["generation"] = json!(1); }
+                Some(other) => panic!("unknown via {other}"),
+                None => {
+                    validate(op, &args).unwrap_or_else(|e| panic!("bridge {op} {args}: {e}"));
+                    assert!(!matches!(op, "codex_permission" | "purge_history" | "compact_history"), "{op} must go through its native confirmation");
+                    start_policy::validate_start_mode(op, &args, entry["smoke"] == true).unwrap_or_else(|e| panic!("start policy {op}: {e}"));
+                }
+            }
+            let allowed = rpc_contract::allowed_args(op).unwrap_or_else(|| panic!("runner does not know {op}"));
+            for key in args.as_object().unwrap().keys() {
+                assert!(allowed.contains(&key.as_str()), "runner rejects {op}.{key}");
+            }
+            if op == "set_settings" { rpc_contract::settings_args(&args).unwrap_or_else(|e| panic!("runner {args}: {e}")); }
+        }
+    }
+    #[test]
+    fn every_pulso_payload_the_app_sends_passes_the_bridge() {
+        let contract = contract();
+        for entry in contract["pulso"].as_array().unwrap() {
+            let op = entry["op"].as_str().unwrap();
+            validate_pulso(op, &entry["args"]).unwrap_or_else(|e| panic!("bridge pulso {op} {}: {e}", entry["args"]));
+        }
+    }
+    #[test]
+    fn bridge_never_accepts_a_key_the_runner_rejects() {
+        let ops = ["status","telemetry","refresh_quotas","get_settings","set_settings","rename_session","native_binding","resume_native","purge_history","compact_history",
+            "start_codex","codex_state","codex_request","codex_resume","codex_turn","codex_command","codex_interrupt","codex_permission","start","input","resize","stop","interrupt","events","terminal_live","mark_seen"];
+        for op in ops {
+            let runner = rpc_contract::allowed_args(op).unwrap_or_else(|| panic!("runner does not know {op}"));
+            for key in bridge_fields(op).unwrap() { assert!(runner.contains(key), "bridge lets {op}.{key} through, the runner rejects it"); }
+        }
+        // Operations the bridge must never forward generically.
+        for op in ["shutdown","diagnostic_preview","release","register_project","create_task"] { assert!(bridge_fields(op).is_none(), "{op}"); }
     }
 }
 

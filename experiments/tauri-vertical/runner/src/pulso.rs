@@ -1394,4 +1394,23 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&line).unwrap(),json!({"ok":false,"error":"unauthorized"}));
     }
 
+
+    /// Every Pulso payload the app sends (desktop/tests/fixtures/rpc-contract.json)
+    /// is accepted by the runner: run in order on a fresh store, each one succeeds
+    /// or, for the fixed synthetic revisions, fails only the revision check
+    /// (which runs after every field was parsed).
+    #[test]
+    fn every_pulso_payload_the_app_sends_is_accepted() {
+        let f = Fixture::new();
+        let contract: Value = serde_json::from_str(include_str!("../../desktop/tests/fixtures/rpc-contract.json")).unwrap();
+        let mut failures = Vec::new();
+        for entry in contract["pulso"].as_array().unwrap() {
+            let op = entry["op"].as_str().unwrap();
+            match f.ui(op, entry["args"].clone()) {
+                Err(error) if error.to_string() != "revision conflict" => failures.push(format!("{op} {}: {error}", entry["args"])),
+                _ => {}
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

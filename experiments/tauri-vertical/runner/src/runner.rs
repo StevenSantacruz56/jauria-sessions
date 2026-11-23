@@ -364,29 +364,8 @@ impl Runner {
         ensure!(supplied.len() == self.token.len() && mismatch == 0, "unauthorized");
         let op = request["op"].as_str().context("op required")?;
         let args = request["args"].as_object().context("args must be an object")?;
-        let allowed: &[&str] = match op {
-            // workspaceAfter is still accepted, and ignored, so a 1.3.x app can
-            // connect while this runner keeps serving its sessions.
-            "status" => &["workspaceAfter"],
-            "get_settings" => &[],
-            "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
-            "rename_session" => &["id","title"],
-            "native_binding" => &["id"],
-            "resume_native" => &["id","sourceId","rows","cols"],
-            "shutdown" | "diagnostic_preview" | "telemetry" | "refresh_quotas" => &[],
-            "start_codex" => &["id","title","kind","cwd","rows","cols"],
-            "codex_state" => &["id"],"codex_request" => &["id","requestId"],
-            "codex_resume" => &["id","generation"],
-            "codex_turn" | "codex_command" => &["id","commandId","turnId","attemptId","generation","prompt"],
-            "codex_interrupt" => &["id","turnId","attemptId","generation"],
-            "codex_permission" => &["id","requestId","generation","decision","nativeConfirmed"],
-            "start" => &["id","title","kind","rows","cols","cwd"],
-            "input" => &["id","data"], "resize" => &["id","rows","cols"],
-            "stop" => &["id","generation"], "interrupt" => &["id"], "purge_history" | "compact_history" => &["id","confirmed"], "release" => &["id","confirmed","generation"], "events" => &["after","limit"],
-            "terminal_live" => &["id","after","limit"],
-            "mark_seen" => &["items"],
-            _ => bail!("unknown operation"),
-        };
+        // One allowlist, shared with the bridge contract tests (rpc_contract.rs).
+        let allowed = crate::rpc_contract::allowed_args(op).context("unknown operation")?;
         ensure!(args.keys().all(|k| allowed.contains(&k.as_str())), "unexpected argument");
         let args = &request["args"];
         if op == "get_settings" { return Ok(self.settings.snapshot()); }
@@ -396,9 +375,7 @@ impl Runner {
             return Ok(self.attention.mark_seen(&items));
         }
         if op == "set_settings" {
-            let limit=args.get("maxConcurrentSessions").map(|value|value.as_u64().filter(|n|(1..=8).contains(n))
-                .context("maxConcurrentSessions must be an integer from 1 to 8")).transpose()?;
-            let auto=args.get("pulsoAutoAccess").map(|value|value.as_bool().context("pulsoAutoAccess must be a boolean")).transpose()?;
+            let (limit,auto)=crate::rpc_contract::settings_args(args).map_err(anyhow::Error::msg)?;
             let _guard=self.mutations.lock().unwrap();
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
             let result=self.settings.update(limit.map(|n|n as usize),auto)?;
