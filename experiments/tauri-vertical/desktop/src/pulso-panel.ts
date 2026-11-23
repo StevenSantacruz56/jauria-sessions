@@ -306,7 +306,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const next=event.key==='ArrowDown'?(index+1)%list.length:(index-1+list.length)%list.length;list[next]?.focus();}
       else if(event.key==='Home'||event.key==='End'){event.preventDefault();(event.key==='Home'?list[0]:list.at(-1))?.focus();}
       else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeMoveMenu(true);}
-      else if(event.key==='Tab'){closeMoveMenu(false);}
+      // Tab continues from the "…" button: focus it first, so the removed menu never leaves focus on body.
+      else if(event.key==='Tab'){closeMoveMenu(true);}
     });
     // Fixed position escapes the scrolling column; it closes on scroll or resize.
     const rect=anchor.getBoundingClientRect();root.append(node);

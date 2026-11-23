@@ -571,6 +571,15 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
         assert.equal(await button.evaluate(el => el === document.activeElement), true, 'Escape returns focus to the card button');
         assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="item_update").length'), 0);
+        // Tab inside the open menu closes it and continues from the "…" button; focus never falls to body.
+        await p.keyboard.press('Enter'); await menu.waitFor(); await p.keyboard.press('Tab'); await menu.waitFor({ state: 'detached' });
+        assert.notEqual(await p.evaluate(() => document.activeElement?.tagName), 'BODY', 'focus never falls to body');
+        // macOS WebKit skips buttons in the Tab order (no full keyboard access), so only Chromium lands on the grip.
+        if (engine !== webkit) {
+          assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Arrastrar Fase solo', 'Tab lands on the next control after the menu button');
+          await p.keyboard.press('Shift+Tab');
+        } else await button.focus();
+        assert.equal(await button.evaluate(el => el === document.activeElement), true);
         await p.keyboard.press('Enter'); await menu.waitFor(); await p.keyboard.press('ArrowDown'); await p.keyboard.press('Enter'); await idle(p);
         assert.equal(await columnOf(p, 'Fase solo'), 'waiting');
         assert.deepEqual(await run(p, 'return f.calls.filter(c=>c.op==="item_update").map(c=>c.args.status)'), ['waiting']);
