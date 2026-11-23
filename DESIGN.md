@@ -1,6 +1,6 @@
 ---
 name: Jauria
-description: Desktop workbench design system for Jauria 1.4 (shell, sidebar and Pulso).
+description: Desktop workbench design system for Jauria 1.4 (shell, sidebar, terminal chrome and Pulso).
 colors:
   brand: "#f0b323"
   brand-hover: "#dca21c"
@@ -26,7 +26,7 @@ colors:
   light-error: "#b5313b"
   light-error-bg: "#fff0f1"
   light-notice-bg: "#e9ebee"
-  dark-sidebar: "#0c0e11"
+  dark-sidebar: "#0e1116"
   dark-canvas: "#111316"
   dark-surface: "#16191d"
   dark-raised: "#262a30"
@@ -49,6 +49,11 @@ colors:
   terminal: "#16191d"
   terminal-text: "#d5d8dd"
   terminal-muted: "#9ba0a8"
+  terminal-line: "rgba(255,255,255,.09)"
+  terminal-working: "#5b9bff"
+  terminal-attention: "#ff9f43"
+  terminal-ready: "#2dbe7e"
+  terminal-error: "#ff9da5"
 typography:
   body:
     fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -78,6 +83,10 @@ layout:
   sidebar: "264px"
   sidebar-row: "30px"
   sidebar-overlay-below: "860px"
+  top-bar: "42px"
+  pane-heading: "32px"
+  status-bar: "28px"
+  pane-gap: "8px"
   window-minimum: "760x560"
 components:
   button-primary:
@@ -112,13 +121,13 @@ Authority is the built source: `experiments/tauri-vertical/desktop/src/style.css
 
 Frontmatter `light-*` and `dark-*` entries are the values of the CSS variables of the same name (`--sidebar`, `--canvas`, `--surface`, `--raised`, `--text`, `--muted`, `--dim`, `--border`, `--control-border`, `--hover`, `--selected`, `--pressed`, `--focus`, `--state-*`, `--error`, `--error-bg`, `--notice-bg`). Explicit `data-theme` wins; with no explicit light choice, system dark appearance applies. The system-dark and explicit-dark blocks in `style.css` are kept identical; a test compares them.
 
-- **Surfaces.** `--sidebar` for the sidebar, `--canvas` for the workbench background, header and Pulso board, `--surface` for panels, cards, controls and dialogs, `--raised` for the active tab and menus. `--chrome` is an alias of the canvas tone for pane headings, the message rail and the footer.
+- **Surfaces.** `--sidebar` for the sidebar, the top bar and the status bar, `--canvas` for the workbench background behind the pane cards and the Pulso board, `--surface` for panels, cards, controls and dialogs, `--raised` for the active tab, menus and popovers. `--chrome` is an alias of the canvas tone. The dark `--sidebar` is `#0e1116`, the ink of the dark horizontal logo (its SVG carries that background rect), so the lockup shows no box; `--dim` (5.98:1) and `--muted` (7.12:1) stay AA on it.
 - **Lines and states of interaction.** One `--border` for structure; `--control-border` is stronger so inputs and selects stay identifiable. Hover, selection and pressed are translucent overlays (`--hover`, `--selected`, `--pressed`) that work on any surface.
 - **Text.** `--text`, `--muted` for secondary copy, `--dim` for counts, durations and section labels. All pass 4.5:1 on their surfaces.
 - **Focus.** `--focus` is the keyboard ring (2 px outline, 2 px offset), the focused pane outline and the mark of selected choices and interaction emphasis (drop targets, settings switch). Focus never changes border width; the focused pane uses an inset outline.
 - **States.** `--state-working`, `--state-attention`, `--state-ready`, `--state-paused`. `--working-text`, `--warning` and `--success` are aliases of the first three, so there is one state system. Errors keep their own `--error` / `--error-bg`.
 - **Amber.** `--brand` (`#f0b323` with `--brand-ink`) is used only by `.primary` buttons and the brand lockup. It is not used for focus, tabs, card hover, counters, provider icons or switches. The brand kit forbids amber text on white; there is no amber text token.
-- **Terminal.** `--terminal` (`#16191d`) is the same in both appearances and equals the xterm theme background in `terminal-theme.ts`; change both together. `--terminal-text` and `--terminal-muted` style the empty pane that sits on the terminal surface. Provider badges use `--provider-claude`, `--provider-codex` and `--provider-terminal` with `--provider-ink`.
+- **Terminal.** `--terminal` (`#16191d`) is the same in both appearances and equals the xterm theme background in `terminal-theme.ts`; change both together. `--terminal-text` and `--terminal-muted` style the empty pane and the pane heading, which sit on the terminal surface. Because that surface is dark in both appearances, the pane heading uses `--terminal-line`, `--terminal-hover` and the `--terminal-working/attention/ready/error` state colors (the dark state values) instead of the appearance tokens. Provider badges use `--provider-claude`, `--provider-codex` and `--provider-terminal` with `--provider-ink`.
 
 ## Typography
 
@@ -128,7 +137,14 @@ Display headings (welcome, dialogs, task) use Bricolage Grotesque at a single 20
 
 ## Layout
 
-Native Tauri/macOS app: minimum window 760 × 560 px, initial 1220 × 800 px. The sidebar is 264 px and becomes an overlay below 860 px. The 50 px message rail, the pane heading and the terminal inset are fixed so that notices never resize a PTY.
+Native Tauri/macOS app: minimum window 760 × 560 px, initial 1220 × 800 px. The sidebar is 264 px and becomes an overlay below 860 px.
+
+Workbench, top to bottom: the **top bar** (42 px), the stage with the pane cards, and the **status bar** (28 px). There is no message rail since delivery 1.4 B. The top bar, the pane heading (32 px), the status bar and the terminal inset have fixed heights, never wrap and are the only chrome above or below a terminal, so alerts, state changes and notices never resize a PTY. Everything that can appear on demand (alerts popover, session picker, pane menu, notice) floats with absolute positioning.
+
+- **Top bar:** sidebar toggle (narrow windows), one raised tab per open session (provider badge, truncated name, the state indicator of the sidebar row; sessions shown in a pane keep their tab after they close) with its own horizontal scroll, "+" (new session), then Dividir, the bell (count of new alerts; opens the alerts popover) and Información. In Pulso the same bar shows the board tabs (Pendientes and projects) and a "+" for a new project. `#workspace-title` stays as a visually hidden heading.
+- **Pane cards:** 8 px gap and padding on the canvas, 10 px radius, 1 px `--border`; the focused pane turns its border `--focus` and adds a 1 px `--focus` ring (no border-width change). Two panes side by side, stacked below 1050 px.
+- **Pane heading (32 px):** provider badge, session name (a button that opens the session picker), the folder in dim monospace (hidden below 760 px), the state label (indicator + text, orange tint when the session needs you), Interrumpir and the "…" menu (Cambiar nombre, Terminar sesión with its confirmation, Liberar carpeta, fixtures).
+- **Status bar (28 px):** "N te necesita(n)" (button: opens the priority session) and "N trabajando" with their indicator shapes, or "Sin avisos"; on the right the connection with Reconectar, the focused terminal's columns × rows and the interface resources. The advice "Cerrar la ventana deja las sesiones en ejecución…" lives in Información.
 
 Sidebar, top to bottom:
 - **Header (46 px):** brand lockup, search button (⌘K, reveals the search field) and new session button (⌘N).
@@ -151,10 +167,15 @@ Three radii: 6 px for controls (buttons, inputs, tabs, badges), 8 px for rows an
 ## Components
 
 - **Buttons and fields:** minimum height 32 px, padding 6px 11px, weight 500. Primary is amber; secondary uses the surface and control border; quiet is transparent; icon buttons are transparent and muted until hover. Disabled is opacity .48.
-- **Tabs:** one raised style everywhere (sidebar Abiertas/Historial and Pulso boards): the active tab gets `--raised` and a 1 px `--border`; no underline and no accent color.
+- **Tabs:** one raised style everywhere (session tabs, sidebar Abiertas/Historial and Pulso boards): the active tab gets `--raised` and a 1 px `--border`; no underline and no accent color.
+- **Session picker:** replaces the native select. The pane name opens a popup inside the pane with a search field (`role=combobox`) and a listbox grouped Abiertas / Historial plus "Sin sesión"; a session visible in the other pane is disabled ("En el otro panel"). Arrows, Enter and Escape work in the field; no key reaches the PTY and closing returns focus to the terminal.
+- **Alerts popover:** opened by the bell. Rows in the sidebar priority with the indicator, "Sin ver"/"Visto", the reason and Abrir; actions Ver en la lista (sidebar filter), Marcar vistos and Abrir sesión (the priority session). Escape or a click outside closes it. New unseen alerts are announced through a visually hidden polite live region.
+- **Notice:** a floating toast at the bottom right of the stage (`--raised`, or `--error-bg` for errors), at most 96 px with its own scroll; it never takes space from a pane.
 - **Agent row:** 30 px, one line: provider badge (C, X or $), truncated name, duration in `--dim`, and a state indicator on the right. Each state has its own shape in the same 12 px box: a spinning ring only for an explicit `working` report (OSC 7501), an orange dot with a halo for needs action or a notice, a green check for finished and unseen, a grey dash for waiting, an empty ring for no report. An open process without a declared state never spins. The state is also present as text (screen-reader label and title), so it never depends on color alone. Animation stops with reduced motion.
 - **Project row:** 30 px: initial tile, title, progress in `--dim`. The active board is marked with `--selected` and `aria-current`.
-- **Pulso cards:** 8 px radius, one `--border`, `--control-border` on hover or focus. The title/note button opens detail; the grip and the native "Mover" select move the card. Column headings are muted with a state dot.
+- **Pulso cards:** 8 px radius, one `--border`, `--control-border` on hover or focus. The title/note button opens detail (note clamped to three lines). Top right: the "…" menu button ("Mover a Por hacer / En curso / En espera / Hecho", the current column disabled; arrows, Home/End, Escape) as the keyboard alternative to dragging, and the grip for pointer drag. Column headings are muted with a state dot. A card footer with the linked session and checkpoints waits for board data from the runner (delivery E).
+- **Pulso project bar:** one 46 px line: title, "n de m fases hechas", Plan y sesiones and the single amber action (Abrir / Reanudar sesión principal or Abrir conversación activa). Nuevo proyecto is the "+" in the top bar.
+- **Settings rows:** a label with one line of help on the left and the control on the right; longer explanations under "Más detalles"; sections are separated by a line, never nested cards. "Sin guardar" with an attention dot sits next to Guardar while there are unsaved changes. The Pulso access scope text stays fully visible.
 - **Feedback:** notices, errors and undo stay in normal flow, capped at 25% height, never floating over cards or inline creation.
 
 ## Do's and Don'ts
@@ -162,7 +183,7 @@ Three radii: 6 px for controls (buttons, inputs, tabs, badges), 8 px for rows an
 - Do use the tokens; add a token instead of a new literal color.
 - Do keep amber for `.primary` and the brand.
 - Do keep the state as text next to every color cue.
-- Do keep the message rail, pane heading and terminal inset fixed unless the change is about terminal geometry, and re-measure the PTY when it is.
+- Do keep the top bar, pane heading, status bar and terminal inset fixed unless the change is about terminal geometry, and re-measure the PTY when it is. Anything shown on demand floats (absolute) instead of entering the flow.
 - Don't show working without an explicit report, or infer state from terminal output.
 - Don't add sizes, weights or radii outside the scale.
 - Don't launch processes, send terminal text or reorder phases from the sidebar or the board.

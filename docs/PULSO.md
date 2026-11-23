@@ -5,9 +5,9 @@ Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto repr
 ## Empezar desde una sesión
 
 1. Abre Claude Code o Codex como siempre, incluso desde tu carpeta personal y sin Git.
-2. Entra a Pulso y pulsa **Nuevo proyecto**. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. La casilla conserva la sesión que nombra aunque cambies de terminal antes de crear el proyecto. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
+2. Entra a Pulso y pulsa el **+** (Nuevo proyecto) junto a las pestañas de tableros, en la barra superior. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. La casilla conserva la sesión que nombra aunque cambies de terminal antes de crear el proyecto. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
 3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
-4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o cambia el selector **Mover** con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
+4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o abre su menú **…** (Mover a Por hacer, En curso, En espera o Hecho), también con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
 5. Pulsa el título de una tarjeta para ver el detalle derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
 6. Abre **Plan y sesiones** en la barra del proyecto para editar el plan opcional, cambiar la sesión principal y vincular sesiones. **Configurar permisos…** abre el acceso manual de una sesión existente. La principal no cambia automáticamente cuando termina.
 

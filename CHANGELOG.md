@@ -15,7 +15,20 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - El resumen de Pulso se relee al conectar, al recuperar el foco de la ventana, al salir o cambiar de tablero, al cambiar las sesiones y cuando un agente informa `done`/`idle`; no hay sondeo periódico. Los cambios de agentes por MCP pueden tardar hasta uno de esos eventos; la revisión de Pulso en el estado del runner queda para una entrega posterior.
 - La entrada de Repositorios y tareas Git se oculta de la barra lateral; el código de tareas, revisión, verificación y relevo no cambia.
 - Pulso: columnas sin borde con punto de estado, tarjetas de radio 8 con un solo borde, sin el título «Pulso» repetido ni el eslogan permanente. El selector «Mover» se mantiene.
-- Sin cambios en el runner, la barra de avisos de 50 px, la cabecera de los paneles ni el inset del terminal. Al ensanchar la barra lateral, el terminal pierde unas columnas en ventanas anchas; por debajo de 860 px la barra sigue superpuesta.
+- Sin cambios en el runner, la barra de avisos de 50 px, la cabecera de los paneles ni el inset del terminal (la entrega B los sustituye). Al ensanchar la barra lateral, el terminal pierde unas columnas en ventanas anchas; por debajo de 860 px la barra sigue superpuesta.
+
+### Sin publicar · 1.4.0 entrega B: terminal y Pulso
+
+- Barra superior de 42 px en lugar de la cabecera de 62 px: una pestaña elevada por sesión abierta (icono del proveedor, nombre, indicador de estado con las cinco formas de la barra lateral; clic = abrir en el panel enfocado), «+» para nueva sesión, Dividir, la campana de avisos e Información. En Pulso la misma barra muestra los tableros (Pendientes y proyectos) y un «+» para nuevo proyecto.
+- Sin barra de avisos de 50 px: el aviso prioritario está en la etiqueta de estado de la cabecera del panel, en la campana (que abre una lista con Abrir sesión y Marcar vistos) y en la barra de estado. Los avisos nuevos se anuncian en una región `aria-live` educada. Los mensajes genéricos y errores son una notificación flotante.
+- Paneles como tarjetas sobre el lienzo (8 px de separación, radio 10, borde de 1 px; el foco cambia el color del borde y añade un anillo). Cabecera única de 32 px por panel: proveedor, nombre, carpeta, estado, Interrumpir y menú «…» (Cambiar nombre, Terminar sesión con su confirmación, Liberar carpeta).
+- Selector de sesión propio en lugar del `<select>` nativo: búsqueda por texto, grupos Abiertas e Historial, sesiones del otro panel deshabilitadas, flechas, Intro y Escape; ninguna tecla llega al terminal y al cerrar el foco vuelve a él.
+- Barra de estado de 28 px: «N te necesita», «N trabajando», conexión, columnas × filas del panel enfocado y recursos. El consejo «Cerrar la ventana deja las sesiones en ejecución» pasa a Información.
+- El área útil del terminal cambia una vez: a 1220 × 800, de 118 × 33 a 115 × 38 con un panel y de 56 × 33 a 55 × 38 con dos; a 760 × 560, de 92 × 19 a 90 × 24 con un panel y de 92 × 7 a 90 × 10 con dos (apilados).
+- Pulso: el selector «Mover» visible se sustituye por el menú «…» de cada tarjeta (Mover a Por hacer / En curso / En espera / Hecho, accesible con teclado), con la misma semántica, deshacer y orden de fases; el arrastre sigue igual. Barra de proyecto de una línea con título, «n de m fases hechas», Plan y sesiones y la única acción ámbar; «Nuevo proyecto» pasa al «+» de la barra superior y «Volver a terminal» desaparece.
+- Configuración con filas compactas, ayuda de una línea y «Más detalles»; indicador «Sin guardar» junto a Guardar; sin tarjeta anidada. Permisos, acceso automático y sus textos de alcance no cambian.
+- Modo oscuro: `--sidebar` pasa a `#0e1116`, la tinta del logotipo oscuro, para que no se vea su recuadro; el texto tenue y secundario siguen en AA (5,98:1 y 7,12:1).
+- Sin cambios en el runner ni en la persistencia. El pie de tarjeta con la sesión vinculada y los checkpoints queda para la entrega E: el tablero no trae esos datos.
 
 ## [1.3.3] - 2026-11-18
 
