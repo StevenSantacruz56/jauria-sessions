@@ -99,8 +99,12 @@ try {
       await page.locator('#connect').click();
       await page.waitForFunction(()=>(window as any).priorityFixture.connectCount===2 && document.querySelector('#connection-state')?.textContent==='Conectado');
       await page.evaluate(()=>(window as any).priorityFixture.release());
+      await page.waitForFunction(()=>!(document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null)?.disabled);
       await page.locator('.xterm-helper-textarea').focus();
       await page.keyboard.press('c');
+      // As above: the 250 ms bound is input→paint. Reaching the input after a
+      // reconnect (focus, enabled stdin) is not part of the priority guarantee.
+      await page.waitForFunction(()=>(window as any).priorityFixture.inputs.some((input:any)=>input.id==='foreground'&&input.data==='c'));
       await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent?.includes('c'),undefined,{timeout:250});
     } finally {
       await page.evaluate(()=>(window as any).priorityFixture?.release()).catch(()=>{});
