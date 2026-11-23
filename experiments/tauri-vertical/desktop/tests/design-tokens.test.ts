@@ -81,8 +81,10 @@ test('status chrome has fixed heights and never wraps (status changes must never
   }
   assert.match(rule('.pane-heading'), /max-height: 32px/);
   assert.match(rule('.pane-heading'), /overflow: hidden/);
+  // Not positioned: the floating menu anchors to the pane and is not clipped by the heading.
+  assert.doesNotMatch(rule('.pane-heading'), /position:/);
   // Popover, picker and notice float; none of them is in the flow above the terminal.
-  for (const selector of ['.alerts-popover', '.session-picker', '.notice']) assert.match(rule(selector), /position: absolute/, selector);
+  for (const selector of ['.alerts-popover', '.session-picker', '.notice', '.handoff-context', '.pane-menu-content']) assert.match(rule(selector), /position: absolute/, selector);
   assert.doesNotMatch(css, /\.workbench-messages/, 'no message rail');
   // Pane focus changes color and a ring, never border width.
   assert.doesNotMatch(rule('.pane.is-focused'), /border-width|border:/);

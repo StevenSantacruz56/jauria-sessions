@@ -33,8 +33,10 @@ async function installMock(page: Page) {
     const w = window as any;
     const session = { id: 'foreground', title: 'Codex PTY geometry fixture', kind: 'codex',
       transport: 'pty', status: 'running', cwd: '/synthetic/notification-geometry', rows: 24, cols: 80 };
-    const other = { id: 'background', title: 'Background shell fixture', kind: 'terminal',
-      transport: 'pty', status: 'running', cwd: '/synthetic/other', rows: 24, cols: 80 };
+    // Long title and folder: the heading truncates them and never grows.
+    const other = { id: 'background', title: 'Background shell fixture with a very long synthetic title that must truncate inside the pane heading', kind: 'terminal',
+      transport: 'pty', status: 'running', cwd: '/synthetic/' + 'a-very-long-folder-name/'.repeat(12) + 'other', rows: 24, cols: 80 };
+    const closed = { id: 'history', title: 'Closed history fixture', kind: 'codex', transport: 'pty', status: 'exited', cwd: '/synthetic/history', rows: 24, cols: 80 };
     const events: any[] = [];
     const resizes: any[] = [];
     const inputs: any[] = [];
@@ -42,7 +44,7 @@ async function installMock(page: Page) {
     const unexpected: string[] = [];
     let focused = true, holdReplay = false, interruptError = '', evidence: any;
     const status = () => structuredClone({ pid: 123, generation: 'synthetic-geometry',
-      normalTerminalVersion: 1, sessions: [session, other], lastSeq: events.length });
+      normalTerminalVersion: 1, sessions: [session, other, closed], lastSeq: events.length });
     Object.defineProperty(document, 'hasFocus', { value: () => focused });
     const output = (data: string, sessionId = session.id) => events.push({ seq: events.length + 1,
       sessionId, kind: 'output', data: btoa(data) });
@@ -104,7 +106,7 @@ try {
     await test(`${engine.name()}: notification geometry${baselineRef ? ` (layout ${baselineRef})` : ''}`, async t => {
       const browser = await engine.launch(engine === chromium ? { channel: 'chrome' } : {});
       try {
-        for (const viewport of [{ width: 1220, height: 800 }, { width: 760, height: 640 }]) {
+        for (const viewport of [{ width: 1220, height: 800 }, { width: 760, height: 640 }, { width: 760, height: 560 }]) {
           await t.test(`${viewport.width}x${viewport.height}: attention, pane state, popover, picker, notices and replay never resize PTY`, async () => {
             const page = await browser.newPage({ viewport });
             const errors: string[] = [];
@@ -221,12 +223,22 @@ try {
               assert.deepEqual([shown.cols, shown.rows], [before.cols, before.rows], 'attention shown: actual xterm cols/rows');
               await attention();
               // Popover open/close by keyboard and pointer, with an alert present.
-              await page.locator('#session-alerts').focus(); await page.keyboard.press('Escape');
+              // First Escape from the expanded bell itself closes the popover.
+              await page.locator('#session-alerts').focus();
+              assert.equal(await page.locator('#session-alerts').getAttribute('aria-expanded'), 'true');
+              await page.keyboard.press('Escape');
+              await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
+              assert.equal(await page.locator('#session-alerts').getAttribute('aria-expanded'), 'false');
+              assert.equal(await page.evaluate(() => document.activeElement?.id), 'session-alerts', 'focus stays on the bell');
+              await check('alerts popover closed with Escape from the bell');
+              // Escape from inside the popover closes it and returns focus to the bell.
+              await page.locator('#session-alerts').click();
+              await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
               await page.locator('#attention-banner').locator('button').first().focus();
               await page.keyboard.press('Escape');
               await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
               assert.equal(await page.evaluate(() => document.activeElement?.id), 'session-alerts', 'Escape returns focus to the bell');
-              await check('alerts popover closed with Escape');
+              await check('alerts popover closed with Escape inside');
               await page.locator('#session-alerts').click();
               await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
               await check('alerts popover reopened');
@@ -306,6 +318,67 @@ try {
               assert.deepEqual(errors, []);
             } catch (error) { console.error(error); console.error(await page.evaluate(()=>({cursor:document.querySelector("#cursor")?.textContent,connection:document.querySelector("#connection-state")?.textContent,notice:document.querySelector("#notice-text")?.textContent,unexpected:(window as any).geometryFixture?.unexpected})),errors); throw error; }
             finally { await page.close(); }
+          });
+        }
+        for (const viewport of [{ width: 1220, height: 800 }, { width: 760, height: 560 }]) {
+          await t.test(`${viewport.width}x${viewport.height}: two panes, history pane, long names, picker choices and handoff context keep both terminals`, async () => {
+            const page = await browser.newPage({ viewport });
+            const errors: string[] = [];
+            page.on('pageerror', error => errors.push(error.message));
+            try {
+              await installMock(page);
+              await page.goto(url);
+              await page.waitForFunction(() => document.querySelector('#connection-state')?.textContent === 'Conectado');
+              await page.locator('#toggle-split').click();
+              await page.waitForFunction(() => (window as any).geometryFixture.resizes.some((r: any) => r.id === 'background'));
+              await settle(page);
+              const rects = () => page.evaluate(() => [1, 2].map(n => { const r = document.querySelector(`.pane:nth-child(${n}) .terminal-host`)!.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
+              const resizeCount = () => page.evaluate(() => (window as any).geometryFixture.resizes.length);
+              const before = await rects(); const resizes = await resizeCount();
+              assert.ok(before.every(r => r.width > 100 && r.height > 50), 'both panes laid out');
+              assert.deepEqual(await page.evaluate(() => Array.from(document.querySelectorAll('.pane-heading')).map(h => h.getBoundingClientRect().height)), [32, 32], 'long names keep 32 px headings');
+              const same = async (label: string) => {
+                await settle(page);
+                assert.deepEqual(await rects(), before, `${label}: both terminal hosts`);
+                assert.equal(await resizeCount(), resizes, `${label}: no extra resize RPC`);
+              };
+              // (a) An alert and a blocked state in pane 2 do not move pane 1 (nor pane 2).
+              await page.evaluate(() => { const f = (window as any).geometryFixture; f.focus(false); f.output('background bell\r\n\x07', 'background'); f.output('\x1b]7501;state=blocked\x07', 'background'); });
+              await page.waitForFunction(() => !(document.querySelector('#session-alerts') as HTMLElement).hidden);
+              await page.waitForFunction(() => document.querySelector('.pane:nth-child(2) .session-state')?.textContent === 'Solicita atención');
+              await same('alert and blocked state in the second pane');
+              await page.evaluate(() => (window as any).geometryFixture.focus(true));
+              const choose = async (id: string) => {
+                await page.locator('#session-1').click();
+                await page.locator(`.pane:nth-child(2) .session-picker [role="option"][data-session-id="${id}"]`).click();
+              };
+              // (b, e) A closed session in pane 2 shows the read-only label; its host keeps its size.
+              await choose('history');
+              await page.locator('.pane:nth-child(2) .history-banner').waitFor({ state: 'visible' });
+              await same('closed history session chosen in the picker');
+              // (e) «Sin sesión» empties the pane; the host keeps its size.
+              await choose('');
+              await page.waitForFunction(() => document.querySelector('#session-1')?.getAttribute('data-session-id') === '');
+              await same('Sin sesión chosen in the picker');
+              await choose('background');
+              await page.waitForFunction(() => document.querySelector('#session-1')?.getAttribute('data-session-id') === 'background');
+              await same('live session chosen again');
+              // (2) The handoff context floats: showing it and expanding its text never moves a terminal.
+              const handoff = await page.evaluate(() => {
+                const box = () => Array.from(document.querySelectorAll('.terminal-host')).slice(0, 2).map(h => { const r = h.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(); });
+                const start = box();
+                const toggle = document.querySelector<HTMLElement>('#handoff-toggle')!; const panel = document.querySelector<HTMLElement>('#handoff-context')!;
+                const area = document.querySelector<HTMLTextAreaElement>('#handoff-context-text')!;
+                toggle.hidden = false; panel.hidden = false; area.value = 'Contexto sintético\n'.repeat(40);
+                const shown = box(); area.style.height = '400px'; const expanded = box();
+                panel.hidden = true; toggle.hidden = true; const closedBox = box();
+                return { start, shown, expanded, closed: closedBox, position: getComputedStyle(panel).position };
+              });
+              assert.equal(handoff.position, 'absolute');
+              assert.deepEqual([handoff.shown, handoff.expanded, handoff.closed], [handoff.start, handoff.start, handoff.start], 'handoff context shown, expanded and closed');
+              await same('handoff context');
+              assert.deepEqual(errors, []);
+            } finally { await page.close(); }
           });
         }
       } finally { await browser.close(); }

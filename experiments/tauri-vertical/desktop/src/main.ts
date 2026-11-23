@@ -29,7 +29,7 @@ import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Tas
 import { shell, icon } from './ui';
 import { paneMarkup, paintPaneHeader } from './pane-header';
 import { SessionPicker, sessionPickerOptions } from './session-picker';
-import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, needsLabel, workingLabel } from './alerts-popover';
+import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, needsLabel, finishedLabel, workingLabel, quietLabel } from './alerts-popover';
 import { renderSessionTabs, sessionTabs } from './top-bar';
 import { mountPulsoPanel } from './pulso-panel';
 import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
@@ -59,6 +59,7 @@ const dockBadge = new DockBadge(count => getCurrentWindow().setBadgeCount(count)
 let attentionAt = 0;
 let attentionReading = false;
 const handoffContexts=new Map<string,string>();
+let handoffOpen=false;
 const codexDrafts=new Map<string,unknown>();
 const panes: Pane[] = [];
 let reviewPanel: ReturnType<typeof mountReviewPanel> | null = null;
@@ -205,7 +206,7 @@ for (let i = 0; i < 2; i++) {
   const trigger = root.querySelector<HTMLButtonElement>('.pane-session-button')!;
   // The picker floats inside the pane (absolute), above the terminal host; it never resizes it.
   const picker = new SessionPicker({
-    trigger, container: root, label: `Sesión del panel ${i + 1}`,
+    trigger, container: root, before: root.querySelector('.terminal-host'), label: `Sesión del panel ${i + 1}`,
     options: () => sessionPickerOptions([...views.values()].map(view => view.session), i, panes.map(p => p.id), split),
     onSelect: id => { focusedPane = i; if (id) selectSession(id); else { assign(pane, null); refresh(); trigger.focus(); } },
     onClose: restore => { if (!restore) return; const view = pane.id ? views.get(pane.id) : undefined; if (view && focusedPane === i) focusView(view); else trigger.focus(); },
@@ -321,7 +322,10 @@ function renderProjectList(planning: boolean) {
 }
 function refresh() {
   const handoffContext=handoffContexts.get(activeView()?.session.id??'');
-  $('#handoff-context').hidden=taskScreen!=='terminal' || !handoffContext;
+  // Floating panel with a fixed-height opener in the top bar; never in the terminal's flow.
+  $('#handoff-toggle').hidden=taskScreen!=='terminal' || !handoffContext;
+  $('#handoff-context').hidden=$('#handoff-toggle').hidden || !handoffOpen;
+  $('#handoff-toggle').setAttribute('aria-expanded',String(!$('#handoff-context').hidden));
   const planning = taskScreen === 'pulso';
   $('#pulso-panel-host').hidden = !planning;
   $('#open-pulso').setAttribute('aria-pressed', String(planning));
@@ -393,8 +397,10 @@ function refresh() {
   const needsTarget = firstAlert && needsKind(firstAlert.id) ? sessions.find(s => s.id === firstAlert.id) : sessions.find(s => needsKind(s.id));
   $('#status-needs').dataset.sessionId = needsTarget?.id ?? '';
   $('#status-needs').title = needsTarget ? `Abrir ${needsTarget.title} · ${activityById.get(needsTarget.id)?.label ?? ''}` : '';
+  $('#status-finished').hidden = counts.finished === 0; text('#status-finished-text', finishedLabel(counts.finished));
   $('#status-working').hidden = counts.working === 0; text('#status-working-text', workingLabel(counts.working));
-  $('#status-quiet').hidden = counts.needs > 0 || counts.working > 0;
+  const quiet = quietLabel(alerts.length, counts);
+  $('#status-quiet').hidden = quiet === null; text('#status-quiet', quiet ?? '');
   syncMessageRail();
   nativeAttention.update(alerts);
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
@@ -448,7 +454,7 @@ function refresh() {
       state: view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
       stateKey: view && isLive(view.session) ? programStatuses.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
       activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
-      history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · Solo lectura' : `${statusLabel(view.session.status)} · Entrada deshabilitada`,
+      history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
     });
     pane.picker.refresh();
     (pane.root.querySelector('.fixture-controls') as HTMLElement).hidden = !smoke;
@@ -480,7 +486,7 @@ function refresh() {
   $<HTMLButtonElement>('#toggle-split').disabled = sessions.length < 2 || planning;
   const current = activeView()?.session;
   // Top bar: session tabs in terminal views, Pulso board tabs while planning.
-  $('#session-tabs').hidden = planning; $('#tab-new-session').hidden = planning; $('#pulso-tabs-host').hidden = !planning;
+  $('#session-tabs').hidden = planning; $('#tab-new-session').hidden = planning; $('#pulso-tabs-host').hidden = !planning; $('#pulso-back-terminal').hidden = !planning;
   $('.workbench-header').dataset.view = planning ? 'pulso' : 'terminal';
   if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), taskScreen === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
   text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
@@ -1646,7 +1652,7 @@ pulsoPanel = mountPulsoPanel({
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
   newSession: cwd => openNew(cwd ?? null),
-  backToTerminal: () => {taskScreen='terminal';refresh();for(const pane of panes)if(pane.id)scheduleResize(views.get(pane.id)!);focusView(activeView());},
+  backToTerminal: () => leavePulso(),
   notice: text => notice(text),
   binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
   onChange: () => { loadSidebarProjects(); if (!disposed) refresh(); },
@@ -1666,7 +1672,17 @@ pulsoPanel = mountPulsoPanel({
   },
 });
 function showPulso() { taskScreen = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
-$('#open-pulso').addEventListener('click', showPulso);
+/** Same as the former «Volver a terminal»: a Pulso draft or failed save keeps the board. */
+function leavePulso() {
+  if (taskScreen !== 'pulso') return;
+  if (pulsoPanel && !pulsoPanel.prepareNavigation()) { notice('Guarda o descarta el borrador de Pulso antes de volver a la terminal.'); return; }
+  taskScreen = 'terminal'; refresh();
+  for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
+  if (activeView()) focusView(activeView()); else if (!$<HTMLButtonElement>('#welcome-create').disabled) $('#welcome-create').focus(); else $('#open-pulso').focus();
+}
+// The Pulso button toggles between the board and the terminal view.
+$('#open-pulso').addEventListener('click', () => { if (taskScreen === 'pulso') leavePulso(); else showPulso(); });
+$('#pulso-back-terminal').addEventListener('click', leavePulso);
 $('#sidebar-project-list').addEventListener('click', event => {
   const more = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-more]');
   if (more && !more.disabled) { showPulso(); return; }
@@ -1717,8 +1733,11 @@ reviewPanel = mountReviewPanel($('#review-panel-host'), request, async <T>(op: s
 }},{available:()=>(runner as RunnerStatus & {handoffVersion?:number;terminalSessionVersion?:number})?.handoffVersion===1 && (runner as RunnerStatus & {terminalSessionVersion?:number})?.terminalSessionVersion===1,opened:(data,context)=>{
   const session=data as Session;
   if(!session.id || !['codex','claude'].includes(session.kind))throw new Error('Sesión de destino inválida. Consulta el historial.');
-  handoffContexts.set(session.id,context);presentSession(session,panes[focusedPane]);notice('Destino abierto. El contexto está listo para copiar; no se ha enviado.');
+  handoffContexts.set(session.id,context);handoffOpen=true;presentSession(session,panes[focusedPane]);notice('Destino abierto. El contexto está listo para copiar; no se ha enviado.');
 }});
+$('#handoff-toggle').addEventListener('click',()=>{handoffOpen=!handoffOpen;refresh();if(handoffOpen)$<HTMLTextAreaElement>('#handoff-context-text').focus();});
+$('#close-handoff-context').addEventListener('click',()=>{handoffOpen=false;refresh();$('#handoff-toggle').focus();});
+$('#handoff-context').addEventListener('keydown',event=>{if(event.key!=='Escape')return;event.preventDefault();event.stopPropagation();handoffOpen=false;refresh();$('#handoff-toggle').focus();});
 $('#copy-handoff-context').addEventListener('click',()=>{
   const id=activeView()?.session.id;const context=id?handoffContexts.get(id):null;if(!context)return;
   void navigator.clipboard.writeText(context).then(()=>text('#handoff-context-status','Contexto copiado. Pégalo y envíalo cuando quieras.')).catch(()=>text('#handoff-context-status','No se pudo copiar. Puedes seleccionar el texto y copiarlo con el teclado.'));

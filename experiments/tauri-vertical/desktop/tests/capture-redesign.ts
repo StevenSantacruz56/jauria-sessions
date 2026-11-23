@@ -132,6 +132,23 @@ try {
       await page.getByRole('button', { name: 'Mover Validar la fluidez de las terminales', exact: true }).click(); await page.waitForTimeout(200);
       await page.screenshot({ path: `${dir}/${theme}-6-pulso-menu-mover.png` });
       await page.keyboard.press('Escape');
+      await page.screenshot({ path: `${dir}/${theme}-5b-pulso-cuatro-columnas.png` });
+      await page.locator('#pulso-back-terminal').click(); await page.waitForTimeout(500);
+      await page.screenshot({ path: `${dir}/${theme}-5c-pulso-a-terminal.png` });
+      // Pane menu open (not clipped by the heading).
+      await page.locator('.pane').first().locator('.pane-menu > summary').click(); await page.waitForTimeout(200);
+      await page.screenshot({ path: `${dir}/${theme}-9-menu-panel.png` });
+      await page.locator('.pane').first().locator('.pane-menu > summary').click();
+      // A closed session in the second pane shows the read-only label.
+      await page.locator('#session-1').click(); await page.locator('.pane:nth-child(2) .session-picker [role="option"][data-session-id="shell"]').click(); await page.waitForTimeout(400);
+      await page.screenshot({ path: `${dir}/${theme}-10-historial-solo-lectura.png` });
+      // Handoff context as a floating panel. A handoff needs the hidden Git task flow, so the
+      // synthetic capture reveals the same markup the handoff callback opens.
+      await page.evaluate(() => { const toggle = document.querySelector<HTMLElement>('#handoff-toggle')!; toggle.hidden = false; toggle.setAttribute('aria-expanded', 'true');
+        const panel = document.querySelector<HTMLElement>('#handoff-context')!; panel.hidden = false;
+        document.querySelector<HTMLTextAreaElement>('#handoff-context-text')!.value = 'Proyecto: Integrar Pulso en Jauría\n\nFase: Validar la fluidez de las terminales\n\nÚltimo checkpoint:\nModelo terminado. Pendiente medir latencia.\n\nRevisa este contexto antes de continuar.'; });
+      await page.screenshot({ path: `${dir}/${theme}-11-contexto-relevo.png` });
+      await page.evaluate(() => { document.querySelector<HTMLElement>('#handoff-context')!.hidden = true; document.querySelector<HTMLElement>('#handoff-toggle')!.hidden = true; });
       await page.locator('#open-settings').click(); await page.waitForTimeout(600);
       await page.screenshot({ path: `${dir}/${theme}-7-configuracion.png` });
       await page.keyboard.press('Escape'); await page.locator('#session-list .session-item').first().click();

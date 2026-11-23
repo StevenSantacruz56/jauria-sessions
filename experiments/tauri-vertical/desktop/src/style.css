@@ -337,7 +337,7 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .pane.is-focused { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
 /* One fixed heading: name, folder, state, Interrumpir and the menu. nowrap and
    clipped, so state or name changes can never resize the terminal below. */
-.pane-heading { position: relative; display: flex; align-items: center; gap: 8px; flex: 0 0 32px; height: 32px; min-height: 32px; max-height: 32px; padding: 0 4px 0 10px; overflow: hidden; white-space: nowrap; background: var(--terminal); border-bottom: 1px solid var(--terminal-line); color: var(--terminal-text); font-size: 12px; }
+.pane-heading { display: flex; align-items: center; gap: 8px; flex: 0 0 32px; height: 32px; min-height: 32px; max-height: 32px; padding: 0 4px 0 10px; overflow: hidden; white-space: nowrap; background: var(--terminal); border-bottom: 1px solid var(--terminal-line); color: var(--terminal-text); font-size: 12px; }
 .pane-provider { flex: 0 0 auto; width: 14px; height: 14px; }
 .pane-session-button { flex: 0 0 auto; min-width: 0; max-width: 46%; height: 24px; min-height: 24px; gap: 3px; padding: 0 4px 0 5px; margin-left: -4px; border: 0; background: transparent; color: var(--terminal-text); font-size: 12px; font-weight: 500; }
 .pane-session-button:hover:not(:disabled), .pane-session-button[aria-expanded="true"] { background: var(--terminal-hover); }
@@ -360,6 +360,8 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .pane-heading .icon-button:hover:not(:disabled), .pane-menu summary:hover { background: var(--terminal-hover); color: var(--terminal-text); }
 .pane-heading .icon-button .icon, .pane-menu summary .icon { width: 14px; height: 14px; }
 .pane-heading :where(button, summary):focus-visible { outline-offset: -2px; }
+.history-banner { display: inline-flex; align-items: center; flex: 0 0 auto; height: 18px; padding: 0 6px; border: 1px solid var(--terminal-line); border-radius: var(--radius-control); color: var(--terminal-text); font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
+.history-short { display: none; }
 .terminal-host { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; background: var(--terminal); }
 .pane .terminal-view, .terminal-host > .terminal { position: absolute; inset: 10px 8px 8px 12px; min-width: 0; min-height: 0; background: var(--terminal); }
 .pane .terminal-view .xterm, .terminal-host > .terminal .xterm { height: 100%; }
@@ -374,7 +376,8 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .pane-menu summary { display: flex; align-items: center; justify-content: center; border-radius: var(--radius-control); list-style: none; cursor: pointer; }
 .pane-menu summary::-webkit-details-marker { display: none; }
 .pane-menu[open] summary { background: var(--terminal-hover); color: var(--terminal-text); }
-/* The heading clips, so the menu anchors to the pane (position: relative) below the heading. */
+/* The heading clips its own content but is not positioned: the menu's containing
+   block is the pane (position: relative), so overflow: hidden never clips it. */
 .pane-menu-content { position: absolute; top: 34px; right: 6px; z-index: 12; width: 208px; max-height: calc(100% - 44px); overflow: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-row); background: var(--raised); color: var(--text); box-shadow: var(--shadow); white-space: normal; }
 .pane-menu-content button { justify-content: flex-start; width: 100%; background: transparent; border-color: transparent; text-align: left; font-size: 12px; }
 .pane-menu-content .danger { color: var(--error); }
@@ -477,6 +480,8 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 @media (max-width: 760px) {
   .workbench-actions .quiet > span { display: none; }
   .session-directory { display: none; }
+  .history-long { display: none; }
+  .history-short { display: inline; }
   .pane-status { max-width: 120px; }
 }
 @media (max-width: 540px) {
@@ -572,11 +577,16 @@ html[data-theme="dark"] .brand-dark { display: block; }
 #telemetry-summary { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dim); }
 @media (max-width: 1050px) { #telemetry-summary { display: none; } }
 
-.handoff-context { flex:0 0 auto; min-width:0; padding:8px 16px; border-bottom:1px solid var(--border); background:var(--surface); font-size:12px; }
-.handoff-context summary { cursor:pointer; color:var(--text); }
-.handoff-context p { margin:8px 0; color:var(--muted); }
-.handoff-context textarea { display:block; box-sizing:border-box; width:100%; max-height:120px; resize:vertical; margin:8px 0; color:var(--text); background:var(--sidebar); border:1px solid var(--control-border); border-radius:var(--radius-control); padding:8px; font:11px/1.4 "JetBrains Mono",ui-monospace,monospace; }
-.handoff-context :focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+/* Handoff context floats over the stage (absolute) and opens from the top-bar
+   «Contexto» button; showing, expanding or closing it never resizes a terminal. */
+.handoff-context { position: absolute; top: 8px; right: 16px; z-index: 7; display: flex; flex-direction: column; gap: 8px; width: min(480px, calc(100% - 32px)); max-height: calc(100% - 16px); overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--raised); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
+.handoff-context-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.handoff-context h2 { font-size: 13px; font-weight: 600; }
+.handoff-context p { color: var(--muted); }
+.handoff-context textarea { display: block; width: 100%; min-height: 96px; max-height: 240px; resize: vertical; color: var(--text); background: var(--sidebar); border: 1px solid var(--control-border); border-radius: var(--radius-control); padding: 8px; font: 11px/1.4 "JetBrains Mono", ui-monospace, monospace; }
+.handoff-context-actions { display: flex; align-items: center; gap: 10px; }
+.top-back { flex: 0 0 auto; min-height: 28px; height: 28px; padding: 0 8px; gap: 6px; font-size: 12px; color: var(--muted); }
+.top-back .icon { width: 15px; height: 15px; }
 
 .terminal-view[data-transport="app-server"] > .xterm { display:none; }
 .terminal-view[data-transport="app-server"], .codex-host { height:100%; min-height:0; min-width:0; padding:0; box-sizing:border-box; }

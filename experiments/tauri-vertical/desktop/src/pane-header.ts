@@ -14,7 +14,7 @@ export function paneMarkup(index: number) {
     + `<button id="session-${index}" type="button" class="pane-session-button" data-session-id="" aria-label="Sesión del panel ${index + 1}: sin sesión"><span class="pane-session-name">Elegir sesión</span>${chevron}</button>`
     + `<span class="session-directory">Sin carpeta de sesión</span>`
     + `<span class="pane-status"><span class="agent-indicator" aria-hidden="true"></span><span class="session-state">Sin sesión</span></span>`
-    + `<span class="history-banner sr-only" hidden></span>`
+    + `<span class="history-banner" hidden><span class="history-long"></span><span class="history-short">Solo lectura</span></span>`
     + `<button data-action="interrupt" data-label="Interrumpir" class="icon-button interrupt-button" aria-label="Interrumpir (Ctrl-C)" title="Interrumpir (Ctrl-C)">${icon('interrupt')}</button>`
     + `<details class="pane-menu"><summary aria-label="Acciones de la sesión" title="Acciones de la sesión">${icon('more')}</summary><div class="pane-menu-content">`
     + `<button data-action="rename" hidden>Cambiar nombre…</button>`
@@ -59,6 +59,8 @@ export function paintPaneHeader(root: HTMLElement, model: PaneHeaderModel): void
   const indicator = status.querySelector<HTMLElement>('.agent-indicator')!;
   indicator.hidden = !model.activity;
   if (model.activity) paintAgentIndicator(indicator, model.activity, model.activityLabel);
+  // Visible, fixed-height label; below 760 px only «Solo lectura» shows (CSS).
   const history = root.querySelector<HTMLElement>('.history-banner')!;
-  history.hidden = !model.history; set(history, model.history);
+  history.hidden = !model.history; set(history.querySelector('.history-long')!, model.history);
+  if (history.title !== model.history) history.title = model.history;
 }
