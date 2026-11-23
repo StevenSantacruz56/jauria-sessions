@@ -213,6 +213,7 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
         "project" | "item" => &["id"],
         "items" => &["projectId","cursor","limit","archived","status","expectedSnapshotRevision"],
         "board" => &["projectId","ifRevision"],
+        "sidebar_summary" => &["ifRevision"],
         "links" => &["projectId"],
         "checkpoint_history" => &["itemId","cursor","limit"],
         "activity" => &["projectId","itemId","limit"],
@@ -239,6 +240,9 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
         if args.get("expectedSnapshotRevision").is_some_and(|v| v.as_u64().is_none()) {
             return Err("Revisión de Pulso inválida".into());
         }
+    }
+    if op == "sidebar_summary" && args.get("ifRevision").is_some_and(|v| v.as_u64().is_none()) {
+        return Err("Revisión de Pulso inválida".into());
     }
     if op == "board" {
         if !args.get("projectId").is_some_and(|v| v.is_null() || v.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 80 && id != "." && id != ".." && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b)))) {
@@ -612,5 +616,21 @@ mod pulso_board_bridge_tests {
         assert!(validate_pulso("projects", &json!({"status":"todo"})).is_err());
         assert!(validate_pulso("projects", &json!({"expectedSnapshotRevision":0})).is_err());
         assert!(validate_pulso("items", &json!({"status":"todo","extra":true})).is_err());
+    }
+
+    #[test]
+    fn sidebar_summary_accepts_only_an_optional_unsigned_if_revision() {
+        assert!(validate_pulso("sidebar_summary", &json!({})).is_ok());
+        for revision in [0, 7, u64::MAX] {
+            assert!(validate_pulso("sidebar_summary", &json!({"ifRevision":revision})).is_ok());
+        }
+        for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!({}), json!([])] {
+            assert!(validate_pulso("sidebar_summary", &json!({"ifRevision":value})).is_err());
+        }
+        for args in [json!({"projectId":null}), json!({"limit":50}), json!({"ifRevision":1,"extra":true}), json!([])] {
+            assert!(validate_pulso("sidebar_summary", &args).is_err());
+        }
+        // The runner status RPC stays argument-free through the bridge.
+        assert!(validate("status", &json!({"pulsoRevision":1})).is_err());
     }
 }

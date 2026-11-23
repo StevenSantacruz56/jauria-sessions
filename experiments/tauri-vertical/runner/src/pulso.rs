@@ -568,7 +568,7 @@ impl Shared {
 }
 fn operate(s: &mut store::Store, p: &mut store::Principal, op: &str, a: &Value) -> Result<Value> {
     match op {
-        "board" | "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
+        "board" | "sidebar_summary" | "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
             s.read(p, op, a)
         }
         "project_create" | "project_update" | "item_create" | "item_update" | "link"
@@ -1374,6 +1374,24 @@ mod tests {
         assert_eq!(f.ui("board",json!({"projectId":"board"})).unwrap()["columns"]["todo"]["totalCount"],0);
         assert!(f.agent(&token,"board",json!({"projectId":null})).is_err());
         assert!(f.agent(&token,"board",json!({"projectId":"board"})).is_err());
+    }
+
+    #[test]
+    fn sidebar_summary_is_ui_only_over_the_socket() {
+        use std::io::BufRead;
+        let f=Fixture::new();
+        f.ui("project_create",json!({"id":"p","requestId":"p","title":"P"})).unwrap();
+        let token=f.grant();
+        let summary=f.ui("sidebar_summary",json!({})).unwrap();
+        assert_eq!(summary["projects"][0]["id"],"p");
+        assert_eq!(f.agent(&token,"sidebar_summary",json!({})).unwrap_err().to_string(),"unauthorized");
+        assert_eq!(f.agent(&token,"sidebar_summary",json!({"ifRevision":summary["revision"]})).unwrap_err().to_string(),"unauthorized");
+        assert_eq!(f.ui("sidebar_summary",json!({"projectId":"p"})).unwrap_err().to_string(),"unknown field");
+        // Over the wire the agent sees only the public error.
+        let mut stream=UnixStream::connect(f.sock.join("pulso.sock")).unwrap();
+        writeln!(stream,"{}",json!({"version":1,"token":token,"op":"sidebar_summary","args":{}})).unwrap();
+        let mut line=String::new();std::io::BufReader::new(stream).read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(),json!({"ok":false,"error":"unauthorized"}));
     }
 
 }

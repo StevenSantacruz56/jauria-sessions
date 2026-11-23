@@ -489,6 +489,7 @@ impl Runner {
             result["sessionRenameVersion"]=json!(1);
             // New capabilities get new fields: 1.3.x clients compare the existing
             // *Version values with === 1, so none of them may ever be raised.
+            result["pulsoSummaryVersion"]=json!(1);
             // In-memory counter published after each Pulso COMMIT; no SQLite here,
             // so it stays current even when the session store uses the cache.
             if let Some(pulso)=self.pulso.as_ref().filter(|p|p.available()) {
@@ -1605,6 +1606,7 @@ mod pulso_revision_tests {
         let initial=status(&runner)?;
         assert_eq!(initial["pulsoRevisionVersion"],1);
         assert_eq!(initial["pulsoRevision"],0);
+        assert_eq!(initial["pulsoSummaryVersion"],1);
         assert_eq!(initial["statusVersion"],2);assert_eq!(initial["pulsoVersion"],1);assert_eq!(initial["pulsoBoardVersion"],1);
         // UI write through the Pulso socket.
         pulso(&root,"project_create",json!({"id":"p","requestId":"p","title":"Synthetic"}))?;

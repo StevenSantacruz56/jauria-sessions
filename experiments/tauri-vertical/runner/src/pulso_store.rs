@@ -273,6 +273,19 @@ impl Store {
                 Ok(json!({"revision":revision,"columns":columns}))
             }
 
+            "sidebar_summary" => {
+                fields(a, &["ifRevision"])?;
+                // UI only, exactly like `board`: an agent token is refused even
+                // when it calls the operation directly.
+                ensure!(p.session.is_none(), "unauthorized");
+                let expected = a.get("ifRevision").map(|v| v.as_u64().context("invalid ifRevision")).transpose()?;
+                let revision = self.revision()?;
+                if expected == Some(revision) {
+                    return Ok(json!({"revision":revision,"unchanged":true}));
+                }
+                self.sidebar_summary(revision)
+            }
+
             "projects" | "items" => {
                 fields(
                     a,
@@ -394,6 +407,49 @@ impl Store {
             }
             _ => bail!("unknown operation"),
         }
+    }
+    /// Sidebar snapshot in four statements under the caller's service mutex:
+    /// the first page of non-archived projects (same order as `projects`),
+    /// per-project counts, open Pendientes and session links of those projects.
+    fn sidebar_summary(&self, revision: u64) -> Result<Value> {
+        let mut q = self.0.prepare(SUMMARY_PROJECTS_SQL)?;
+        let rows = q.query_map([(SUMMARY_PROJECTS + 1) as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))
+        })?;
+        let mut projects = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let has_more = projects.len() > SUMMARY_PROJECTS;
+        projects.truncate(SUMMARY_PROJECTS);
+        let ids = serde_json::to_string(&projects.iter().map(|(id, _, _)| id).collect::<Vec<_>>())?;
+        let mut counts = std::collections::HashMap::new();
+        let mut q = self.0.prepare(SUMMARY_COUNTS_SQL)?;
+        for row in q.query_map([&ids], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+            let (id, total, done) = row?;
+            counts.insert(id, (total, done));
+        }
+        let pending_open: i64 = self.0.query_row(SUMMARY_PENDING_SQL, [], |r| r.get(0))?;
+        let mut q = self.0.prepare(SUMMARY_LINKS_SQL)?;
+        let rows = q.query_map(params![ids, (SUMMARY_LINKS + 1) as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        let (mut links, mut bytes, mut truncated) = (Vec::new(), 0usize, false);
+        for row in rows {
+            let (session, project, via) = row?;
+            let link = json!({"sessionId":session,"projectId":project,"via":if via == 0 { "project" } else { "item" }});
+            bytes += link.to_string().len() + 1;
+            if links.len() == SUMMARY_LINKS || bytes > SUMMARY_LINK_BYTES {
+                truncated = true;
+                break;
+            }
+            links.push(link);
+        }
+        let projects: Vec<Value> = projects
+            .into_iter()
+            .map(|(id, title, main)| {
+                let (total, done) = counts.get(&id).copied().unwrap_or((0, 0));
+                json!({"id":id,"title":title,"mainSessionId":main,"done":done,"total":total})
+            })
+            .collect();
+        Ok(json!({"revision":revision,"projects":projects,"hasMore":has_more,"pendingOpen":pending_open,"links":links,"linksTruncated":truncated}))
     }
     pub fn write(&mut self, p: &mut Principal, op: &str, a: &Value) -> Result<Value> {
         let req = id(a, "requestId")?;
@@ -690,6 +746,36 @@ impl Store {
         }
     }
 }
+// sidebar_summary bounds: at most 50 projects (the UI shows 20) and 2,048
+// distinct session/project pairs within 256 KiB, far below RESPONSE_MAX.
+const SUMMARY_PROJECTS: usize = 50;
+const SUMMARY_LINKS: usize = 2048;
+const SUMMARY_LINK_BYTES: usize = 256 * 1024;
+// First page of non-archived projects: same predicate and order as `projects`.
+const SUMMARY_PROJECTS_SQL: &str = "SELECT id,json_extract(body,'$.title'),json_extract(body,'$.mainSessionId') FROM docs
+    WHERE kind='project' AND COALESCE(json_extract(body,'$.archived'),0)=0
+    ORDER BY CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ?";
+// Non-archived phases of the listed projects, one aggregate row per project.
+const SUMMARY_COUNTS_SQL: &str = "SELECT json_extract(body,'$.projectId'),count(*),COALESCE(sum(json_extract(body,'$.status')='done'),0) FROM docs
+    WHERE kind='item' AND json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?))
+    AND COALESCE(json_extract(body,'$.archived'),0)=0 GROUP BY 1";
+// Open Pendientes: non-archived items without a project that are not done.
+const SUMMARY_PENDING_SQL: &str = "SELECT count(*) FROM docs WHERE kind='item' AND json_extract(body,'$.projectId') IS NULL
+    AND COALESCE(json_extract(body,'$.archived'),0)=0 AND json_extract(body,'$.status')<>'done'";
+// Session -> listed project, through a project link or a link to one of its
+// phases (archived phases included: the link itself still exists). CROSS JOIN
+// pins the phases of the listed projects as the outer loop, so links are
+// reached through pulso_docs_item instead of scanning every link (`+i.id`
+// drops the column's TEXT affinity so the expression index applies). A session
+// linked both ways yields one pair and the project link wins (0=project,1=item).
+const SUMMARY_LINKS_SQL: &str = "SELECT sid,pid,min(via) FROM (
+      SELECT json_extract(body,'$.sessionId') AS sid,json_extract(body,'$.projectId') AS pid,0 AS via FROM docs
+      WHERE kind='link' AND json_extract(body,'$.projectId') IN (SELECT value FROM json_each(?1))
+      UNION ALL
+      SELECT json_extract(l.body,'$.sessionId'),json_extract(i.body,'$.projectId'),1 FROM docs i
+      CROSS JOIN docs l ON l.kind='link' AND json_extract(l.body,'$.itemId')=+i.id
+      WHERE i.kind='item' AND json_extract(i.body,'$.projectId') IN (SELECT value FROM json_each(?1))
+    ) WHERE sid IS NOT NULL GROUP BY sid,pid ORDER BY pid,sid LIMIT ?2";
 fn expected(a: &Value, v: &Value) -> Result<()> {
     ensure!(
         a["expectedRevision"].as_u64().is_some() && a["expectedRevision"] == v["revision"],
@@ -921,6 +1007,186 @@ mod store_tests {
             assert!(plan.contains("pulso_docs_kanban"), "{plan}");
             assert!(!plan.contains("SCAN docs"), "{plan}");
             assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        }
+    }
+
+    fn plan(store: &Store, sql: &str, params: impl rusqlite::Params) -> String {
+        let mut q = store.0.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        q.query_map(params, |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap().join("; ")
+    }
+    fn put_raw(store: &Store, kind: &str, body: Value) {
+        store.0.execute("INSERT INTO docs VALUES(?,?,?)", params![kind, body["id"].as_str().unwrap(), body.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn sidebar_summary_statements_use_existing_indexes() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let ids = r#"["p","q"]"#;
+        let plans = [
+            plan(&store, SUMMARY_PROJECTS_SQL, [51]),
+            plan(&store, SUMMARY_COUNTS_SQL, [ids]),
+            plan(&store, SUMMARY_PENDING_SQL, []),
+            plan(&store, SUMMARY_LINKS_SQL, params![ids, 2049]),
+        ];
+        for (n, p) in plans.iter().enumerate() { eprintln!("sidebar_summary[{n}]: {p}"); }
+        // Projects: a range on kind (one row per project), exactly like `projects`.
+        assert!(plans[0].contains("SEARCH docs USING INDEX") && plans[0].contains("(kind=?)"), "{}", plans[0]);
+        for p in &plans[1..] { assert!(!p.contains("SCAN docs") && !p.contains("SCAN i ") && !p.contains("SCAN l "), "{p}"); }
+        assert!(plans[1].contains("pulso_docs_"), "{}", plans[1]);
+        assert!(plans[2].contains("pulso_docs_kanban"), "{}", plans[2]);
+        assert!(plans[3].contains("SEARCH l USING INDEX pulso_docs_item (kind=? AND <expr>=?)"), "{}", plans[3]);
+        assert!(plans[3].contains("SEARCH i USING COVERING INDEX pulso_docs_kanban"), "{}", plans[3]);
+    }
+
+    fn write(store: &mut Store, ui: &mut Principal, op: &str, a: Value) -> Value { store.write(ui, op, &a).unwrap() }
+    fn archive(store: &mut Store, ui: &mut Principal, kind: &str, id: &str) {
+        let current = store.get(kind, id).unwrap();
+        write(store, ui, &format!("{kind}_update"), json!({"id":id,"requestId":format!("archive-{id}"),"expectedRevision":current["revision"],"archived":true}));
+    }
+
+    #[test]
+    fn sidebar_summary_counts_pending_links_and_scope() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        for p in ["p1", "p2", "p3"] {
+            write(&mut store, &mut ui, "project_create", json!({"id":p,"requestId":p,"title":format!("Title {p}"),"mainSessionId":format!("main-{p}")}));
+        }
+        for (id, project, status) in [("a","p1","todo"),("b","p1","done"),("c","p1","doing"),("z","p1","done"),("d","p3","waiting"),("e","p2","done")] {
+            write(&mut store, &mut ui, "item_create", json!({"id":id,"requestId":id,"projectId":project,"title":id,"status":status}));
+        }
+        for (id, status) in [("n1","todo"),("n2","doing"),("n3","done"),("n4","todo")] {
+            write(&mut store, &mut ui, "item_create", json!({"id":id,"requestId":id,"title":id,"status":status}));
+        }
+        archive(&mut store, &mut ui, "item", "z");
+        archive(&mut store, &mut ui, "item", "n4");
+        let link = |store: &mut Store, n: &str, target: Value, session: &str| {
+            let mut a = target; a["requestId"] = json!(n); a["sessionId"] = json!(session);
+            write(store, &mut ui.clone(), "link", a);
+        };
+        link(&mut store, "l1", json!({"projectId":"p1"}), "s-project");
+        link(&mut store, "l2", json!({"itemId":"a"}), "s-item");
+        link(&mut store, "l3", json!({"itemId":"c"}), "s-both");
+        link(&mut store, "l4", json!({"projectId":"p1"}), "s-both");
+        link(&mut store, "l5", json!({"itemId":"a"}), "s-item"); // duplicate pair
+        link(&mut store, "l6", json!({"itemId":"z"}), "s-archived-phase");
+        link(&mut store, "l7", json!({"projectId":"p2"}), "s-archived-project");
+        link(&mut store, "l8", json!({"itemId":"e"}), "s-archived-project-phase");
+        link(&mut store, "l9", json!({"itemId":"n1"}), "s-pending");
+        for n in 0..150 { link(&mut store, &format!("m{n}"), json!({"projectId":"p3"}), &format!("s-many-{n:03}")); }
+        archive(&mut store, &mut ui, "project", "p2");
+        let revision = store.revision().unwrap();
+        let summary = store.read(&ui, "sidebar_summary", &json!({})).unwrap();
+        assert_eq!(summary["revision"], revision);
+        assert!(summary.get("unchanged").is_none());
+        assert_eq!(summary["hasMore"], false);
+        assert_eq!(summary["pendingOpen"], 2);
+        assert_eq!(summary["projects"], json!([
+            {"id":"p1","title":"Title p1","mainSessionId":"main-p1","done":1,"total":3},
+            {"id":"p3","title":"Title p3","mainSessionId":"main-p3","done":0,"total":1},
+        ]));
+        // Same order as `projects`.
+        let order: Vec<_> = store.read(&ui, "projects", &json!({"archived":false})).unwrap()["projects"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect();
+        assert_eq!(order, summary["projects"].as_array().unwrap().iter().map(|p| p["id"].clone()).collect::<Vec<_>>());
+        let links = summary["links"].as_array().unwrap();
+        assert_eq!(summary["linksTruncated"], false);
+        let p1: Vec<_> = links.iter().filter(|l| l["projectId"] == "p1").cloned().collect();
+        assert_eq!(p1, vec![
+            json!({"sessionId":"s-archived-phase","projectId":"p1","via":"item"}),
+            json!({"sessionId":"s-both","projectId":"p1","via":"project"}),
+            json!({"sessionId":"s-item","projectId":"p1","via":"item"}),
+            json!({"sessionId":"s-project","projectId":"p1","via":"project"}),
+        ]);
+        // More than 100 links on one project are no longer cut at 100.
+        assert_eq!(links.iter().filter(|l| l["projectId"] == "p3").count(), 150);
+        assert_eq!(store.read(&ui, "links", &json!({"projectId":"p3"})).unwrap()["hasMore"], true);
+        assert_eq!(links.len(), 154);
+        assert!(links.iter().all(|l| l["projectId"] != "p2" && l["sessionId"] != "s-pending"));
+        // Deterministic order: projectId, then sessionId.
+        let keys: Vec<_> = links.iter().map(|l| (l["projectId"].as_str().unwrap().to_owned(), l["sessionId"].as_str().unwrap().to_owned())).collect();
+        let mut sorted = keys.clone(); sorted.sort(); assert_eq!(keys, sorted);
+        assert_eq!(store.read(&ui, "sidebar_summary", &json!({})).unwrap(), summary);
+        // ifRevision: shortcut reads only meta.
+        assert_eq!(store.read(&ui, "sidebar_summary", &json!({"ifRevision":revision})).unwrap(), json!({"revision":revision,"unchanged":true}));
+        assert!(store.read(&ui, "sidebar_summary", &json!({"ifRevision":revision - 1})).unwrap()["projects"].is_array());
+        for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!([])] {
+            assert!(store.read(&ui, "sidebar_summary", &json!({"ifRevision":value})).is_err());
+        }
+        for args in [json!({"projectId":"p1"}), json!({"limit":50}), json!({"ifRevision":revision,"extra":1})] {
+            assert_eq!(store.read(&ui, "sidebar_summary", &args).unwrap_err().to_string(), "unknown field");
+        }
+        // Agent principals are refused even with all-projects scope.
+        let agent = Principal { id:"a".into(), session:Some("agent".into()), projects:HashSet::new(), create:true, all_projects:true };
+        assert_eq!(store.read(&agent, "sidebar_summary", &json!({})).unwrap_err().to_string(), "unauthorized");
+        assert_eq!(store.read(&agent, "sidebar_summary", &json!({"ifRevision":revision})).unwrap_err().to_string(), "unauthorized");
+        store.0.execute_batch("DROP TABLE docs").unwrap();
+        assert_eq!(store.read(&ui, "sidebar_summary", &json!({"ifRevision":revision})).unwrap(), json!({"revision":revision,"unchanged":true}));
+    }
+
+    #[test]
+    fn sidebar_summary_caps_projects_and_links_deterministically() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        for n in 0..51 { write(&mut store, &mut ui, "project_create", json!({"id":format!("p{n:02}"),"requestId":format!("p{n:02}"),"title":"P"})); }
+        // Direct inserts keep the fixture fast; the store only reads these rows.
+        for n in 0..2100 { put_raw(&store, "link", json!({"id":format!("link-x{n}"),"projectId":format!("p{:02}", n % 50),"sessionId":format!("s{n:05}")})); }
+        put_raw(&store, "link", json!({"id":"link-late","projectId":"p50","sessionId":"s-late"}));
+        let summary = store.read(&ui, "sidebar_summary", &json!({})).unwrap();
+        assert_eq!(summary["projects"].as_array().unwrap().len(), 50);
+        assert_eq!(summary["hasMore"], true);
+        assert_eq!(summary["linksTruncated"], true);
+        let links = summary["links"].as_array().unwrap();
+        assert_eq!(links.len(), 2048);
+        // p50 is beyond the page: its links are not reported.
+        assert!(links.iter().all(|l| l["projectId"] != "p50"));
+        assert_eq!(links[0], json!({"sessionId":"s00000","projectId":"p00","via":"project"}));
+        assert_eq!(store.read(&ui, "sidebar_summary", &json!({})).unwrap(), summary);
+        let wire = serde_json::to_vec(&json!({"ok":true,"result":summary})).unwrap().len();
+        eprintln!("sidebar_summary capped wire bytes: {wire}");
+        assert!(wire < 256 * 1024);
+        // Worst-case identifiers (80 bytes) hit the byte budget before 2,048 pairs.
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        for n in 0..50 { put_raw(&store, "project", json!({"id":format!("{n:02}{}", "p".repeat(78)),"title":"\u{0001}".repeat(240),"mainSessionId":"m".repeat(80),"archived":false,"createdAt":n})); }
+        for n in 0..2100 { put_raw(&store, "link", json!({"id":format!("link-{n}"),"projectId":format!("{:02}{}", n % 50, "p".repeat(78)),"sessionId":format!("{n:05}{}", "s".repeat(75))})); }
+        let summary = store.read(&ui, "sidebar_summary", &json!({})).unwrap();
+        let wire = serde_json::to_vec(&json!({"ok":true,"result":summary})).unwrap().len();
+        eprintln!("sidebar_summary worst-case wire bytes: {wire}, links {}", summary["links"].as_array().unwrap().len());
+        assert_eq!(summary["linksTruncated"], true);
+        assert!(summary["links"].as_array().unwrap().len() < 2048);
+        assert!(wire < 400 * 1024, "{wire}");
+    }
+
+    /// Opt-in measurement: `cargo test --release --locked pulso_summary_scale -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn pulso_summary_scale() {
+        for (items, extra) in [(20_000usize, 0usize), (20_000, 77_000)] {
+            let store = Store::open(Path::new(":memory:")).unwrap();
+            store.0.execute_batch("DELETE FROM pulso_budget; DROP TRIGGER pulso_budget_docs_INSERT;").unwrap();
+            let ui = Principal::ui();
+            store.0.execute_batch("BEGIN").unwrap();
+            for n in 0..50 { put_raw(&store, "project", json!({"id":format!("project-{n:02}"),"title":format!("Proyecto sintético {n}"),"mainSessionId":format!("{n:08}-0000-4000-8000-000000000000"),"archived":false,"createdAt":n})); }
+            for n in 0..items {
+                let project = if n % 10 == 0 { Value::Null } else { json!(format!("project-{:02}", n % 50)) };
+                let status = ["todo","doing","waiting","done"][n % 4];
+                put_raw(&store, "item", json!({"id":format!("item-{n}"),"projectId":project,"title":"Fase","note":"","status":status,"position":n,"archived":n % 17 == 0,"createdAt":n}));
+            }
+            for n in 0..2100 {
+                let session = format!("{n:08}-1111-4000-8000-000000000000");
+                if n % 2 == 0 { put_raw(&store, "link", json!({"id":format!("link-{n}"),"projectId":format!("project-{:02}", n % 50),"sessionId":session})); }
+                else { put_raw(&store, "link", json!({"id":format!("link-{n}"),"itemId":format!("item-{}", n * 7 % items),"sessionId":session})); }
+            }
+            for n in 0..extra { put_raw(&store, "checkpoint", json!({"id":format!("cp-{n}"),"itemId":format!("item-{}", n % items),"brief":"b","nextAction":"n","createdAt":n})); }
+            store.0.execute_batch("COMMIT").unwrap();
+            let docs: i64 = store.0.query_row("SELECT count(*) FROM docs", [], |r| r.get(0)).unwrap();
+            let started = std::time::Instant::now();
+            let runs = 20;
+            let mut summary = Value::Null;
+            for _ in 0..runs { summary = store.read(&ui, "sidebar_summary", &json!({})).unwrap(); }
+            let per = started.elapsed() / runs;
+            let wire = serde_json::to_vec(&json!({"ok":true,"result":summary})).unwrap().len();
+            eprintln!("docs={docs} items={items} links={} truncated={} pendingOpen={} wire={wire} B time/op={per:?}",
+                summary["links"].as_array().unwrap().len(), summary["linksTruncated"], summary["pendingOpen"]);
+            assert!(wire < 512 * 1024);
         }
     }
 
