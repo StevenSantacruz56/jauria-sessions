@@ -1,15 +1,14 @@
-/* Scoped sidebar module; inherits the incumbent light/dark design tokens. */
+/* Scoped sidebar module; inherits the light/dark design tokens from style.css. */
 .telemetry {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  max-width: 232px;
+  max-width: 100%;
   flex: 0 1 auto;
   max-height: 38vh;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border);
+  padding: 10px 8px 8px;
   color: var(--text);
   background: var(--sidebar);
   font-size: 11px;
@@ -27,7 +26,7 @@
   max-width: 100%;
   padding: 4px 7px;
   border: 1px solid var(--control-border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--text);
   background: var(--surface);
   font: inherit;
@@ -35,11 +34,11 @@
 }
 .telemetry-refresh:hover:not(:disabled) { background: var(--hover); }
 .telemetry-refresh:active:not(:disabled) { background: var(--pressed); }
-.telemetry-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.telemetry-refresh:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .telemetry-refresh:disabled { opacity: .6; cursor: default; }
 .telemetry-provider + .telemetry-provider, .telemetry-resources { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .telemetry-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
-.telemetry-state, .telemetry-meta, .telemetry-note, .telemetry-status { color: var(--muted); font-size: 10px; }
+.telemetry-state, .telemetry-meta, .telemetry-note, .telemetry-status { color: var(--muted); font-size: 11px; }
 .telemetry-state { text-align: right; }
 .telemetry-window { margin-top: 7px; }
 .telemetry-value { font-variant-numeric: tabular-nums; }
@@ -48,11 +47,11 @@
 .telemetry-note, .telemetry-status { margin-top: 6px !important; overflow-wrap: anywhere; }
 .telemetry-status { margin-bottom: 8px !important; }
 .telemetry-warning { color: var(--warning); }
-.telemetry-meter { display: block; width: 100%; height: 6px; margin: 4px 0; border: 0; border-radius: 3px; background: var(--border); appearance: none; }
-.telemetry-meter::-webkit-meter-bar { height: 6px; border: 0; border-radius: 3px; background: var(--border); box-shadow: none; }
-.telemetry-meter::-webkit-meter-optimum-value { background: var(--accent); border-radius: 3px; }
-.telemetry-meter::-webkit-meter-suboptimum-value, .telemetry-meter::-webkit-meter-even-less-good-value { background: var(--warning); border-radius: 3px; }
-.telemetry-meter::-moz-meter-bar { background: var(--accent); border-radius: 3px; }
+.telemetry-meter { display: block; width: 100%; height: 6px; margin: 4px 0; border: 0; border-radius: var(--radius-control); background: var(--border); appearance: none; }
+.telemetry-meter::-webkit-meter-bar { height: 6px; border: 0; border-radius: var(--radius-control); background: var(--border); box-shadow: none; }
+.telemetry-meter::-webkit-meter-optimum-value { background: var(--dim); border-radius: var(--radius-control); }
+.telemetry-meter::-webkit-meter-suboptimum-value, .telemetry-meter::-webkit-meter-even-less-good-value { background: var(--warning); border-radius: var(--radius-control); }
+.telemetry-meter::-moz-meter-bar { background: var(--dim); border-radius: var(--radius-control); }
 .telemetry-resource-line { display: flex; flex-direction: column; gap: 2px; margin-top: 7px; }
 .telemetry [data-stale="true"] .telemetry-value { color: var(--muted); }
 @media (forced-colors: active) {
@@ -60,6 +59,5 @@
   .telemetry-refresh:focus-visible { outline-color: Highlight; }
 }
 
-#telemetry-host { flex: 0 0 auto; min-height: 0; border-top: 1px solid var(--border); }
-#telemetry-host > summary { padding: 10px 14px; cursor: pointer; font-size: 12px; font-weight: 600; }
-#telemetry-host > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* The disclosure summary is a sidebar row (style.css); no native marker. */
+#telemetry-host > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }

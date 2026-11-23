@@ -1,4 +1,4 @@
-/* Pulso shares Jauría's Inter typography, yellow actions and appearance tokens. */
+/* Pulso shares Jauría's Inter typography, amber primary action and appearance tokens. */
 .pulso-panel {
   position: relative;
   display: flex;
@@ -8,18 +8,18 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--surface);
+  background: var(--canvas);
   color: var(--text);
   font: inherit;
 }
 
 :where(.pulso-panel, .pulso-drawer) [hidden] { display: none !important; }
 :where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea, summary, a):focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 :where(.pulso-panel, .pulso-drawer) ::selection { background: var(--selected); color: var(--selected-text); }
-:where(.pulso-panel, .pulso-drawer) :where(input, textarea) { caret-color: var(--accent); }
+:where(.pulso-panel, .pulso-drawer) :where(input, textarea) { caret-color: var(--focus); }
 :where(.pulso-panel, .pulso-drawer) :where(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
 :where(.pulso-panel, .pulso-drawer) button { max-width: 100%; white-space: normal; }
 :where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea):disabled {
@@ -45,18 +45,9 @@
   flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 12px 20px;
-  padding: 20px 24px 16px;
+  padding: 12px 24px 8px;
 }
-.pulso-header > div:first-child { min-width: 0; }
-.pulso-header h1 {
-  margin: 0;
-  font-family: inherit;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: -.03em;
-}
-.pulso-header p { margin-top: 5px; }
+.pulso-header:not(:has(> :not([hidden]))) { display: none; }
 .pulso-header-actions, .pulso-inline-actions {
   display: flex;
   align-items: center;
@@ -73,41 +64,35 @@
 .pulso-progress { margin-top: 6px; font-variant-numeric: tabular-nums; }
 .pulso-tabs {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  padding: 0 24px;
+  padding: 6px 24px;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
   scroll-padding-inline: 24px;
 }
+/* Same raised tab as the sidebar filters: background and 1px border, no underline. */
 .pulso-tab {
   position: relative;
   flex: 0 0 auto;
   max-width: 240px;
-  min-height: 40px;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: 6px 6px 0 0;
+  min-height: 29px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
-.pulso-tab[aria-current="true"] {
-  background: var(--chrome);
+.pulso-tab:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.pulso-tab[aria-current="true"], .pulso-tab[aria-current="true"]:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--border);
   color: var(--text);
-  font-weight: 600;
-}
-.pulso-tab[aria-current="true"]::after {
-  position: absolute;
-  right: 12px;
-  bottom: 0;
-  left: 12px;
-  height: 2px;
-  background: var(--accent);
-  content: "";
 }
 .pulso-board-toolbar {
   display: flex;
@@ -119,7 +104,7 @@
   padding: 20px 24px 16px;
 }
 .pulso-board-toolbar > div { min-width: 0; }
-.pulso-board-toolbar h2 { font-size: 17px; font-weight: 600; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.pulso-board-toolbar h2 { font-size: 16px; font-weight: 600; line-height: 1.35; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .pulso-board-toolbar p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .pulso-board-toolbar > div:last-child:not(:first-child) { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
@@ -144,10 +129,10 @@
   min-width: 240px;
   max-width: 320px;
   min-height: 0;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--chrome);
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-panel);
+  background: transparent;
 }
 .pulso-column > header {
   display: flex;
@@ -155,13 +140,17 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 6px 12px;
+  justify-content: flex-start;
+  min-height: 26px;
+  padding: 0 4px 8px;
 }
-.pulso-column h3 { min-width: 0; font-size: 12px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
-.pulso-count { color: var(--muted); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.pulso-column[data-state="doing"] > header h3 { color: var(--working-text); }
-.pulso-column[data-state="waiting"] > header h3 { color: var(--warning); }
-.pulso-column[data-state="done"] > header h3 { color: var(--success); }
+/* Column headings stay muted; a state dot carries the color, the text the meaning. */
+.pulso-column h3 { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.pulso-column h3::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--state-paused); }
+.pulso-column[data-state="doing"] h3::before { background: var(--state-working); box-shadow: none; }
+.pulso-column[data-state="waiting"] h3::before { background: var(--state-attention); box-shadow: none; }
+.pulso-column[data-state="done"] h3::before { background: var(--state-ready); box-shadow: none; }
+.pulso-count { color: var(--dim); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .pulso-cards {
   display: flex;
   flex-direction: column;
@@ -178,12 +167,12 @@
 .pulso-card {
   position: relative;
   min-width: 0;
-  border: 1px solid var(--control-border);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-row);
   background: var(--surface);
   overflow-wrap: anywhere;
 }
-.pulso-card:hover, .pulso-card:focus-within { border-color: var(--accent); }
+.pulso-card:hover, .pulso-card:focus-within { border-color: var(--control-border); }
 .pulso-card-open {
   display: flex;
   flex-direction: column;
@@ -195,11 +184,11 @@
   min-height: 64px;
   padding: 13px 40px 12px 12px;
   border: 0;
-  border-radius: 11px 11px 0 0;
+  border-radius: 7px 7px 0 0;
   background: transparent;
   text-align: left;
 }
-.pulso-card-title { display: block; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.pulso-card-title { display: block; font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
 .pulso-card-note {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -238,9 +227,9 @@
 }
 .pulso-card-handle svg { width: 16px; height: 16px; }
 .pulso-card-handle:active { cursor: grabbing; }
-.pulso-card.is-dragging { opacity: .5; border-style: dashed; border-color: var(--accent); }
-.pulso-column.is-drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--selected); }
-.pulso-add-trigger { flex: 0 0 auto; justify-content: flex-start; width: 100%; min-height: 36px; padding: 8px; border-color: transparent; background: transparent; color: var(--muted); font-size: 12px; }
+.pulso-card.is-dragging { opacity: .5; border-style: dashed; border-color: var(--focus); }
+.pulso-column.is-drop-target { outline: 2px solid var(--focus); outline-offset: -2px; background: var(--selected); }
+.pulso-add-trigger { flex: 0 0 auto; justify-content: flex-start; width: 100%; min-height: 30px; padding: 0 8px; border-color: transparent; border-radius: var(--radius-row); background: transparent; color: var(--dim); font-size: 12px; font-weight: 400; }
 .pulso-add-trigger:hover:not(:disabled) { color: var(--text); }
 .pulso-add-form { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; padding: 4px; min-width: 0; }
 .pulso-add-form input { flex: 1 0 100%; width: 100%; min-height: 36px; }
@@ -260,7 +249,7 @@
   padding: 10px 12px;
   overflow: auto;
   border: 1px solid var(--control-border);
-  border-radius: 8px;
+  border-radius: var(--radius-row);
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -300,7 +289,7 @@
   font: inherit;
 }
 .pulso-drawer[open] { display: flex; flex-direction: column; }
-.pulso-drawer::backdrop { background: rgb(8 14 24 / 36%); }
+.pulso-drawer::backdrop { background: var(--scrim); }
 .pulso-drawer-header {
   position: sticky;
   top: 0;
@@ -315,7 +304,7 @@
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-.pulso-drawer-header :where(h2, h3) { min-width: 0; font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.pulso-drawer-header :where(h2, h3) { min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .pulso-drawer-header > button { flex: 0 0 auto; width: 32px; min-height: 32px; padding: 7px; }
 .pulso-detail { flex: 1 1 0; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 20px 24px 32px; }
 .pulso-detail > h2 { margin-bottom: 12px; font-size: 20px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; overflow-wrap: anywhere; }
@@ -326,17 +315,17 @@
 .pulso-form > .pulso-muted, .pulso-section > .pulso-muted { margin-bottom: 12px; }
 .pulso-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-bottom: 12px; font-size: 12px; font-weight: 500; }
 .pulso-field :where(input, select, textarea) { width: 100%; min-width: 0; font-weight: 400; }
-.pulso-field textarea { min-height: 96px; resize: vertical; padding: 9px 10px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; line-height: 1.6; }
+.pulso-field textarea { min-height: 96px; resize: vertical; padding: 9px 10px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--surface); color: var(--text); font: inherit; font-weight: 400; line-height: 1.6; }
 .pulso-field textarea[aria-invalid="true"] { border-color: var(--error); }
 .pulso-form > button, .pulso-section button { margin: 4px 8px 4px 0; }
 :where(.pulso-panel, .pulso-drawer) details { margin: 14px 0; }
 :where(.pulso-panel, .pulso-drawer) summary { padding: 8px 0; color: var(--text); font-size: 12px; cursor: pointer; }
-:where(.pulso-panel, .pulso-drawer) summary:hover { color: var(--accent); background: transparent; }
+:where(.pulso-panel, .pulso-drawer) summary:hover { color: var(--text); background: transparent; }
 .pulso-prose { max-width: 74ch; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; }
 .pulso-session { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 10px 0; overflow-wrap: anywhere; }
 .pulso-session > span { min-width: 0; overflow-wrap: anywhere; }
 .pulso-check { display: flex; align-items: flex-start; gap: 8px; max-width: 65ch; margin: 12px 0; font-size: 12px; font-weight: 400; line-height: 1.6; cursor: pointer; }
-.pulso-check input { flex: 0 0 auto; width: 15px; height: 15px; padding: 0; margin: 2px 0 0; accent-color: var(--accent); }
+.pulso-check input { flex: 0 0 auto; width: 15px; height: 15px; padding: 0; margin: 2px 0 0; accent-color: var(--focus); }
 .pulso-policy { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .pulso-history { list-style: none; padding: 0; margin: 0; }
 .pulso-history li { padding: 14px 0; border-bottom: 1px solid var(--border); }
@@ -346,7 +335,7 @@
 .pulso-checkpoint-preview .pulso-prose + h4 { margin-top: 12px; }
 
 @media (max-width: 760px) {
-  .pulso-header { align-items: flex-start; padding: 16px; }
+  .pulso-header { align-items: flex-start; padding: 12px 16px 8px; }
   .pulso-tabs { padding-inline: 16px; scroll-padding-inline: 16px; }
   .pulso-board-toolbar { padding: 16px; }
   .pulso-board { padding: 0 16px 16px; scroll-padding-inline: 16px; }
@@ -359,5 +348,5 @@
   :where(.pulso-panel, .pulso-drawer) :where(button, input, select, textarea, summary) { transition: none; }
 }
 
-.pulso-project-recovery { display: flex; align-items: center; gap: var(--space-2, 8px); flex-wrap: wrap; }
+.pulso-project-recovery { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pulso-project-recovery .pulso-muted { max-width: 42ch; font-size: 12px; }
