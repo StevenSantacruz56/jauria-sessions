@@ -52,7 +52,7 @@ Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesi
 
 | Batería | Último resultado conocido en la rama |
 | --- | --- |
-| Escritorio, unidad (`node --test tests/*.test.ts`) | 166 pasadas, 0 fallidas, 5 salteadas |
+| Escritorio, unidad (`node --test tests/*.test.ts`) | 168 pasadas, 0 fallidas, 5 salteadas (166 antes de `9587643`, que añadió dos pruebas) |
 | Navegador (`tests/browser/*.test.ts`, Chrome y WebKit) | 131 pasadas, 0 fallidas |
 | `pulso-panel` (Chrome y WebKit) | 131 pasadas |
 | Configuración y permisos (`settings-panel`, `agent-permissions`) | 56 pasadas |
