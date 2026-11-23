@@ -50,7 +50,7 @@ test('the notice copy is fixed per category: no title, path or terminal text can
   const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: kind => { sent.push(nativeNoticeContent(kind)); } }, () => true, () => {}, 1);
   await n.enableFromClick([]);
   n.update([item('s:agent:finished:7:1', { id: 's', reason: 'El agente terminó · /Users/private/secret-project · rm -rf' })]); await tick();
-  assert.deepEqual(sent, [{ title: 'Jauría · Actividad finalizada', body: 'Abre Jauría y consulta Actividad.' }]);
+  assert.deepEqual(sent, [{ title: 'Jauría · Actividad finalizada', body: 'Abre Jauría y revisa los avisos.' }]);
   for (const k of ['needs', 'finished', 'notice'] as const) {
     const content = JSON.stringify(nativeNoticeContent(k));
     assert.doesNotMatch(content, /secret|\/Users|session|Claude|Codex/);

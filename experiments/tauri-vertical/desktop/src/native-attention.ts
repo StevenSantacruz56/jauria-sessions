@@ -18,7 +18,7 @@ export function noticeKind(items: readonly Pick<Attention, 'keys'>[]): NativeNot
 /** Fixed copy per category: never a session title, path, terminal text or permission detail. */
 export function nativeNoticeContent(kind: NativeNoticeKind): { title: string; body: string } {
   const title = kind === 'needs' ? 'Jauría · Necesita tu atención' : kind === 'finished' ? 'Jauría · Actividad finalizada' : 'Jauría · Aviso de sesión';
-  return { title, body: 'Abre Jauría y consulta Actividad.' };
+  return { title, body: 'Abre Jauría y revisa los avisos.' };
 }
 /** No permission checks or prompts until the user clicks Enable. No delivery receipt. */
 export class NativeAttention {
