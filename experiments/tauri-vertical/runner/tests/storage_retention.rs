@@ -3,6 +3,7 @@
 #[path = "../src/storage.rs"] mod storage;
 #[path = "../src/codex_store.rs"] mod codex_store;
 #[path = "../src/legacy_tasks.rs"] mod legacy_tasks;
+#[path = "../src/process_custody.rs"] mod process_custody;
 
 use anyhow::Result;
 use rusqlite::Connection;

@@ -128,6 +128,9 @@ impl TerminalStreams {
 
     fn configured(path: &Path, generation: String, config: Config) -> Result<Arc<Self>> {
         ensure!(!generation.is_empty() && generation.len() <= 256, "Invalid terminal generation");
+        // Archive writer for native session rows and their events only. It has
+        // never enabled foreign keys; enabling them here would start enforcing
+        // constraints this connection did not enforce before.
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_millis(50))?;
         conn.pragma_update(None, "synchronous", "FULL")?;

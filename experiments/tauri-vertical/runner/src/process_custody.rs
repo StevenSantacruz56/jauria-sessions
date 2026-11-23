@@ -158,3 +158,60 @@ pub(crate) fn survivors(sid: libc::pid_t) -> Result<Vec<(i32, i32)>> {
 pub(crate) fn survivors(_: libc::pid_t) -> Result<Vec<(i32, i32)>> {
     anyhow::bail!("SID inventory unsupported on this platform")
 }
+
+/// A live process of this user that leads its own Unix session, started no
+/// earlier than `not_before` (Unix seconds) and runs exactly `argv`. Used only
+/// to recognise a 1.3.x verification command that outlived its runner: that
+/// command was spawned with setsid and its literal argv. Matching all of these
+/// avoids treating a reused PID or an unrelated shell as that command.
+/// Descendants that outlive the leader are not recognised.
+#[cfg(target_os = "macos")]
+pub(crate) fn live_session_leader(argv: &[String], not_before: u64) -> Result<Option<i32>> {
+    let uid = unsafe { libc::geteuid() };
+    let mut pids = vec![0i32; 65536];
+    let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(),
+        std::mem::size_of_val(pids.as_slice()) as i32) };
+    ensure!(count > 0 && (count as usize) < pids.len(), "process inventory unavailable/truncated");
+    for pid in pids.into_iter().take(count as usize).filter(|p| *p > 0) {
+        if unsafe { libc::getsid(pid) } != pid { continue; }
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of_val(&info) as i32;
+        let rc = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+        if rc != size || info.pbi_uid != uid || info.pbi_status == libc::SZOMB || info.pbi_start_tvsec < not_before { continue; }
+        if process_argv(pid).is_some_and(|found| found == argv) { return Ok(Some(pid)); }
+    }
+    Ok(None)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn live_session_leader(_: &[String], _: u64) -> Result<Option<i32>> {
+    anyhow::bail!("process inventory unsupported on this platform")
+}
+
+/// KERN_PROCARGS2: argc, the exec path, NUL padding, then argc strings.
+#[cfg(target_os = "macos")]
+fn process_argv(pid: i32) -> Option<Vec<String>> {
+    let mut max: libc::c_int = 0;
+    let mut size = std::mem::size_of_val(&max);
+    let mut name = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    if unsafe { libc::sysctl(name.as_mut_ptr(), 2, (&mut max as *mut libc::c_int).cast(), &mut size, std::ptr::null_mut(), 0) } != 0 || max <= 0 { return None; }
+    let mut buffer = vec![0u8; max as usize];
+    let mut size = buffer.len();
+    let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    if unsafe { libc::sysctl(name.as_mut_ptr(), 3, buffer.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 { return None; }
+    let data = buffer.get(..size)?;
+    let argc = i32::from_ne_bytes(data.get(..4)?.try_into().ok()?);
+    let mut rest = &data[4..];
+    let path_end = rest.iter().position(|b| *b == 0)?;
+    rest = &rest[path_end..];
+    let start = rest.iter().position(|b| *b != 0)?;
+    rest = &rest[start..];
+    let mut argv = Vec::new();
+    for _ in 0..argc {
+        let end = rest.iter().position(|b| *b == 0)?;
+        argv.push(String::from_utf8(rest[..end].to_vec()).ok()?);
+        rest = &rest[end + 1..];
+    }
+    Some(argv)
+}

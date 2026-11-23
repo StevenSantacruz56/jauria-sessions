@@ -1,7 +1,8 @@
 //! A profile written before 1.4 can hold Git repositories, tasks, reviews,
-//! handoffs and verifications. The retired feature's rows must be ignored and
-//! kept byte for byte, while sessions and Pulso work normally. Synthetic data
-//! in a disposable profile, socket and HOME only.
+//! handoffs and verifications. The retired feature's rows must be kept byte for
+//! byte, while sessions and Pulso work normally. The only old row still read is
+//! an unfinished verification: it blocks a writer in its folder only while its
+//! command still runs. Synthetic data in a disposable profile, socket and HOME.
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
@@ -98,6 +99,10 @@ fn legacy_git_task_profile_opens_and_keeps_old_rows_untouched() {
     app.stop_runner();
 
     let home = app.path("home");
+    // A 1.3.x verification that may have outlived its runner: argv, folder and creation time.
+    let verifier = ["/bin/sleep".to_owned(), format!("{}.75", 600 + std::process::id() % 1000)];
+    let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 1;
+    let run = json!({"argv":verifier,"cwd":home,"createdAt":created,"status":"running"}).to_string();
     let worktree = app.path("data/worktrees/task-ready");
     let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
     db.execute_batch(&format!("
@@ -109,9 +114,9 @@ fn legacy_git_task_profile_opens_and_keeps_old_rows_untouched() {
         INSERT INTO task_workflow VALUES('task-ready',1);
         INSERT INTO task_artifacts VALUES('purged-legacy','task-ready','purged','{{}}');
         INSERT INTO task_artifacts VALUES('handoff-legacy','task-ready','handoff_open','{{\"phase\":\"prepared\",\"sessionId\":\"reserved\",\"request\":{{\"sessionId\":\"reserved\"}}}}');
-        INSERT INTO verification_runs VALUES('run-legacy','task-ready','request-legacy','hash','running',0,'{{\"cwd\":\"{home}\"}}');
+        INSERT INTO verification_runs VALUES('run-legacy','task-ready','request-legacy','hash','running',0,'{run}');
         INSERT INTO sessions(id,title,kind,status,pid,rows,cols,cwd,workspace,task_id) VALUES('task-session','Old task session','fixture','exited',NULL,24,80,'{worktree}','{worktree}','task-ready');
-    ", worktree = worktree.display(), home = home.display())).unwrap();
+    ", worktree = worktree.display(), run = run)).unwrap();
     let before = dump(&db);
     drop(db);
 
@@ -135,9 +140,28 @@ fn legacy_git_task_profile_opens_and_keeps_old_rows_untouched() {
         assert_eq!(reply["error"], "unknown operation", "{op}");
     }
 
-    // Neither the old handoff reservation, the purged record without provenance
-    // nor the unreleased verification in HOME blocks an ordinary session.
-    app.call(false, "start", json!({"id":"reserved","title":"Terminal","kind":"terminal","cwd":home,"rows":24,"cols":80}));
+    // While the old verification command still runs in HOME, no writer is admitted there.
+    let mut child = {
+        use std::os::unix::process::CommandExt;
+        let mut command = Command::new(&verifier[0]);
+        command.args(&verifier[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        unsafe { command.pre_exec(|| if libc::setsid() < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }); }
+        command.spawn().unwrap()
+    };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while String::from_utf8_lossy(&Command::new("/bin/ps").args(["-o", "args=", "-p", &child.id().to_string()]).output().unwrap().stdout).trim() != verifier.join(" ") {
+        assert!(Instant::now() < deadline, "synthetic verifier did not start");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let start = json!({"id":"reserved","title":"Terminal","kind":"terminal","cwd":home,"rows":24,"cols":80});
+    let refused = app.request(false, "start", start.clone()).unwrap();
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["error"], format!("Un proceso de verificación de una versión anterior sigue activo en esta carpeta (pid {}). Termínalo y vuelve a intentar.", child.id()));
+    child.kill().unwrap(); child.wait().unwrap();
+
+    // Once it has ended, neither that row, the old handoff reservation nor the
+    // purged record without provenance blocks an ordinary session.
+    app.call(false, "start", start);
     let deadline = Instant::now() + Duration::from_secs(10);
     while app.session("reserved")["status"] != "running" {
         assert!(Instant::now() < deadline, "terminal did not start");

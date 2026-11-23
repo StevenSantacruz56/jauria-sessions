@@ -128,7 +128,7 @@ impl Runner {
         ensure!(cwd.is_dir() && cwd.to_str()==args["cwd"].as_str(),"Selecciona una carpeta canónica existente");
         let workspace=workspace_for(&cwd)?;
         let db=self.db.lock().unwrap();let others=db.sessions_with_live(&self.terminal_streams.sessions())?.into_iter().filter(|s|s["id"]!=id).collect::<Vec<_>>();
-        ensure_workspace_available(&workspace,&others)?;db.ensure_capacity()?;
+        ensure_workspace_available(&workspace,&others)?;crate::legacy_tasks::ensure_no_live_verification(&db.0,&workspace)?;db.ensure_capacity()?;
         ensure!(occupied_slots(&others)<self.settings.limit(),"concurrency limit is {}",self.settings.limit());drop(db);
         let size=dimensions(args)?;let title=args["title"].as_str().context("Falta título")?;ensure!(title.len()<=512,"Título demasiado largo");
         let mut db=self.db.lock().unwrap();

@@ -652,6 +652,8 @@ impl Runner {
             if let Some(workspace) = &workspace {
                 ensure_workspace_available(workspace, &self.db.lock().unwrap().sessions_with_live(&self.terminal_streams.sessions())?)?;
             }
+            // A standalone cwd may still overlap a 1.3.x verification that outlived its runner.
+            crate::legacy_tasks::ensure_no_live_verification(&self.db.lock().unwrap().0,workspace.as_deref().unwrap_or(&cwd))?;
             Some((cwd,workspace))
         } else {
             ensure!(args.get("cwd").is_none_or(Value::is_null), "cwd is only accepted for interactive sessions");
@@ -1295,6 +1297,63 @@ mod standalone_native_tests {
             let error = r.request(json!({"version":1,"token":r.token,"op":"start","args":{"id":"invalid","title":"invalid","kind":"codex","cwd":cwd}})).unwrap_err();
             assert!(!error.to_string().contains("fixture reached durable insert"));
         }
+        assert!(r.db.lock().unwrap().sessions()?.is_empty());
+        Ok(())
+    }
+
+    /// Spawns `argv` as its own session leader, like a 1.3.x verification, and
+    /// waits until the process inventory sees its exec'd arguments.
+    fn verifier(argv: &[String]) -> Result<std::process::Child> {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new(&argv[0]);
+        command.args(&argv[1..]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        unsafe { command.pre_exec(|| if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }); }
+        let child = command.spawn()?;
+        let until = Instant::now() + Duration::from_secs(3);
+        while crate::process_custody::live_session_leader(argv, 0)? != Some(child.id() as i32) {
+            ensure!(Instant::now() < until, "synthetic verifier not visible");
+            thread::sleep(Duration::from_millis(10));
+        }
+        Ok(child)
+    }
+
+    #[test]
+    fn legacy_verification_blocks_writers_only_while_its_command_lives() -> Result<()> {
+        let (_tmp, r, home) = fixture()?;
+        let fenced = home.join("repo/sub"); fs::create_dir_all(fenced.join("deeper"))?;
+        let sibling = home.join("sibling"); fs::create_dir(&sibling)?;
+        let argv = vec!["/bin/sleep".to_owned(), format!("{}.25", 600 + std::process::id() % 1000)];
+        let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() - 1;
+        let payload = |argv: &[String], created: u64| json!({"argv":argv,"cwd":fenced,"createdAt":created,"status":"running"}).to_string();
+        let row = |r: &Arc<Runner>| -> Result<(String,String)> { Ok(r.db.lock().unwrap().0.query_row("SELECT status,payload FROM verification_runs", [], |row| Ok((row.get(0)?,row.get(1)?)))?) };
+        {
+            let db = r.db.lock().unwrap();
+            db.0.execute("INSERT INTO projects VALUES('p','/synthetic/repo','/synthetic/repo/.git','fixture','base',NULL)", [])?;
+            db.0.execute("INSERT INTO tasks VALUES('t','p','T','O','','base','b','/synthetic/elsewhere','ready',NULL)", [])?;
+            db.0.execute("INSERT INTO verification_runs VALUES('v','t','req','hash','running',0,?)", [payload(&argv,created)])?;
+        }
+        let before = row(&r)?;
+        let mut child = verifier(&argv)?;
+        let pid = format!("(pid {})", child.id());
+        // (a) every writer kind in the fenced folder; (d) its ancestors and descendants.
+        for (kind, cwd) in [("codex",&fenced),("claude",&fenced),("terminal",&fenced),("terminal",&home.join("repo")),("terminal",&home),("codex",&fenced.join("deeper"))] {
+            let error = request(&r,"blocked",kind,cwd).unwrap_err().to_string();
+            assert!(error.contains("Un proceso de verificación de una versión anterior sigue activo") && error.contains(&pid), "{kind} {error}");
+        }
+        let error = r.request(json!({"version":1,"token":r.token,"op":"start_codex","args":{"id":"structured","title":"t","kind":"codex","cwd":fenced,"rows":24,"cols":80}})).unwrap_err().to_string();
+        assert!(error.contains(&pid), "{error}");
+        admitted(request(&r,"sibling","terminal",&sibling).unwrap_err());
+        // (c) another identity: a different argv, or a process older than the run.
+        for other in [payload(&[argv[0].clone(),"other".into()],created), payload(&argv,created+3600)] {
+            r.db.lock().unwrap().0.execute("UPDATE verification_runs SET payload=?",[other])?;
+            admitted(request(&r,"other","terminal",&fenced).unwrap_err());
+        }
+        r.db.lock().unwrap().0.execute("UPDATE verification_runs SET payload=?",[payload(&argv,created)])?;
+        assert_eq!(row(&r)?, before);
+        // (b) the command has ended: admitted, and the old row is left untouched.
+        child.kill()?; child.wait()?;
+        admitted(request(&r,"ended","terminal",&fenced).unwrap_err());
+        assert_eq!(row(&r)?, before);
         assert!(r.db.lock().unwrap().sessions()?.is_empty());
         Ok(())
     }
