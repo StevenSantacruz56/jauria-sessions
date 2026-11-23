@@ -1,32 +1,39 @@
 //! Runner-side declared agent state and seen/unseen alerts (Jauría 1.4 E).
 //!
-//! Memory: one `Record` per session that ever produced a signal. Callers only
-//! take the short `inner` mutex; the PTY reader never touches the main Store.
+//! Memory: one `Record` per session that produced a signal. Callers only take
+//! the short `inner` mutex; the PTY reader never touches the main Store.
 //! SQLite: the `agent_attention` table in runner.sqlite, written exclusively by
 //! the `agent-attention` thread through its own connection.
 //!
 //! Alerts are sequenced per session. Every alert takes `alert_seq + 1`, and the
 //! record keeps, per kind, the sequence of its latest occurrence. An alert is
-//! pending while `seq > seen_seq`. `mark_seen(through)` only ever raises
-//! `seen_seq` to `min(through, alert_seq)`, so a client that saw N can never
-//! hide alert N+1 that raced its request. Superseding (mirroring the client's
-//! tracker) clears a kind's seq only on an explicit later declaration:
-//! entering working/blocked/error clears `finished`, leaving blocked/error
-//! clears `needs`, and `state=clear` clears both. Process end and runner
-//! restart never clear an unseen alert.
+//! pending while `seq > seen_seq`. `mark_seen(epoch, through)` only raises
+//! `seen_seq` to `min(through, alert_seq)`, and only for the record's current
+//! incarnation (`epoch`), so a client that saw N can never hide a racing N+1,
+//! nor an alert of a row that was pruned and created again.
 //!
-//! Durability: `mark_seen` waits until its change is committed (bounded by
-//! `seen_timeout`) and reports `durable`. Other changes are batched and
+//! Superseding: `needs` lasts while blocked/error is declared (leaving it, by
+//! any later declaration, removes it, as the client tracker does). `finished`
+//! is never removed by a later declaration: it stays pending until seen, and
+//! a later end of turn moves it to the new sequence. Process end and restarts
+//! never clear an unseen alert. After process end the session is sealed: late
+//! PTY bytes (a reader still draining) are not interpreted at all.
+//!
+//! Durability: `mark_seen` waits until its change is committed (one waiter at
+//! a time, bounded by `seen_timeout`) and reports `durable`. Other changes are
 //! committed within `flush_delay` (250 ms) plus SQLite time; a crash inside
-//! that window loses at most those alerts/transitions, never earlier ones and
-//! never a confirmed seen. Orderly shutdown flushes before exiting. If the
-//! table exists with an unexpected definition, or the writer fails, the runner
-//! keeps working in memory only and reports `durable:false`.
+//! that window loses at most those changes, never a confirmed seen. Shutdown
+//! runs after the PTY wait threads and Codex workers end and flushes with best
+//! effort for at most SHUTDOWN_FLUSH (3 s); with SQLite still busy after that,
+//! the queued changes are lost. If the table exists with an unexpected
+//! definition, or the writer fails, attention stays in memory (`durable:false`).
 //!
 //! Retention: rows survive purge_history and compact_final_history (those only
 //! touch `events`). Orphans (no `sessions` row) are deleted at startup. Rows
-//! of final sessions with every alert seen are capped at `IDLE_ROWS`, oldest
-//! first; rows with a pending alert are never dropped.
+//! of sessions whose process ended (confirmed final) with every alert seen are
+//! capped at IDLE_ROWS, oldest first: at startup, and at run time when they
+//! exceed IDLE_ROWS + IDLE_SLACK. Rows with a pending alert, a live process or
+//! an uncertain end are never dropped.
 use crate::agent_signals::{Declared, Signal};
 use anyhow::{Result, ensure};
 use rusqlite::{Connection, params};
@@ -58,13 +65,19 @@ pub const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS agent_attention(
     notify_seq INTEGER NOT NULL DEFAULT 0, notify_frame INTEGER,
     ended_seq INTEGER NOT NULL DEFAULT 0,
     permission_seq INTEGER NOT NULL DEFAULT 0, permission_request TEXT, permission_generation INTEGER,
-    updated_at INTEGER NOT NULL)";
-const COLUMNS: &str = "session_id,generation,state,state_changed_at,state_frame,turn_open,turn_started_at,turn_ended_at,last_turn_ms,turn_interrupted,alert_seq,seen_seq,needs_seq,needs_frame,finished_seq,finished_frame,bell_seq,bell_frame,notify_seq,notify_frame,ended_seq,permission_seq,permission_request,permission_generation,updated_at";
+    updated_at INTEGER NOT NULL,
+    epoch INTEGER NOT NULL CHECK(epoch>0))";
+const COLUMNS: &str = "session_id,generation,state,state_changed_at,state_frame,turn_open,turn_started_at,turn_ended_at,last_turn_ms,turn_interrupted,alert_seq,seen_seq,needs_seq,needs_frame,finished_seq,finished_frame,bell_seq,bell_frame,notify_seq,notify_frame,ended_seq,permission_seq,permission_request,permission_generation,updated_at,epoch";
 pub const IDLE_ROWS: usize = 512;
-/// Most `agent` objects in one status response; see `status_into`.
-pub const STATUS_AGENTS: usize = 256;
+/// Hot pruning starts above IDLE_ROWS + IDLE_SLACK, then trims to IDLE_ROWS.
+const IDLE_SLACK: usize = 64;
+/// Most `agent` objects in one status response; see `status_into`. Live
+/// sessions are at most 8 (admission limit); the rest are pending ones.
+pub const STATUS_AGENTS: usize = 128;
 pub const MARK_SEEN_ITEMS: usize = 64;
 const RATE: Duration = Duration::from_secs(1);
+/// Best-effort flush bound at shutdown (SQLite busy keeps retrying until then).
+pub const SHUTDOWN_FLUSH: Duration = Duration::from_secs(3);
 const FINAL: [&str; 5] = ["exited", "stopped", "failed", "interrupted", "released"];
 
 pub type Clock = Arc<dyn Fn() -> (i64, Instant) + Send + Sync>;
@@ -102,6 +115,23 @@ pub struct Record {
     last_bell: Option<Instant>,
     last_notify: Option<Instant>,
     updated_at: i64,
+    /// Incarnation of this row: random, published as `epoch`, required by
+    /// mark_seen. A row created again for the same id gets a new one.
+    epoch: u64,
+    /// Process ended with a confirmed final status (or row loaded as final):
+    /// eligible for idle pruning once every alert is seen.
+    finished_process: bool,
+}
+
+/// 53-bit (JavaScript-safe), nonzero.
+fn new_epoch() -> u64 {
+    use std::io::Read;
+    let mut bytes = [0u8; 8];
+    let random = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).is_ok();
+    let value = if random { u64::from_le_bytes(bytes) } else {
+        SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+    };
+    (value & ((1 << 53) - 1)).max(1)
 }
 
 impl Record {
@@ -130,9 +160,11 @@ impl Record {
         self.state = next;
         self.state_changed_at = Some(now.0);
         self.state_frame = frame;
-        // Client parity (ProgramStatusTracker): a new turn, alert or clear
-        // supersedes a finished turn; leaving an alert supersedes it.
-        if working_like(next) || next.is_none() { self.supersede(Kind::Finished); }
+        // `needs` lasts while the program declares blocked/error (client
+        // ProgramStatusTracker parity): an agent that unblocked itself no
+        // longer needs the person. `finished` is NOT superseded (unlike the
+        // client tracker): an unseen end of turn stays pending until
+        // mark_seen, even if the agent already started another turn.
         if alerting(previous) && !alerting(next) { self.supersede(Kind::Needs); }
         if next == Some(Working) && !self.turn_open {
             self.turn_open = true;
@@ -164,7 +196,7 @@ impl Record {
             }
             pending.insert(kind.name().into(), value);
         }
-        json!({"state": self.state.map(Declared::as_str), "changedAt": self.state_changed_at,
+        json!({"epoch": self.epoch, "state": self.state.map(Declared::as_str), "changedAt": self.state_changed_at,
             "stateFrame": frame(self.state_frame), "turnOpen": self.turn_open,
             "turnStartedAt": self.turn_started_at, "turnEndedAt": self.turn_ended_at,
             "lastTurnMs": self.last_turn_ms, "turnInterrupted": self.turn_interrupted,
@@ -177,13 +209,21 @@ struct Entry { record: Record, generation: String }
 
 struct Inner {
     records: HashMap<String, Entry>,
+    /// PTY sessions whose process ended in this generation: their late
+    /// output is never interpreted (no state, turn, BEL or notify).
+    sealed: std::collections::HashSet<String>,
+    deleted: BTreeSet<String>,
+    /// At most one mark_seen waits for durability; others answer at once.
+    waiting: bool,
     dirty: BTreeSet<String>,
     since: Option<Instant>,
     requested: u64,
     flushed: u64,
     urgent: bool,
     durable: bool,
-    stop: bool,
+    /// Set by shutdown: the writer drains everything queued until then and
+    /// keeps accepting changes until it empties the queue or SHUTDOWN_FLUSH.
+    stop: Option<Instant>,
     #[cfg(test)] crash: bool,
 }
 
@@ -243,7 +283,7 @@ fn read_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, Record)>
         state_changed_at: r.get(3)?, state_frame: o(4)?, turn_open: r.get::<_, i64>(5)? == 1,
         turn_started_at: r.get(6)?, turn_ended_at: r.get(7)?, last_turn_ms: o(8)?,
         turn_interrupted: r.get::<_, i64>(9)? == 1, alert_seq: u(10)?, seen_seq: u(11)?,
-        updated_at: r.get(24)?, ..Record::default()
+        updated_at: r.get(24)?, epoch: u(25)?.max(1), ..Record::default()
     };
     for (kind, seq, frame) in [(Kind::Needs, 12, Some(13)), (Kind::Finished, 14, Some(15)), (Kind::Bell, 16, Some(17)), (Kind::Notify, 18, Some(19)), (Kind::Ended, 20, None), (Kind::Permission, 21, None)] {
         record.alerts[kind as usize] = Alert { seq: u(seq)?.min(record.alert_seq), frame: match frame { Some(i) => o(i)?, None => None } };
@@ -259,13 +299,13 @@ fn write_row(tx: &Connection, id: &str, generation: &str, r: &Record) -> Result<
     let i = |v: u64| v.min(i64::MAX as u64) as i64;
     let f = |v: Option<u64>| v.map(i);
     let a = |k: Kind| r.alert(k);
-    tx.execute(&format!("INSERT OR REPLACE INTO agent_attention({COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)"),
+    tx.execute(&format!("INSERT OR REPLACE INTO agent_attention({COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)"),
         params![id, generation, r.state.map(Declared::as_str), r.state_changed_at, f(r.state_frame), r.turn_open as i64,
             r.turn_started_at, r.turn_ended_at, f(r.last_turn_ms), r.turn_interrupted as i64, i(r.alert_seq), i(r.seen_seq),
             i(a(Kind::Needs).seq), f(a(Kind::Needs).frame), i(a(Kind::Finished).seq), f(a(Kind::Finished).frame),
             i(a(Kind::Bell).seq), f(a(Kind::Bell).frame), i(a(Kind::Notify).seq), f(a(Kind::Notify).frame),
             i(a(Kind::Ended).seq), i(a(Kind::Permission).seq), r.permission.as_ref().map(|p| p.0.as_str()),
-            r.permission.as_ref().map(|p| p.1), r.updated_at])?;
+            r.permission.as_ref().map(|p| p.1), r.updated_at, i(r.epoch.max(1))])?;
     Ok(())
 }
 
@@ -280,8 +320,8 @@ impl Attention {
         });
         let durable = conn.is_some();
         let attention = Arc::new(Self { shared: Arc::new(Shared {
-            inner: Mutex::new(Inner { records, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
-                urgent: false, durable, stop: false, #[cfg(test)] crash: false }),
+            inner: Mutex::new(Inner { records, sealed: Default::default(), deleted: BTreeSet::new(), waiting: false, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
+                urgent: false, durable, stop: None, #[cfg(test)] crash: false }),
             wake: Condvar::new(), flushed: Condvar::new(), generation, clock, config }), done: Mutex::new(None),
         });
         if let Some(conn) = conn {
@@ -331,7 +371,8 @@ impl Attention {
             for alert in &mut record.alerts { alert.frame = None; }
             record.updated_at = record.updated_at.max(0);
             write_row(&tx, &id, generation, &record)?;
-            if record.pending_count() == 0 && FINAL.contains(&status[id.as_str()]) { idle.push((record.updated_at, id.clone())); }
+            record.finished_process = FINAL.contains(&status[id.as_str()]);
+            if record.pending_count() == 0 && record.finished_process { idle.push((record.updated_at, id.clone())); }
             records.insert(id, Entry { record, generation: generation.to_owned() });
         }
         idle.sort();
@@ -352,7 +393,7 @@ impl Attention {
     }
 
     fn entry<'a>(&self, m: &'a mut Inner, id: &str) -> &'a mut Record {
-        let entry = m.records.entry(id.to_owned()).or_insert_with(|| Entry { record: Record::default(), generation: self.generation.clone() });
+        let entry = m.records.entry(id.to_owned()).or_insert_with(|| Entry { record: Record { epoch: new_epoch(), ..Record::default() }, generation: self.generation.clone() });
         entry.generation = self.generation.clone();
         &mut entry.record
     }
@@ -362,6 +403,7 @@ impl Attention {
         if signals.is_empty() { return; }
         let now = (self.clock)();
         let mut m = lock(&self.inner);
+        if m.sealed.contains(id) { return; }
         let record = self.entry(&mut m, id);
         let before = (record.alert_seq, record.state, record.turn_open);
         for &(signal, frame) in signals {
@@ -387,14 +429,38 @@ impl Attention {
     pub fn process_ended(&self, id: &str, status: &str) {
         let now = (self.clock)();
         let mut m = lock(&self.inner);
+        // Sealed first: a reader still draining after finish cannot reopen it.
+        m.sealed.insert(id.to_owned());
         let confirmed = matches!(status, "exited" | "stopped" | "failed");
         if !confirmed && !m.records.contains_key(id) { return; }
         let record = self.entry(&mut m, id);
         record.close_turn(now, true);
         if record.state.is_some() { record.state = None; record.state_changed_at = Some(now.0); record.state_frame = None; }
-        if confirmed { record.raise(Kind::Ended, None); }
+        if confirmed { record.raise(Kind::Ended, None); record.finished_process = true; }
         record.updated_at = now.0;
         self.touch(&mut m, id);
+        self.prune(&mut m);
+    }
+
+    /// Hot cap with hysteresis: above IDLE_ROWS + IDLE_SLACK fully seen rows of
+    /// processes that ended (confirmed), trim the oldest down to IDLE_ROWS.
+    /// Rows with a pending alert or a live/uncertain process are never dropped.
+    fn prune(&self, m: &mut Inner) {
+        if m.records.len() <= IDLE_ROWS + IDLE_SLACK { return; }
+        let mut idle: Vec<(i64, String)> = m.records.iter()
+            .filter(|(_, e)| e.record.finished_process && e.record.pending_count() == 0)
+            .map(|(id, e)| (e.record.updated_at, id.clone())).collect();
+        if idle.len() <= IDLE_ROWS + IDLE_SLACK { return; }
+        idle.sort();
+        let excess = idle.len() - IDLE_ROWS;
+        for (_, id) in idle.into_iter().take(excess) {
+            m.records.remove(&id);
+            m.dirty.remove(&id);
+            m.deleted.insert(id);
+        }
+        m.requested += 1;
+        m.since.get_or_insert_with(Instant::now);
+        self.wake.notify_one();
     }
 
     /// Only after a new, committed provider_requests insertion.
@@ -413,35 +479,51 @@ impl Attention {
         m.records.get(id).map(|e| e.record.json(&self.generation, &e.generation))
     }
 
-    /// Validated items. Never resolves a permission or changes custody.
-    pub fn mark_seen(&self, items: &[(String, u64)]) -> Value {
+    /// Validated items `(id, epoch, through)`. An item whose epoch is not the
+    /// record's current incarnation has no effect and returns the current
+    /// agent (`rejected: "epoch"`), so a cursor from a pruned and recreated
+    /// row can never mark a newer alert. Never resolves a permission or
+    /// changes custody. Only one call at a time waits for durability (at most
+    /// `seen_timeout`); concurrent calls answer at once, durable or not, so
+    /// mark_seen can never hold the socket's client slots.
+    pub fn mark_seen(&self, items: &[(String, u64, u64)]) -> Value {
         let now = (self.clock)();
         let mut m = lock(&self.inner);
         let mut results = Vec::with_capacity(items.len());
-        for (id, through) in items {
+        for (id, epoch, through) in items {
             let Some(entry) = m.records.get_mut(id) else { results.push(json!({"id": id, "agent": null})); continue; };
             let record = &mut entry.record;
+            if record.epoch != *epoch {
+                results.push(json!({"id": id, "rejected": "epoch", "agent": record.json(&self.generation, &entry.generation)}));
+                continue;
+            }
             let next = record.seen_seq.max((*through).min(record.alert_seq));
             if next != record.seen_seq { record.seen_seq = next; record.updated_at = now.0; }
             results.push(json!({"id": id, "agent": record.json(&self.generation, &entry.generation)}));
             // Re-confirm even when unchanged: an earlier change may still be in flight.
             m.dirty.insert(id.clone());
         }
-        let wanted = if m.dirty.is_empty() { m.flushed } else { m.requested += 1; m.requested };
+        self.prune(&mut m);
+        let wanted = if m.dirty.is_empty() && m.deleted.is_empty() { m.flushed } else { m.requested += 1; m.requested };
         m.urgent = true;
         self.wake.notify_one();
-        let deadline = Instant::now() + self.config.seen_timeout;
-        while m.durable && m.flushed < wanted {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() { break; }
-            m = self.flushed.wait_timeout(m, left).unwrap_or_else(|e| e.into_inner()).0;
+        if !m.waiting && m.durable && m.flushed < wanted {
+            m.waiting = true;
+            let deadline = Instant::now() + self.config.seen_timeout;
+            while m.durable && m.flushed < wanted {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() { break; }
+                m = self.flushed.wait_timeout(m, left).unwrap_or_else(|e| e.into_inner()).0;
+            }
+            m.waiting = false;
         }
         json!({"items": results, "durable": m.durable && m.flushed >= wanted})
     }
 
     /// Adds `agent` to session rows and a top-level `agentAttention` summary.
-    /// Sessions with pending alerts come first, then live ones; at most
-    /// STATUS_AGENTS objects. `hasMore` says the list is not complete.
+    /// Only sessions with a pending alert or a live process get one: pending
+    /// first, then live, newest first, at most STATUS_AGENTS. `hasMore` and
+    /// the totals are exact; terminal_live always carries a session's agent.
     pub fn status_into(&self, result: &mut Value) {
         let m = lock(&self.inner);
         let Some(rows) = result["sessions"].as_array_mut() else { return };
@@ -454,7 +536,7 @@ impl Attention {
             pending_sessions += usize::from(pending > 0);
             pending_alerts += pending;
             let live = matches!(row["status"].as_str(), Some("running" | "starting"));
-            if pending > 0 || live || entry.record.state.is_some() {
+            if pending > 0 || live {
                 candidates.push((pending == 0, std::cmp::Reverse(entry.record.updated_at), index));
             }
         }
@@ -474,12 +556,12 @@ impl Attention {
     pub fn shutdown(&self) {
         {
             let mut m = lock(&self.inner);
-            m.stop = true;
+            m.stop.get_or_insert_with(Instant::now);
             m.urgent = true;
             self.wake.notify_all();
         }
         let rx = self.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(rx) = rx { let _ = rx.recv_timeout(Duration::from_secs(3)); }
+        if let Some(rx) = rx { let _ = rx.recv_timeout(SHUTDOWN_FLUSH + Duration::from_millis(500)); }
     }
 
     #[cfg(test)]
@@ -487,7 +569,7 @@ impl Attention {
     /// Test-only crash: the writer exits without committing what is dirty.
     #[cfg(test)]
     pub fn crash(&self) {
-        { let mut m = lock(&self.inner); m.crash = true; m.stop = true; self.wake.notify_all(); }
+        { let mut m = lock(&self.inner); m.crash = true; m.stop = Some(Instant::now()); self.wake.notify_all(); }
         let rx = self.done.lock().unwrap().take();
         if let Some(rx) = rx { let _ = rx.recv_timeout(Duration::from_secs(3)); }
     }
@@ -511,39 +593,47 @@ fn writer(weak: std::sync::Weak<Shared>, mut conn: Connection) {
             let mut m = lock(&owner.inner);
             loop {
                 #[cfg(test)] if m.crash { return; }
-                let due = m.urgent || m.stop || m.since.is_some_and(|t| t.elapsed() >= owner.config.flush_delay);
-                if !m.dirty.is_empty() && due { break; }
-                if m.dirty.is_empty() && m.stop { return; }
-                if m.dirty.is_empty() { m.urgent = false; }
+                let work = !m.dirty.is_empty() || !m.deleted.is_empty();
+                let due = m.urgent || m.stop.is_some() || m.since.is_some_and(|t| t.elapsed() >= owner.config.flush_delay);
+                if work && due { break; }
+                if !work && m.stop.is_some() { return; }
+                if !work { m.urgent = false; }
                 let wait = m.since.map_or(Duration::from_millis(500), |t| owner.config.flush_delay.saturating_sub(t.elapsed()).max(Duration::from_millis(1)));
                 m = owner.wake.wait_timeout(m, wait).unwrap_or_else(|e| e.into_inner()).0;
             }
             let ids = std::mem::take(&mut m.dirty);
+            let deleted = std::mem::take(&mut m.deleted);
             m.since = None;
             m.urgent = false;
             let epoch = m.requested;
             let rows: Vec<_> = ids.iter().filter_map(|id| m.records.get(id).map(|e| (id.clone(), e.generation.clone(), e.record.clone()))).collect();
-            (ids, rows, epoch)
+            (ids, deleted, rows, epoch)
         };
-        let (ids, rows, epoch) = batch;
+        let (ids, deleted, rows, epoch) = batch;
         let result = (|| -> Result<()> {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            // Deletions first: an id pruned and then recreated is upserted after.
+            for id in &deleted { tx.execute("DELETE FROM agent_attention WHERE session_id=?", [id])?; }
             for (id, generation, record) in &rows { write_row(&tx, id, generation, record)?; }
             tx.commit()?;
             Ok(())
         })();
-        let m_ok = result.is_ok();
+        let ok = result.is_ok();
         let mut m = lock(&owner.inner);
         match result {
             Ok(()) => { failures = 0; m.flushed = m.flushed.max(epoch); }
             Err(error) => {
-                // Not committed: requeue. BUSY/LOCKED is retried indefinitely
-                // (mark_seen answers durable:false meanwhile); repeated other
-                // failures degrade to memory only.
+                // Not committed: requeue. BUSY/LOCKED is retried until shutdown's
+                // flush deadline (mark_seen answers durable:false meanwhile);
+                // repeated other failures degrade to memory only.
                 if !crate::storage::Store::history_is_busy(&error) { failures += 1; }
+                let deleted: Vec<_> = deleted.into_iter().filter(|id| !m.records.contains_key(id)).collect();
+                m.deleted.extend(deleted);
+                let ids: Vec<_> = ids.into_iter().filter(|id| m.records.contains_key(id)).collect();
                 m.dirty.extend(ids);
                 m.since.get_or_insert_with(Instant::now);
-                if failures >= 5 {
+                let expired = m.stop.is_some_and(|t| t.elapsed() >= SHUTDOWN_FLUSH);
+                if failures >= 5 || expired {
                     eprintln!("agent_attention: writes failing, memory only: {error:#}");
                     m.durable = false;
                     owner.flushed.notify_all();
@@ -553,21 +643,22 @@ fn writer(weak: std::sync::Weak<Shared>, mut conn: Connection) {
         }
         owner.flushed.notify_all();
         drop(m);
-        if !m_ok { thread::sleep(Duration::from_millis(50)); }
+        if !ok { thread::sleep(Duration::from_millis(50)); }
     }
 }
 
-/// Validates `mark_seen` arguments: {items:[{id,through}]}, 1..=64 items.
-pub fn seen_items(args: &Value) -> Result<Vec<(String, u64)>> {
+/// Validates `mark_seen` arguments: {items:[{id,epoch,through}]}, 1..=64.
+pub fn seen_items(args: &Value) -> Result<Vec<(String, u64, u64)>> {
     let items = args["items"].as_array().ok_or_else(|| anyhow::anyhow!("items must be an array"))?;
     ensure!((1..=MARK_SEEN_ITEMS).contains(&items.len()), "items must contain 1 to {MARK_SEEN_ITEMS} entries");
     items.iter().map(|item| {
         let object = item.as_object().ok_or_else(|| anyhow::anyhow!("each item must be an object"))?;
-        ensure!(object.len() == 2 && object.contains_key("id") && object.contains_key("through"), "each item takes exactly id and through");
+        ensure!(object.len() == 3 && ["id", "epoch", "through"].iter().all(|k| object.contains_key(*k)), "each item takes exactly id, epoch and through");
         let id = item["id"].as_str().ok_or_else(|| anyhow::anyhow!("invalid id"))?;
         crate::runner::validate_id(id)?;
+        let epoch = item["epoch"].as_u64().filter(|e| *e > 0).ok_or_else(|| anyhow::anyhow!("epoch must be a positive integer"))?;
         let through = item["through"].as_u64().ok_or_else(|| anyhow::anyhow!("through must be a non-negative integer"))?;
-        Ok((id.to_owned(), through))
+        Ok((id.to_owned(), epoch, through))
     }).collect()
 }
 
@@ -592,7 +683,13 @@ mod tests {
     }
     fn memory(fake: &Fake) -> Arc<Attention> { Attention::open(None, "gen-a".into(), &[], fake.clock(), Config::default()) }
     fn agent(a: &Attention, id: &str) -> Value { a.snapshot(id).unwrap() }
-    fn seen(a: &Attention, id: &str, through: u64) -> Value { a.mark_seen(&[(id.into(), through)])["items"][0]["agent"].clone() }
+    fn epoch(a: &Attention, id: &str) -> u64 { a.snapshot(id).map_or(1, |v| v["epoch"].as_u64().unwrap()) }
+    /// mark_seen items carrying each record's current epoch.
+    fn items<S: AsRef<str>>(a: &Attention, list: &[(S, u64)]) -> Vec<(String, u64, u64)> {
+        list.iter().map(|(id, through)| (id.as_ref().to_owned(), epoch(a, id.as_ref()), *through)).collect()
+    }
+    fn ms(a: &Attention, id: &str, through: u64) -> Value { a.mark_seen(&items(a, &[(id, through)])) }
+    fn seen(a: &Attention, id: &str, through: u64) -> Value { ms(a, id, through)["items"][0]["agent"].clone() }
 
     #[test]
     fn transitions_turns_and_durations_follow_the_client_tracker() {
@@ -620,9 +717,9 @@ mod tests {
         a.pty("s", &[(State(Done), Some(10)), (State(Idle), Some(11))]);
         assert_eq!(agent(&a, "s")["alertSeq"], 2);
         assert_eq!(agent(&a, "s")["finishedUnseen"], true);
-        // A new turn supersedes the finished turn, as the client does.
+        // Unlike the client tracker, a new turn keeps the unseen finish.
         a.pty("s", &[(State(Working), Some(12))]);
-        assert_eq!(agent(&a, "s")["finishedUnseen"], false);
+        assert_eq!(agent(&a, "s")["finishedUnseen"], true);
         // idle -> blocked -> done still finishes work (blocked counts).
         a.pty("t", &[(State(Idle), None), (State(Error), None), (State(Done), None)]);
         let v = agent(&a, "t");
@@ -630,7 +727,7 @@ mod tests {
         assert!(v["pending"].get("needs").is_none());
         assert_eq!(v["pending"]["finished"]["seq"], 2);
         assert!(v["lastTurnMs"].is_null(), "no working, no turn duration");
-        // clear closes the turn and supersedes both kinds.
+        // clear closes the turn and supersedes needs (it left blocked).
         a.pty("u", &[(State(Working), None), (State(Blocked), None), (Clear, None)]);
         let v = agent(&a, "u");
         assert!(v["state"].is_null() && v["pending"].as_object().unwrap().is_empty() && v["turnOpen"] == false);
@@ -663,7 +760,7 @@ mod tests {
         a.pty("s", &[(Bell, Some(5))]);
         assert_eq!(agent(&a, "s")["pending"]["bell"]["seq"], v["alertSeq"].as_u64().unwrap() + 1);
         // Unknown ids answer null without creating a record.
-        assert_eq!(a.mark_seen(&[("nobody".into(), 3)])["items"][0]["agent"], Value::Null);
+        assert_eq!(ms(&a, "nobody", 3)["items"][0]["agent"], Value::Null);
         assert!(a.snapshot("nobody").is_none());
     }
 
@@ -726,14 +823,16 @@ mod tests {
 
     #[test]
     fn mark_seen_arguments_are_strict() {
-        assert!(seen_items(&json!({"items":[{"id":"a-1","through":3}]})).is_ok());
+        assert!(seen_items(&json!({"items":[{"id":"a-1","epoch":7,"through":3}]})).is_ok());
         for bad in [json!({}), json!({"items":[]}), json!({"items":"x"}), json!({"items":[{"id":"a"}]}),
-            json!({"items":[{"id":"a","through":-1}]}), json!({"items":[{"id":"a","through":1.5}]}),
-            json!({"items":[{"id":"a b","through":1}]}), json!({"items":[{"id":"a","through":1,"x":1}]}),
-            json!({"items":(0..65).map(|i|json!({"id":format!("s{i}"),"through":1})).collect::<Vec<_>>()})] {
+            json!({"items":[{"id":"a","through":1}]}), json!({"items":[{"id":"a","epoch":0,"through":1}]}),
+            json!({"items":[{"id":"a","epoch":-3,"through":1}]}), json!({"items":[{"id":"a","epoch":"7","through":1}]}),
+            json!({"items":[{"id":"a","epoch":1,"through":-1}]}), json!({"items":[{"id":"a","epoch":1,"through":1.5}]}),
+            json!({"items":[{"id":"a b","epoch":1,"through":1}]}), json!({"items":[{"id":"a","epoch":1,"through":1,"x":1}]}),
+            json!({"items":(0..65).map(|i|json!({"id":format!("s{i}"),"epoch":1,"through":1})).collect::<Vec<_>>()})] {
             assert!(seen_items(&bad).is_err(), "{bad}");
         }
-        assert_eq!(seen_items(&json!({"items":[{"id":"a","through":u64::MAX}]})).unwrap()[0].1, u64::MAX);
+        assert_eq!(seen_items(&json!({"items":[{"id":"a","epoch":u64::MAX,"through":u64::MAX}]})).unwrap()[0].2, u64::MAX);
     }
 
     #[test]
@@ -813,7 +912,7 @@ mod tests {
         a.pty("b", &[(State(Blocked), Some(7))]);
         a.pty("seen", &[(Bell, Some(1))]);
         a.pty("gone", &[(Bell, Some(1))]);
-        assert_eq!(a.mark_seen(&[("seen".into(), 1)])["durable"], true);
+        assert_eq!(ms(&a, "seen", 1)["durable"], true);
         a.wait_flushed();
         drop(a);
         Connection::open(&path).unwrap().execute("DELETE FROM sessions WHERE id='gone'", []).unwrap();
@@ -839,7 +938,7 @@ mod tests {
         assert!(!a.durable());
         a.pty("s", &[(Bell, Some(1))]);
         assert_eq!(agent(&a, "s")["alertSeq"], 1);
-        assert_eq!(a.mark_seen(&[("s".into(), 1)])["durable"], false);
+        assert_eq!(ms(&a, "s", 1)["durable"], false);
         drop(a);
         Store::open(&path).unwrap();
         let db = Connection::open(&path).unwrap();
@@ -872,7 +971,7 @@ mod tests {
         assert_eq!(stored(&Connection::open(&path).unwrap(), "s").unwrap(), Some((1, 0)), "only the uncommitted alert is lost");
         // Seen confirmed before responding survives an immediate crash.
         let a = open_at(&path, "g2", &fake, &[("s", "interrupted")]);
-        assert_eq!(a.mark_seen(&[("s".into(), 1)])["durable"], true);
+        assert_eq!(ms(&a, "s", 1)["durable"], true);
         a.crash();
         drop(a);
         assert_eq!(stored(&Connection::open(&path).unwrap(), "s").unwrap(), Some((1, 1)));
@@ -883,7 +982,7 @@ mod tests {
         a.wait_flushed();
         let blocker = Connection::open(&path).unwrap();
         blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        assert_eq!(a.mark_seen(&[("s".into(), 2)])["durable"], false);
+        assert_eq!(ms(&a, "s", 2)["durable"], false);
         a.crash();
         drop(a);
         blocker.execute_batch("ROLLBACK").unwrap();
@@ -922,8 +1021,8 @@ mod tests {
         let a = open_at(&path, "g1", &fake, &sessions);
         for (n, id) in ids.iter().enumerate() { fake.advance(1); a.pty(id, &[(Bell, Some(n as u64))]); }
         // The first 700 are seen (idle rows); the last 600 stay pending.
-        let seen: Vec<_> = ids[..700].iter().map(|id| (id.clone(), 1)).collect();
-        for chunk in seen.chunks(64) { assert_eq!(a.mark_seen(chunk)["durable"], true); }
+        let seen: Vec<_> = ids[..700].iter().map(|id| (id.clone(), 1u64)).collect();
+        for chunk in seen.chunks(64) { assert_eq!(a.mark_seen(&items(&a, chunk))["durable"], true); }
         a.wait_flushed();
         drop(a);
         let a = open_at(&path, "g2", &fake, &sessions);
@@ -935,4 +1034,138 @@ mod tests {
         let rows: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM agent_attention", [], |r| r.get(0)).unwrap();
         assert_eq!(rows as usize, 600 + IDLE_ROWS);
     }
+    // --- Codex review round 2 reproductions ---
+    #[test]
+    fn unseen_finished_survives_new_turns_until_seen() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        a.pty("s", &[(State(Working), Some(1)), (State(Done), Some(2)), (State(Working), Some(3))]);
+        assert_eq!(agent(&a, "s")["pending"]["finished"], json!({"seq":1,"frame":2}), "unseen finished must survive working");
+        // clear and an alert do not remove it either.
+        a.pty("s", &[(State(Blocked), Some(4)), (Clear, Some(5)), (State(Working), Some(6))]);
+        assert_eq!(agent(&a, "s")["pending"]["finished"]["seq"], 1);
+        // A second end of turn moves the same single pending entry forward.
+        a.pty("s", &[(State(Done), Some(7))]);
+        let v = agent(&a, "s");
+        assert_eq!(v["pending"]["finished"], json!({"seq":3,"frame":7}));
+        assert_eq!(v["pending"].as_object().unwrap().len(), 1);
+        // Seen through it: gone.
+        let v = seen(&a, "s", v["alertSeq"].as_u64().unwrap());
+        assert!(v["pending"].get("finished").is_none() && v["finishedUnseen"] == false);
+    }
+
+    #[test]
+    fn needs_lasts_while_declared_like_the_client_tracker() {
+        // ProgramStatusTracker: 'program:needs' exists only while blocked/error.
+        let fake = Fake::new();
+        let a = memory(&fake);
+        // One printf: blocked then working. By design needs disappears: the
+        // agent unblocked itself and no longer needs the person.
+        a.pty("p", &[(State(Blocked), Some(1)), (State(Working), Some(1))]);
+        let v = agent(&a, "p");
+        assert_eq!(v["alertSeq"], 1);
+        assert!(v["pending"].get("needs").is_none());
+        // blocked -> error is one continuous need (no new alert), clear ends it.
+        a.pty("q", &[(State(Blocked), Some(1)), (State(Error), Some(2))]);
+        assert_eq!(agent(&a, "q")["pending"]["needs"], json!({"seq":1,"frame":1}));
+        a.pty("q", &[(Clear, Some(3))]);
+        assert!(agent(&a, "q")["pending"].get("needs").is_none());
+        // A process end does not clear it.
+        a.pty("r", &[(State(Error), Some(1))]);
+        a.process_ended("r", "exited");
+        assert_eq!(agent(&a, "r")["pending"]["needs"]["seq"], 1);
+    }
+
+    #[test]
+    fn process_end_seals_the_record_against_late_pty_bytes() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        a.pty("s", &[(State(Working), Some(1))]);
+        a.process_ended("s", "exited");
+        a.pty("s", &[(State(Working), None), (Bell, None)]);
+        let v = agent(&a, "s");
+        assert!(v["state"].is_null() && v["turnOpen"] == false, "late PTY bytes reopened the record: {v}");
+    }
+
+    #[test]
+    fn reused_id_after_prune_rejects_an_old_epoch() {
+        let (_dir, path) = profile();
+        let fake = Fake::new();
+        let ids: Vec<String> = (0..IDLE_ROWS + 1).map(|n| format!("p{n}")).collect();
+        for id in &ids { add_session(&path, id, "exited"); }
+        let sessions: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "exited")).collect();
+        let a = open_at(&path, "g1", &fake, &sessions);
+        for _ in 0..5 { fake.advance(1000); a.pty(&ids[0], &[(Bell, None)]); }
+        for id in &ids[1..] { fake.advance(1); a.pty(id, &[(Bell, None)]); }
+        let old_epoch = epoch(&a, &ids[0]);
+        for chunk in ids.chunks(64) { let list: Vec<_> = chunk.iter().map(|id| (id.clone(), 100)).collect(); a.mark_seen(&items(&a, &list)); }
+        a.wait_flushed(); drop(a);
+        let a = open_at(&path, "g2", &fake, &sessions);
+        assert!(a.snapshot(&ids[0]).is_none(), "oldest idle row pruned");
+        a.permission(&ids[0], "00000000-0000-4000-8000-000000000001", 2);
+        // A client that kept the pruned row's epoch and a high through.
+        let stale = a.mark_seen(&[(ids[0].clone(), old_epoch, 5)]);
+        assert_eq!(stale["items"][0]["rejected"], "epoch");
+        assert!(agent(&a, &ids[0])["pending"]["permission"].is_object(), "old through hid a new incarnation's alert");
+    }
+
+    #[test]
+    fn idle_rows_are_capped_without_reopening() {
+        let (_dir, path) = profile();
+        let fake = Fake::new();
+        let a = open_at(&path, "g1", &fake, &[]);
+        // Kept regardless of age: a live session, an uncertain one, a pending one.
+        a.pty("live", &[(Bell, None)]); ms(&a, "live", 100);
+        a.pty("uncertain", &[(Bell, None)]); a.process_ended("uncertain", "needs_attention"); ms(&a, "uncertain", 100);
+        a.pty("pending", &[(Bell, None)]); a.process_ended("pending", "exited");
+        for n in 0..IDLE_ROWS + 200 {
+            let id = format!("s{n}");
+            fake.advance(1);
+            a.pty(&id, &[(Bell, None)]);
+            a.process_ended(&id, "exited");
+            ms(&a, &id, 100);
+        }
+        let count = lock(&a.inner).records.len();
+        assert!(count <= IDLE_ROWS + IDLE_SLACK + 3, "{count} records kept in memory");
+        for id in ["live", "uncertain", "pending"] { assert!(a.snapshot(id).is_some(), "{id} dropped"); }
+        assert!(a.snapshot("s0").is_none() && a.snapshot(&format!("s{}", IDLE_ROWS + 199)).is_some(), "oldest first");
+        a.wait_flushed();
+        let rows: i64 = Connection::open(&path).unwrap().query_row("SELECT count(*) FROM agent_attention", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows as usize, count, "table pruned in step with memory");
+    }
+
+    /// Measured size of what status adds: 8 live sessions (the admission
+    /// limit) and 100 closed sessions with pending alerts.
+    #[test]
+    fn status_size_with_live_and_closed_pending_sessions() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        let mut sessions = Vec::new();
+        for n in 0..8 {
+            let id = format!("live-{n}");
+            a.pty(&id, &[(State(Working), Some(10)), (Bell, Some(11))]);
+            sessions.push(json!({"id":id,"status":"running"}));
+        }
+        for n in 0..100 {
+            let id = format!("closed-{n}");
+            a.pty(&id, &[(State(Working), Some(5)), (State(Done), Some(9))]);
+            a.process_ended(&id, "exited");
+            sessions.push(json!({"id":id,"status":"exited"}));
+        }
+        // Closed and fully seen: no agent object at all.
+        for n in 0..200 { let id = format!("old-{n}"); a.pty(&id, &[(Bell, None)]); a.process_ended(&id, "exited"); ms(&a, &id, 9); sessions.push(json!({"id":id,"status":"exited"})); }
+        let base = serde_json::to_vec(&json!({"sessions":sessions.clone()})).unwrap().len();
+        let measure = |rows: Vec<Value>| { let mut status = json!({"sessions":rows}); a.status_into(&mut status); status };
+        let live_only = measure(sessions[..8].to_vec());
+        let all = measure(sessions.clone());
+        let live_bytes = serde_json::to_vec(&live_only).unwrap().len() - serde_json::to_vec(&json!({"sessions":sessions[..8].to_vec()})).unwrap().len();
+        let all_bytes = serde_json::to_vec(&all).unwrap().len() - base;
+        eprintln!("status adds {live_bytes} bytes for 8 live sessions; {all_bytes} bytes for 8 live + 100 closed pending (+200 closed seen)");
+        let with = all["sessions"].as_array().unwrap().iter().filter(|r| r.get("agent").is_some()).count();
+        assert_eq!(with, 108);
+        assert_eq!(all["agentAttention"]["hasMore"], false);
+        assert_eq!(all["agentAttention"]["pendingSessions"], 108);
+        assert!(all_bytes < 40 * 1024, "{all_bytes}");
+    }
+
 }

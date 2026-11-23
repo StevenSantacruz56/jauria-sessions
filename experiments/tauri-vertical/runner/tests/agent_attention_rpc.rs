@@ -115,22 +115,31 @@ fn status_and_terminal_live_publish_state_with_frame_and_never_the_payload() {
     assert!(size < 400);
     // Seen through the painted seq; the second client's older value is a no-op.
     let through = agent["alertSeq"].as_u64().unwrap();
-    let seen = app.rpc("mark_seen", json!({"items":[{"id":"s1","through":through}]}));
+    let epoch = agent["epoch"].as_u64().unwrap();
+    assert!(epoch > 0 && epoch < (1 << 53), "JavaScript-safe epoch");
+    let seen = app.rpc("mark_seen", json!({"items":[{"id":"s1","epoch":epoch,"through":through}]}));
     assert_eq!(seen["durable"], true);
     assert_eq!(seen["items"][0]["agent"]["seenSeq"], through);
     assert!(seen["items"][0]["agent"]["pending"].as_object().unwrap().is_empty());
-    let older = app.rpc("mark_seen", json!({"items":[{"id":"s1","through":0},{"id":"missing-1","through":9}]}));
+    let older = app.rpc("mark_seen", json!({"items":[{"id":"s1","epoch":epoch,"through":0},{"id":"missing-1","epoch":1,"through":9}]}));
     assert_eq!(older["items"][0]["agent"]["seenSeq"], through);
     assert_eq!(older["items"][1]["agent"], Value::Null);
+    // Another incarnation's epoch has no effect and returns the current agent.
+    app.rpc("input", json!({"id":"s1","data":"printf '\\007'\n"}));
+    let agent = app.wait_agent("s1", "bell", |a| a["pending"]["bell"].is_object());
+    let stale = app.rpc("mark_seen", json!({"items":[{"id":"s1","epoch":epoch ^ 1,"through":u64::MAX}]}));
+    assert_eq!(stale["items"][0]["rejected"], "epoch");
+    assert_eq!(stale["items"][0]["agent"]["seenSeq"], agent["seenSeq"]);
 }
 
 #[test]
 fn mark_seen_rejects_every_other_shape() {
     let app = Instance::new();
-    for bad in [json!({}), json!({"items":[]}), json!({"items":[{"id":"a"}]}), json!({"items":[{"id":"a","through":-1}]}),
-        json!({"items":[{"id":"../x","through":1}]}), json!({"items":[{"id":"a","through":1}],"extra":1}),
-        json!({"items":[{"id":"a","through":"1"}]}),
-        json!({"items":(0..65).map(|i| json!({"id":format!("s{i}"),"through":1})).collect::<Vec<_>>()})] {
+    for bad in [json!({}), json!({"items":[]}), json!({"items":[{"id":"a"}]}), json!({"items":[{"id":"a","through":1}]}),
+        json!({"items":[{"id":"a","epoch":1,"through":-1}]}), json!({"items":[{"id":"a","epoch":0,"through":1}]}),
+        json!({"items":[{"id":"../x","epoch":1,"through":1}]}), json!({"items":[{"id":"a","epoch":1,"through":1}],"extra":1}),
+        json!({"items":[{"id":"a","epoch":1,"through":"1"}]}),
+        json!({"items":(0..65).map(|i| json!({"id":format!("s{i}"),"epoch":1,"through":1})).collect::<Vec<_>>()})] {
         let response = app.try_rpc("mark_seen", bad.clone()).unwrap();
         assert_eq!(response["ok"], false, "{bad}");
     }
@@ -151,10 +160,11 @@ fn status_keeps_agent_while_the_database_is_locked() {
     assert_eq!(status["agentAttention"]["pendingAlerts"], 1);
     assert!(started.elapsed() < Duration::from_secs(5));
     // mark_seen still answers, honestly not durable while the lock is held.
-    let seen = app.rpc("mark_seen", json!({"items":[{"id":"busy","through":1}]}));
+    let item = json!({"id":"busy","epoch":agent["epoch"],"through":1});
+    let seen = app.rpc("mark_seen", json!({"items":[item.clone()]}));
     assert_eq!(seen["durable"], false);
     db.execute_batch("ROLLBACK").unwrap();
-    let seen = app.rpc("mark_seen", json!({"items":[{"id":"busy","through":1}]}));
+    let seen = app.rpc("mark_seen", json!({"items":[item]}));
     assert_eq!(seen["durable"], true);
 }
 
@@ -288,4 +298,27 @@ fn rollback_to_previous_runner_keeps_rows_and_schema_version() {
     assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
     assert_eq!(db.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('sessions','events')", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
     eprintln!("rollback: {} rows kept across the previous runner", before.len());
+}
+
+#[test]
+fn concurrent_mark_seen_never_starves_status_or_stop() {
+    let app = Arc::new(Instance::new());
+    app.shell("victim");
+    app.rpc("input", json!({"id":"victim","data":"printf '\\007'\n"}));
+    app.wait_agent("victim", "bell", |a| a["pending"]["bell"].is_object());
+    let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
+    db.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let callers: Vec<_> = (0..20).map(|_| { let app = app.clone(); thread::spawn(move || {
+        let agent = app.row("victim")["agent"].clone();
+        let mut item = json!({"id":"victim","through":1});
+        if let Some(epoch) = agent.get("epoch") { item["epoch"] = epoch.clone(); }
+        app.try_rpc("mark_seen", json!({"items":[item]}))
+    }) }).collect();
+    thread::sleep(Duration::from_millis(150));
+    let started = Instant::now();
+    assert_eq!(app.try_rpc("status", json!({})).map(|r| r["ok"] == true), Some(true), "status lost its slot");
+    assert_eq!(app.try_rpc("stop", json!({"id":"victim"})).map(|r| r["ok"] == true), Some(true), "stop lost its slot");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    for caller in callers { let _ = caller.join(); }
+    db.execute_batch("ROLLBACK").unwrap();
 }

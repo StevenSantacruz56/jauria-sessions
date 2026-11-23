@@ -322,16 +322,22 @@ impl Runner {
         for job in codex_jobs.values(){job.control.stop.store(true,Ordering::Release);}
         let children: Vec<_> = self.owned.lock().unwrap().values().cloned().collect();
         // Cleanup owned children only; never consult persisted PIDs.
-        for child in children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
+        for child in &children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
+        // Give each wait thread a bounded chance to publish its end (and its
+        // ended alert) even when stop() ran out of time.
+        let until=Instant::now()+Duration::from_secs(2);
+        for child in &children { child.wait_done(until.saturating_duration_since(Instant::now())); }
         self.terminal_streams.shutdown();
-        // Children are stopped, so their ended alerts are recorded: flush them.
-        self.attention.shutdown();
         // Release both gates before joining; quitting already fences every new writer.
         drop(_guard);drop(_workspace);
         for (_,job) in codex_jobs {let _=job.worker.join();}
         // Join the bounded account-query task so its child is reaped before the
         // supervisor exits. No query runs while holding the session mutation lock.
         if let Some(task)=self.quota_task.lock().unwrap().take(){let _=task.join();}
+        // Last: PTY wait threads and Codex workers that could still raise an
+        // alert have finished (or timed out). Best-effort flush, bounded by
+        // agent_attention::SHUTDOWN_FLUSH.
+        self.attention.shutdown();
     }
 
     fn connection(self: &Arc<Self>, mut stream: UnixStream) -> Result<()> {
@@ -1426,6 +1432,29 @@ mod session_preferences_tests {
     }
 
     #[test]
+    fn shutdown_keeps_a_permission_raised_while_codex_workers_wind_down()->Result<()> {
+        let tmp=tempfile::Builder::new().prefix("aw-agent-close-").tempdir_in("/tmp")?;
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
+        let root=fs::canonicalize(tmp.path())?;
+        let runner=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
+        runner.db.lock().unwrap().insert(&json!({"id":"c1","title":"c1","kind":"fixture","status":"running","rows":24,"cols":80}))?;
+        let (control,_rx)=crate::codex_runtime::channel(3);
+        let stop=control.stop.clone();let attention=runner.attention.clone();
+        // A worker that records a new permission only after it is told to stop.
+        let worker=thread::spawn(move||{
+            while !stop.load(Ordering::Acquire){thread::sleep(Duration::from_millis(5));}
+            thread::sleep(Duration::from_millis(300));
+            attention.permission("c1","00000000-0000-4000-8000-000000000007",3);
+        });
+        runner.codex_jobs.lock().unwrap().insert("c1".into(),CodexJob{control,worker});
+        runner.cleanup_owned();
+        let db=rusqlite::Connection::open(root.join("data/runner.sqlite"))?;
+        let seq:Option<i64>=db.query_row("SELECT permission_seq FROM agent_attention WHERE session_id='c1'",[],|r|r.get(0)).ok();
+        assert_eq!(seq,Some(1),"permission raised during shutdown was lost");
+        Ok(())
+    }
+
+    #[test]
     fn busy_store_status_still_carries_agent_attention()->Result<()> {
         use crate::agent_signals::{Declared,Signal};
         let tmp=tempfile::Builder::new().prefix("aw-agent-cache-").tempdir_in("/tmp")?;
@@ -1444,7 +1473,8 @@ mod session_preferences_tests {
         assert_eq!(cached["agentAttentionVersion"],1);
         // mark_seen never takes the Store mutex nor the mutation gate.
         let _gate=runner.mutations.lock().unwrap();
-        let seen=request("mark_seen",json!({"items":[{"id":"a1","through":1}]}))?;
+        let epoch=cached["sessions"].as_array().unwrap().iter().find(|r|r["id"]=="a1").unwrap()["agent"]["epoch"].clone();
+        let seen=request("mark_seen",json!({"items":[{"id":"a1","epoch":epoch,"through":1}]}))?;
         assert_eq!(seen["items"][0]["agent"]["seenSeq"],1);
         assert_eq!(seen["durable"],true);
         Ok(())
