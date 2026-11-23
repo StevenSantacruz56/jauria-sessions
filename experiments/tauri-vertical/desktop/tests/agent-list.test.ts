@@ -63,6 +63,21 @@ test('project grouping keeps project order, sorts inside each group and ends wit
   assert.equal(groups.every(group => group.kind === null), true);
 });
 
+test('sessions linked to a phase group under its project; main session and project order still win', () => {
+  const kinds: Record<string, ActivityKind> = { phase1: 'working', phase2: 'idle', main2: 'unreported', both: 'needs', loose: 'unreported' };
+  const projects = [{ id: 'p1', title: 'Uno', mainSessionId: null }, { id: 'p2', title: 'Dos', mainSessionId: 'main2' }];
+  // sidebar_summary order: projectId, then sessionId; one pair per session and project.
+  const index = projectSessionIndex(projects, [
+    { projectId: 'p1', sessionId: 'main2', via: 'item' }, { projectId: 'p1', sessionId: 'phase1', via: 'item' },
+    { projectId: 'p2', sessionId: 'both', via: 'project' }, { projectId: 'p1', sessionId: 'both', via: 'item' }, { projectId: 'p2', sessionId: 'phase2', via: 'item' },
+  ]);
+  assert.deepEqual(Object.fromEntries(index), { main2: 'p2', phase1: 'p1', both: 'p1', phase2: 'p2' }, 'main beats a phase link; the first listed project keeps a shared session');
+  const groups = groupAgents(['loose', 'phase2', 'main2', 'both', 'phase1'].map(id => session(id)), 'project', id => kinds[id], projects, index);
+  assert.deepEqual(groups.map(g => [g.key, g.sessions.map(s => s.id)]), [
+    ['project:p1', ['both', 'phase1']], ['project:p2', ['phase2', 'main2']], ['project:none', ['loose']],
+  ]);
+});
+
 test('without Pulso data every agent is listed under Sin proyecto', () => {
   const groups = groupAgents([session('a'), session('b')], 'project', () => 'unreported');
   assert.deepEqual(groups.map(g => [g.name, g.sessions.length]), [['Sin proyecto', 2]]);

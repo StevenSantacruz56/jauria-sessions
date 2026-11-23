@@ -101,6 +101,108 @@ test('a snapshot conflict during a read retries once instead of being dropped', 
   await assert.rejects(always.load(), /revision conflict/, 'a second conflict surfaces; the next trigger retries');
 });
 
+/** Runner 1.4 `sidebar_summary` (capability pulsoSummaryVersion: 1). */
+function summaryFixture() {
+  const state = {
+    revision: 30,
+    projects: [{ id: 'p1', title: 'Uno', mainSessionId: 'main', done: 1, total: 3 }, { id: 'p2', title: 'Dos', mainSessionId: null, done: 0, total: 0 }] as any[],
+    links: [{ sessionId: 'linked', projectId: 'p1', via: 'project' }, { sessionId: 'phase', projectId: 'p1', via: 'item' }, { sessionId: 'phase2', projectId: 'p2', via: 'item' }] as any[],
+    pendingOpen: 2, hasMore: false, linksTruncated: false, fail: false,
+  };
+  const calls: { op: string; args: any }[] = [];
+  const request = async (op: string, args: any) => {
+    calls.push({ op, args });
+    if (op !== 'sidebar_summary') throw Error(`unexpected ${op}`);
+    if (state.fail) throw Error('synthetic failure');
+    if (args.ifRevision === state.revision) return { revision: state.revision, unchanged: true };
+    return structuredClone({ revision: state.revision, projects: state.projects, hasMore: state.hasMore, pendingOpen: state.pendingOpen, links: state.links, linksTruncated: state.linksTruncated });
+  };
+  return { state, calls, request };
+}
+
+test('with pulsoSummaryVersion one sidebar_summary call replaces the per-project reads', async () => {
+  const f = summaryFixture(); const source = new SidebarProjects(f.request, () => true);
+  assert.equal(await source.load(), true);
+  assert.deepEqual(f.calls, [{ op: 'sidebar_summary', args: {} }]);
+  assert.deepEqual(source.snapshot.projects, [
+    { id: 'p1', title: 'Uno', mainSessionId: 'main', total: 3, done: 1, linksTruncated: false }, { id: 'p2', title: 'Dos', mainSessionId: null, total: 0, done: 0, linksTruncated: false },
+  ]);
+  assert.deepEqual(source.snapshot.links, [
+    { projectId: 'p1', sessionId: 'linked', via: 'project' }, { projectId: 'p1', sessionId: 'phase', via: 'item' }, { projectId: 'p2', sessionId: 'phase2', via: 'item' },
+  ], 'sessions linked to a phase reach the grouping');
+  assert.equal(source.snapshot.pendingOpen, 2); assert.equal(source.snapshot.revision, 30);
+  assert.equal(source.snapshot.hasMore, false); assert.equal(source.snapshot.linksTruncated, false);
+});
+
+test('summary rereads send ifRevision; unchanged keeps the same snapshot object', async () => {
+  const f = summaryFixture(); const source = new SidebarProjects(f.request, () => true);
+  await source.load(); const before = source.snapshot;
+  assert.equal(await source.load(), false);
+  assert.deepEqual(f.calls.at(-1), { op: 'sidebar_summary', args: { ifRevision: 30 } });
+  assert.equal(source.snapshot, before); assert.equal(f.calls.length, 2);
+  f.state.revision = 31; f.state.projects[0].done = 2;
+  assert.equal(await source.load(), true); assert.equal(source.snapshot.projects[0].done, 2); assert.equal(source.snapshot.revision, 31);
+  assert.equal(f.calls.length, 3, 'one call per read, never per project');
+});
+
+test('summary shows at most 20 projects, keeps hasMore and only the shown projects links', async () => {
+  const f = summaryFixture();
+  f.state.projects = Array.from({ length: 50 }, (_, i) => ({ id: `p${String(i).padStart(2, '0')}`, title: `Proyecto ${i}`, mainSessionId: null, done: 0, total: 1 }));
+  f.state.links = [{ sessionId: 'a', projectId: 'p00', via: 'item' }, { sessionId: 'b', projectId: 'p30', via: 'project' }];
+  const source = new SidebarProjects(f.request, () => true); await source.load();
+  assert.equal(source.snapshot.projects.length, SIDEBAR_PROJECT_LIMIT); assert.equal(source.snapshot.hasMore, true, '50 returned, 20 shown');
+  assert.deepEqual(source.snapshot.links.map(l => l.sessionId), ['a'], 'a link to a project outside the sidebar is not attributed');
+  f.state.revision++; f.state.projects = f.state.projects.slice(0, 2); f.state.hasMore = true;
+  await source.load(); assert.equal(source.snapshot.hasMore, true, 'the runner flag alone also shows «Más proyectos…»');
+});
+
+test('truncated summary links flag the projects whose pairs may be incomplete', async () => {
+  const f = summaryFixture();
+  f.state.projects = [{ id: 'a', title: 'A', mainSessionId: null, done: 0, total: 0 }, { id: 'b', title: 'B', mainSessionId: null, done: 0, total: 0 }, { id: 'c', title: 'C', mainSessionId: null, done: 0, total: 0 }];
+  f.state.links = [{ sessionId: 's1', projectId: 'a', via: 'project' }, { sessionId: 's2', projectId: 'b', via: 'item' }];
+  f.state.linksTruncated = true;
+  const source = new SidebarProjects(f.request, () => true); await source.load();
+  assert.equal(source.snapshot.linksTruncated, true);
+  assert.deepEqual(source.snapshot.projects.map(p => [p.id, p.linksTruncated]), [['a', false], ['b', true], ['c', true]], 'pairs are ordered by project: the cut can only hide the last one and later');
+});
+
+test('a failed summary keeps the last snapshot and the next trigger rereads in full', async () => {
+  const f = summaryFixture(); const source = new SidebarProjects(f.request, () => true);
+  await source.load(); const before = source.snapshot;
+  f.state.revision = 32; f.state.fail = true;
+  await assert.rejects(source.load(), /synthetic failure/); assert.equal(source.snapshot, before);
+  f.state.fail = false;
+  assert.equal(await source.load(), true); assert.equal(source.snapshot.revision, 32);
+  assert.deepEqual(f.calls.at(-1)!.args, { ifRevision: 30 }, 'the reread still asks against the last confirmed snapshot');
+});
+
+test('an invalid summary is rejected without publishing a partial snapshot', async () => {
+  const source = new SidebarProjects(async () => ({ revision: 3, projects: 'nope' }), () => true);
+  await assert.rejects(source.load()); assert.equal(source.snapshot.revision, null);
+});
+
+test('the capability is checked on every read: without it the old multi-read path runs', async () => {
+  const legacy = fixture(); const summary = summaryFixture(); let capable = false;
+  const source = new SidebarProjects(async (op, args) => op === 'sidebar_summary' ? summary.request(op, args) : legacy.request(op, args), () => capable);
+  await source.load();
+  assert.equal(legacy.calls.filter(c => c.op === 'projects').length, 1); assert.equal(summary.calls.length, 0);
+  assert.equal(legacy.calls.length, 1 + 3 * 2 + 2, 'old runner: projects, three reads per project and two Pendientes counts');
+  capable = true; await source.load();
+  assert.deepEqual(summary.calls.map(c => c.op), ['sidebar_summary']);
+  assert.equal(source.snapshot.links.some(l => l.sessionId === 'phase'), true);
+});
+
+test('reset during a summary read fences it and rereads for the new connection', async () => {
+  const f = summaryFixture(); let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  const source = new SidebarProjects(async (op, args) => { if (first) { first = false; await gate; } return f.request(op, args); }, () => true);
+  const running = source.load();
+  f.state.revision = 40; f.state.projects = [{ id: 'p9', title: 'Otra', mainSessionId: null, done: 0, total: 0 }]; f.state.links = [];
+  source.reset(); release(); await running;
+  assert.deepEqual(source.snapshot.projects.map(p => p.id), ['p9']); assert.equal(source.snapshot.revision, 40);
+  assert.deepEqual(f.calls.at(-1)!.args, {}, 'after reset no ifRevision is sent');
+});
+
 test('the sidebar reads at most the first projects and flags more and truncated links', async () => {
   const f = fixture();
   f.state.projects = Array.from({ length: SIDEBAR_PROJECT_LIMIT + 5 }, (_, i) => ({ id: `p${i}`, title: `Proyecto ${i}`, mainSessionId: null }));

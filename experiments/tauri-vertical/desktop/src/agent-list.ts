@@ -57,11 +57,12 @@ export function sortAgents<T extends { id: string }>(sessions: readonly T[], kin
 }
 
 export type AgentProject = { id: string; title: string; mainSessionId: string | null };
-export type AgentProjectLink = { projectId?: string | null; sessionId: string };
+/** `via` (runner 1.4 sidebar_summary): the pair comes from a project link or a link to one of its phases. */
+export type AgentProjectLink = { projectId?: string | null; sessionId: string; via?: 'project' | 'item' };
 
 /**
- * Session → Pulso project. A project's main session wins over a link; projects
- * keep their listed order and the first match is kept, so a session appears once.
+ * Session → Pulso project. A project's main session wins over a link (to the
+ * project or to one of its phases); projects keep their listed order and the first match is kept, so a session appears once.
  */
 export function projectSessionIndex(projects: readonly AgentProject[], links: readonly AgentProjectLink[]): Map<string, string> {
   const index = new Map<string, string>();
