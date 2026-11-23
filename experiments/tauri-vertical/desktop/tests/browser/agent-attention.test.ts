@@ -154,6 +154,7 @@ try {
           assert.equal(await row(page, 'foreground').locator('.session-item-duration').textContent(), '5 min');
           assert.equal(await page.locator('.pane-heading .session-state').first().textContent(), 'Trabajando');
           assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 1, 'Dock agrees with the bell');
+          await capture(page, engine.name(), 'pendientes-al-abrir');
           // Enabling macOS notices now never announces what was already pending, nor after reconnecting.
           await page.locator('#open-settings').click();
           await page.locator('#enable-native-notifications').click();
@@ -166,7 +167,6 @@ try {
           await fx(page, `f.raise('background','notify',2);`);
           await page.waitForFunction(() => (window as any).agentFixture.notices.length === 1, undefined, { timeout: 5000 });
           assert.equal(JSON.stringify(await page.evaluate(() => (window as any).agentFixture.notices[0])).includes('background'), false, 'generic text only');
-          await capture(page, engine.name(), 'pendientes-al-abrir');
         });
       });
 
