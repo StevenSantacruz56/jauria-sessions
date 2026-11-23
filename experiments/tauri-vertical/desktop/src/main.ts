@@ -5,7 +5,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import { NativeAttention } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
 import { SessionAttention } from './attention';
-import { RunnerAttentionSource, WindowAttentionSource, type AttentionSource } from './attention-source';
+import { RunnerAttentionSource, WindowAttentionSource, turnEnded, type AttentionSource } from './attention-source';
 import { DockBadge, dockUnreadCount } from './dock-badge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mountCodexConversation } from './codex-conversation';
@@ -446,14 +446,7 @@ function refresh() {
   if (nextSessionSet !== sessionSetKey) { sessionSetKey = nextSessionSet; loadSidebarProjects(); }
   // Older runners: an agent that reports done/idle has often just written to
   // Pulso through MCP. With pulsoRevisionVersion the status revision says so.
-  let turnEnded = false;
-  for (const s of sessions) {
-    const state = source.display(s.id) ?? '';
-    const previous = programSeen.get(s.id);
-    if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) turnEnded = true;
-    programSeen.set(s.id, state);
-  }
-  if (turnEnded && statusPulsoRevision() === null) loadSidebarProjects();
+  if (turnEnded(programSeen, sessions, source) && statusPulsoRevision() === null) loadSidebarProjects();
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
   const newSessionBlocked = newSessionUnavailable({ connected, busy: busyAction, replaying, occupied, limit: sessionLimit() }) !== null;
@@ -675,8 +668,7 @@ function ensure(session: Session): View {
 function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   runner = status;
-  source = status.agentAttentionVersion === 1 ? runnerAttention : windowAttention;
-  if (source === runnerAttention) runnerAttention.ingestStatus(status);
+  if ((source = status.agentAttentionVersion === 1 ? runnerAttention : windowAttention) === runnerAttention) runnerAttention.ingestStatus(status);
   for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') source.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);windowAttention.forget(session.id);}}
   refresh();
   // Runner 1.4: Pulso changes arrive as a revision in status (sidebar and board).
@@ -797,7 +789,7 @@ async function pollNativeView(view: View, version: number, stale = () => false):
     if (page.archivedOnly === true) {
       if (page.sessionId !== view.session.id) throw new Error('Invalid archived terminal session');
       view.archivedOnly = true; view.liveReady = true;
-      if (source === runnerAttention && 'agent' in page) runnerAttention.ingest(view.session.id, page.agent);
+      if (source === runnerAttention) runnerAttention.live(view.session.id, page, false, 0);
       ensure(view.session);
       if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
       return {more:false,changed:true};
@@ -835,8 +827,7 @@ async function pollNativeView(view: View, version: number, stale = () => false):
     if (version !== loopVersion) return {more:false,changed:false};
     if (!historical) source.observeEnd(view.session.id, view.session.status, session.status);
     // terminal_live carries the session's agent; an attended frame alert that became consumable repaints (and may mark seen).
-    const agentChanged = source === runnerAttention && (('agent' in page && runnerAttention.ingest(view.session.id, page.agent)) ||
-      (isAttended(view.session.id) && runnerAttention.wantsFrame(view.session.id, view.stream?.lastFrame ?? 0)));
+    const agentChanged = source === runnerAttention && runnerAttention.live(view.session.id, page, isAttended(view.session.id), view.stream?.lastFrame ?? 0);
     ensure({ ...session, terminalStream:{ generation:page.generation, history:page.history } });
     if ((view.stream?.lastFrame ?? 0) >= (view.liveReplayThrough ?? 0)) view.liveReady = true;
     if (runner) runner.sessions = runner.sessions.map(s => s.id === view.session.id ? view.session : s);
@@ -1410,11 +1401,9 @@ function handleAppShortcut(event: KeyboardEvent): boolean { return handleShortcu
 installShortcutListeners(window, handleAppShortcut, mac);
 /** Palette entries from data the client already holds (no Pulso read per key). */
 function paletteItems(): PaletteItem[] {
-  const sessions = attentionSessions();
-  const alertById = new Map(source.list(sessions).map(item => [item.id, item]));
-  const activityById = new Map(sessions.map(s => [s.id, source.activity(s, alertById.get(s.id))]));
-  const summary = sidebarProjects.snapshot;
-  return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => activityById.get(id)!,
+  // The activity the last refresh painted: the palette agrees with the sidebar.
+  const sessions = attentionSessions(), summary = sidebarProjects.snapshot;
+  return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => currentActivity.get(id) ?? { kind: 'unreported', label: '' },
     projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null,
     commands: commands(), mac, openSession: id => commandContext().actions.openSession(id), openBoard: openBoardFromNavigation,
     openPulso: () => { if (stageView !== 'pulso') showPulso(); }, phases: pulsoPanel?.loadedPhases() ?? null, openPhase: openPhaseFromNavigation });

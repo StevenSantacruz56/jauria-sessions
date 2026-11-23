@@ -308,6 +308,11 @@ export class RunnerAttentionSource implements AttentionSource {
     }
     void this.flush();
   }
+  /** terminal_live page: its `agent` (if any) plus whether an attended frame alert became consumable. */
+  live(id: string, page: { agent?: unknown }, attended: boolean, consumed: number): boolean {
+    const changed = 'agent' in page && this.ingest(id, page.agent);
+    return changed || (attended && this.wantsFrame(id, consumed));
+  }
   /** True when a painted frame alert of this session became consumable. */
   wantsFrame(id: string, consumed: number): boolean {
     return this.pending(id, this.painted.get(id)).some(([, p]) => p.frame !== null && p.frame <= consumed);
@@ -365,4 +370,15 @@ export class RunnerAttentionSource implements AttentionSource {
     this.agents.clear(); this.painted.clear(); this.optimistic.clear(); this.wanted.clear(); this.sent.clear();
     this.baseline.clear(); this.baselined = false; this.baselineFirstSight = false; this.generation = null; this.volatileSeen = false;
   }
+}
+
+/** Older runners (no pulsoRevision): a session whose word just became done/idle probably wrote to Pulso. */
+export function turnEnded(seen: Map<string, string>, sessions: readonly { id: string }[], source: Pick<AttentionSource, 'display'>): boolean {
+  let ended = false;
+  for (const s of sessions) {
+    const state = source.display(s.id) ?? '', previous = seen.get(s.id);
+    if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) ended = true;
+    seen.set(s.id, state);
+  }
+  return ended;
 }
