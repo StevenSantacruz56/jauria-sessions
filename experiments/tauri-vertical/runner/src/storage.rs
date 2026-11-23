@@ -110,7 +110,7 @@ fn final_status(status: &str) -> bool {
     matches!(status, "exited"|"stopped"|"failed"|"interrupted"|"released")
 }
 
-fn normalized_sql(sql: &str) -> String {
+pub(crate) fn normalized_sql(sql: &str) -> String {
     // Normalize SQL syntax only; string literals are case/whitespace sensitive
     // (e.g. kind='OUTPUT' must NEVER pass as the known kind='output' guard).
     let mut chars=sql.chars().peekable();

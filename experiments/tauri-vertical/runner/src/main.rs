@@ -6,6 +6,7 @@ mod runner;
 mod storage;
 mod terminal_stream;
 mod agent_signals;
+mod agent_attention;
 mod app_settings;
 mod legacy_tasks;
 mod pulso;
