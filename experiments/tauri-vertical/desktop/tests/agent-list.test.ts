@@ -29,17 +29,18 @@ test('the spinner requires an explicit working report; an open process alone nev
 });
 
 test('indicator shapes do not depend on colour alone', () => {
-  assert.deepEqual(agentIndicator('finished'), { shape: 'dot', tone: 'ready' });
-  assert.deepEqual(agentIndicator('needs'), { shape: 'dot', tone: 'attention' });
-  assert.deepEqual(agentIndicator('notice'), { shape: 'dot', tone: 'attention' });
-  assert.deepEqual(agentIndicator('idle'), { shape: 'dot', tone: 'paused' });
+  // Working, needs you, finished, waiting and no report each get a distinct shape.
+  const shapes = (['working', 'needs', 'finished', 'idle', 'unreported'] as ActivityKind[]).map(kind => agentIndicator(kind).shape);
+  assert.deepEqual(shapes, ['spinner', 'halo', 'check', 'dash', 'ring']);
+  assert.equal(new Set(shapes).size, 5);
+  assert.equal(agentIndicator('notice').shape, agentIndicator('needs').shape, 'a notice is action-needed too');
   // Every state keeps a textual label from sessionActivity for title/aria text.
   for (const program of ['working', 'idle', 'blocked', null] as const) assert.ok(sessionActivity(session('x'), undefined, program).label.length > 0);
 });
 
-test('agents sort by needs action, unseen finish, working, then the rest, stably', () => {
+test('agents sort by action, notice, unseen finish, working, waiting, no report, stably', () => {
   const kinds: Record<string, ActivityKind> = { a: 'unreported', b: 'working', c: 'finished', d: 'needs', e: 'idle', f: 'notice', g: 'working' };
-  assert.deepEqual(sortAgents(Object.keys(kinds).map(id => session(id)), id => kinds[id]).map(s => s.id), ['d', 'f', 'c', 'b', 'g', 'a', 'e']);
+  assert.deepEqual(sortAgents(Object.keys(kinds).map(id => session(id)), id => kinds[id]).map(s => s.id), ['d', 'f', 'c', 'b', 'g', 'e', 'a']);
 });
 
 test('main session wins over links, first project keeps a shared session, unknown projects are ignored', () => {

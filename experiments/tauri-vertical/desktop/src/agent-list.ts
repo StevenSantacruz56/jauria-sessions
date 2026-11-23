@@ -2,27 +2,30 @@ import { activitySections, type ActivityKind } from './session-activity';
 
 /** Sidebar agent list: presentation only. No terminal text is inspected here. */
 export type AgentGrouping = 'project' | 'state';
-export type AgentIndicatorShape = 'spinner' | 'dot' | 'ring';
+export type AgentIndicatorShape = 'spinner' | 'halo' | 'check' | 'dash' | 'ring';
 export type AgentIndicatorTone = 'working' | 'attention' | 'ready' | 'paused' | 'unreported';
 export type AgentIndicator = { shape: AgentIndicatorShape; tone: AgentIndicatorTone };
 
 /**
- * Only an explicit `working` report spins. An open process without a declared
- * state is never shown as working (docs/SESSION_ALERTS.md).
+ * Each state has its own shape, so meaning never depends on colour alone:
+ * spinning ring (working), dot with halo (needs you), check (finished),
+ * dash (waiting), empty ring (no report). Only an explicit `working` report
+ * spins; an open process without a declared state never does
+ * (docs/SESSION_ALERTS.md).
  */
 export function agentIndicator(kind: ActivityKind): AgentIndicator {
   switch (kind) {
     case 'working': return { shape: 'spinner', tone: 'working' };
-    case 'finished': return { shape: 'dot', tone: 'ready' };
-    case 'needs': case 'notice': return { shape: 'dot', tone: 'attention' };
-    case 'idle': return { shape: 'dot', tone: 'paused' };
+    case 'finished': return { shape: 'check', tone: 'ready' };
+    case 'needs': case 'notice': return { shape: 'halo', tone: 'attention' };
+    case 'idle': return { shape: 'dash', tone: 'paused' };
     default: return { shape: 'ring', tone: 'unreported' };
   }
 }
 
-/** Needs action (including explicit notices), unseen finish, working, rest. */
+/** Same order as docs/SESSION_ALERTS.md: action, notices, unseen finish, working, waiting, no report. */
 export function agentRank(kind: ActivityKind): number {
-  return kind === 'needs' ? 0 : kind === 'notice' ? 1 : kind === 'finished' ? 2 : kind === 'working' ? 3 : 4;
+  return ({ needs: 0, notice: 1, finished: 2, working: 3, idle: 4, unreported: 5 } as const)[kind] ?? 5;
 }
 
 export function sortAgents<T extends { id: string }>(sessions: readonly T[], kindOf: (id: string) => ActivityKind): T[] {
