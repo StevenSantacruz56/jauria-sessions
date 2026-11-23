@@ -688,6 +688,7 @@ fn public_error(e: &anyhow::Error) -> String {
         "exactly one link target required",
         "service stopped",
         "limit must be 1..100",
+        "invalid status",
     ] {
         if text == safe {
             return safe.into();
