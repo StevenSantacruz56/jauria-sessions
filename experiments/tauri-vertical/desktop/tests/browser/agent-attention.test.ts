@@ -17,7 +17,13 @@ await server.listen();
 const url = server.resolvedUrls!.local[0];
 const shots = process.env.AGENT_ATTENTION_SCREENSHOT_DIR;
 
-type Options = { runner: boolean; hasMore?: boolean };
+/**
+ * `closed`: extra exited sessions, each with a pending `ended`, older than the
+ * two live ones; with more than `maxAgents` candidates the synthetic status is
+ * capped exactly like the runner's status_into. `pulso`: a minimal empty Pulso
+ * so the stage can switch to it. `viewport`: the window size.
+ */
+type Options = { runner: boolean; closed?: number; maxAgents?: number; pulso?: boolean; viewport?: { width: number; height: number } };
 async function install(page: Page, options: Options) {
   await page.addInitScript((options: Options) => {
     const w = window as any;
@@ -29,6 +35,7 @@ async function install(page: Page, options: Options) {
     const sessions: any[] = [
       { id: 'foreground', title: 'Claude foreground', kind: 'claude', transport: 'pty', status: 'running', cwd: '/synthetic/foreground', rows: 24, cols: 80 },
       { id: 'background', title: 'Claude background', kind: 'claude', transport: 'pty', status: 'running', cwd: '/synthetic/background', rows: 24, cols: 80 },
+      ...Array.from({ length: options.closed ?? 0 }, (_, n) => ({ id: `closed-${n}`, title: `Cerrada ${n}`, kind: 'claude', transport: 'pty', status: 'exited', cwd: '/synthetic/closed', rows: 24, cols: 80 })),
     ];
     const frames = new Map<string, any[]>(sessions.map(s => [s.id, [{ index: 1, kind: 'resize', data: { rows: 24, cols: 80 } }, { index: 2, kind: 'output', data: btoa(`${s.title}\r\n`) }]]));
     const base = { epoch: 4503599627370495, state: null, changedAt: now - 5 * minute, stateFrame: null, turnOpen: false, turnStartedAt: null, turnEndedAt: null,
@@ -36,18 +43,36 @@ async function install(page: Page, options: Options) {
     const agents = new Map<string, any>([
       ['foreground', { ...base, state: 'working', turnOpen: true, turnStartedAt: now - 5 * minute, changedAt: now - 5 * minute, stateFrame: 2 }],
       ['background', { ...base, epoch: 777, state: 'idle', lastTurnMs: 3 * minute, alertSeq: 1, finishedUnseen: true, pending: { finished: { seq: 1, frame: 2 } } }],
+      ...Array.from({ length: options.closed ?? 0 }, (_, n) => [`closed-${n}`, { ...base, epoch: 1000 + n, alertSeq: 1, pending: { ended: { seq: 1 } } }] as [string, any]),
     ]);
+    // The runner's updated_at: closed sessions oldest, then the live ones; every change bumps it.
+    let clock = 0;
+    const updated = new Map<string, number>([...agents.keys()].map(id => [id, id.startsWith('closed-') ? clock++ : 0]));
+    for (const id of ['foreground', 'background']) updated.set(id, clock++);
+    const touch = (id: string) => updated.set(id, clock++);
+    const maxAgents = options.maxAgents ?? 128;
     const marks: any[] = [], calls: string[] = [], resizes: any[] = [], notices: any[] = [], badges: any[] = [], unexpected: string[] = [];
     let focused = true, hold = false, release: (() => void) | undefined, rejectNext = false, connectCount = 0;
-    const summary = () => {
-      const pending = [...agents.values()].filter(a => Object.keys(a.pending).length);
-      return options.hasMore ? { hasMore: true, pendingSessions: pending.length + 3, pendingAlerts: pending.length + 4, durable: true, maxAgents: 128 }
-        : { hasMore: false, pendingSessions: pending.length, pendingAlerts: pending.reduce((n, a) => n + Object.keys(a.pending).length, 0), durable: true, maxAgents: 128 };
+    const pendingCount = (a: any) => Object.keys(a.pending).length;
+    /** agent_attention.rs status_into: only live or pending sessions, pending first, newest first, at most maxAgents; exact totals. */
+    const listing = () => {
+      const candidates = sessions.flatMap((s, index) => {
+        const a = agents.get(s.id); if (!a) return [];
+        const live = s.status === 'running' || s.status === 'starting';
+        return pendingCount(a) > 0 || live ? [{ id: s.id, pending: pendingCount(a) > 0, updated: updated.get(s.id) ?? 0, index }] : [];
+      }).sort((x, y) => Number(x.pending === false) - Number(y.pending === false) || y.updated - x.updated || x.index - y.index);
+      const all = [...agents.entries()].filter(([id]) => sessions.some(s => s.id === id)).map(([, a]) => a);
+      return { listed: new Set(candidates.slice(0, maxAgents).map(c => c.id)),
+        summary: { hasMore: candidates.length > maxAgents, pendingSessions: all.filter(a => pendingCount(a) > 0).length,
+          pendingAlerts: all.reduce((n, a) => n + pendingCount(a), 0), durable: true, maxAgents } };
     };
     const history = (id: string) => ({ state: 'recording', durableFrame: frames.get(id)!.length, lastFrame: frames.get(id)!.length });
-    const row = (s: any) => ({ ...s, terminalStream: { generation, history: history(s.id) }, ...(options.runner && agents.has(s.id) ? { agent: structuredClone(agents.get(s.id)) } : {}) });
-    const status = () => structuredClone({ pid: 123, generation, terminalStreamVersion: 1, normalTerminalVersion: 1, sessions: sessions.map(row), lastSeq: 0,
-      ...(options.runner ? { agentAttentionVersion: 1, agentAttention: summary() } : {}) });
+    // Closed sessions come from a previous runner generation: only status carries their agent (no terminal_live ring).
+    const row = (s: any, listed?: Set<string>) => ({ ...s, terminalStream: { generation: s.id.startsWith('closed-') ? 'previous-generation' : generation, history: history(s.id) }, ...(options.runner && listed?.has(s.id) ? { agent: structuredClone(agents.get(s.id)) } : {}) });
+    const status = () => { const { listed, summary } = listing();
+      return structuredClone({ pid: 123, generation, terminalStreamVersion: 1, normalTerminalVersion: 1, sessions: sessions.map(s => row(s, listed)), lastSeq: 0,
+        ...(options.pulso ? { pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true } : {}),
+        ...(options.runner ? { agentAttentionVersion: 1, agentAttention: summary } : {}) }); };
     Object.defineProperty(document, 'hasFocus', { value: () => focused });
     w.Notification = class { static permission = 'granted'; static requestPermission() { return Promise.resolve('granted'); } constructor(...args: any[]) { notices.push(args); } };
     w.agentFixture = {
@@ -56,11 +81,14 @@ async function install(page: Page, options: Options) {
       focus(value: boolean) { focused = value; },
       hold() { hold = true; }, release() { hold = false; release?.(); release = undefined; },
       rejectNext() { rejectNext = true; },
-      agent(id: string, patch: any) { const a = agents.get(id); agents.set(id, { ...a, ...patch }); },
+      agent(id: string, patch: any) { const a = agents.get(id); agents.set(id, { ...a, ...patch }); touch(id); },
       raise(id: string, kind: string, frame: number | null) {
         const a = agents.get(id); const seq = a.alertSeq + 1;
-        agents.set(id, { ...a, alertSeq: seq, pending: { ...a.pending, [kind]: frame === undefined ? { seq } : { seq, frame } } });
+        agents.set(id, { ...a, alertSeq: seq, pending: { ...a.pending, [kind]: frame === undefined ? { seq } : { seq, frame } } }); touch(id);
       },
+      /** What another window's mark_seen does: everything seen. */
+      seenElsewhere(id: string) { const a = agents.get(id); agents.set(id, { ...a, seenSeq: a.alertSeq, pending: {}, finishedUnseen: false }); touch(id); },
+      listed() { return [...listing().listed]; },
       output(id: string, data: string) { const f = frames.get(id)!; f.push({ index: f.length + 1, kind: 'output', data: btoa(data) }); return f.length; },
       agentOf(id: string) { return structuredClone(agents.get(id)); },
     };
@@ -73,6 +101,16 @@ async function install(page: Page, options: Options) {
         if (cmd === 'plugin:event|listen' || cmd === 'plugin:event|unlisten') return 1;
         if (cmd === 'plugin:window|set_badge_count') { badges.push(request.value); return; }
         if (cmd === 'plugin:notification|is_permission_granted') return true;
+        if (cmd === 'pulso_request' && options.pulso) {
+          const { op } = request;
+          const empty = { items: [], totalCount: 0, hasMore: false, nextCursor: 0 };
+          if (op === 'revision') return { ok: true, result: { revision: 1 } };
+          if (op === 'projects') return { ok: true, result: { projects: [], revision: 1, totalCount: 0, hasMore: false } };
+          if (op === 'board') return { ok: true, result: { revision: 1, columns: { todo: empty, doing: empty, waiting: empty, done: empty } } };
+          if (op === 'items') return { ok: true, result: { items: [], revision: 1, totalCount: 0, hasMore: false } };
+          if (op === 'policies') return { ok: true, result: { policies: [] } };
+          if (op === 'links') return { ok: true, result: { links: [] } };
+        }
         if (cmd === 'runner_request') {
           const { op, args } = request; calls.push(op);
           if (op === 'status') return { ok: true, result: status() };
@@ -89,7 +127,7 @@ async function install(page: Page, options: Options) {
           if (op === 'mark_seen' && options.runner) {
             marks.push(structuredClone(args.items));
             const items = args.items.map((item: any) => {
-              const a = agents.get(item.id); if (!a) return { id: item.id, agent: null };
+              const a = agents.get(item.id); if (!a) return { id: item.id, agent: null }; touch(item.id);
               if (rejectNext || a.epoch !== item.epoch) {
                 rejectNext = false;
                 const fresh = { ...base, epoch: a.epoch + 1, alertSeq: 1, pending: { ended: { seq: 1 } } };
@@ -132,7 +170,7 @@ try {
     await test(`${engine.name()}: runner agent attention`, async t => {
       const browser = await engine.launch(engine === chromium ? { channel: 'chrome' } : {});
       const fixture = async (options: Options, run: (page: Page) => Promise<void>) => {
-        const context = await browser.newContext({ viewport: { width: 1220, height: 800 } });
+        const context = await browser.newContext({ viewport: options.viewport ?? { width: 1220, height: 800 } });
         const page = await context.newPage(); page.setDefaultTimeout(8000);
         const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
         try {
@@ -236,14 +274,70 @@ try {
         });
       });
 
-      await t.test('hasMore: totals from the runner and a discreet "y N más"', async () => {
-        await fixture({ runner: true, hasMore: true }, async page => {
+      await t.test('hasMore as the runner caps it: totals from the runner, "y N más", and a record the next status omits is dropped', async () => {
+        // 130 closed sessions with a pending end, plus background (pending, newest) and foreground (live): 132 candidates for 128 places.
+        await fixture({ runner: true, closed: 130 }, async page => {
           await open(page);
-          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '4');
-          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 4);
+          const listed = await page.evaluate(() => (window as any).agentFixture.listed());
+          assert.equal(listed.length, 128);
+          assert.ok(listed.includes('background') && !listed.includes('foreground'), 'pending first; the live one without alerts falls outside the cap');
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '131');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 131);
+          // The pane still shows the foreground state: terminal_live carries its agent although status omits it.
+          assert.equal(await page.locator('.pane-heading .session-state').first().textContent(), 'Trabajando');
           await page.locator('#session-alerts').click();
           assert.match(await page.locator('#attention-list').textContent() ?? '', /y 3 más/);
+          assert.match(await page.locator('#attention-list').textContent() ?? '', /Cerrada 129Sin ver/);
           await capture(page, engine.name(), 'hasmore');
+          await page.keyboard.press('Escape');
+          // Another window marks the newest closed session seen: the next status omits it (still hasMore).
+          await fx(page, `f.seenElsewhere('closed-129');`);
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '130');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.listed().includes('closed-129')), false);
+          await page.locator('#session-alerts').click();
+          const list = await page.locator('#attention-list').textContent() ?? '';
+          assert.doesNotMatch(list, /Cerrada 129Sin ver/, 'a session seen elsewhere is not kept as pending');
+          assert.match(list, /y 2 más/, 'the omitted slots are counted, not hidden by a stale record');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 130);
+        });
+      });
+
+      // A frame alert of the selected session, already consumed by xterm, is auto-marked only
+      // when nothing covers the terminal. Each cover keeps it pending; removing it marks.
+      const covers: { name: string; options?: Partial<Options>; cover: (page: Page) => Promise<void>; uncover: (page: Page) => Promise<void> }[] = [
+        { name: 'sidebar drawer at 760 px', options: { viewport: { width: 760, height: 640 } },
+          cover: async page => { await page.locator('#toggle-sidebar').click(); await page.waitForFunction(() => getComputedStyle(document.querySelector('#sidebar-scrim')!).display !== 'none'); },
+          uncover: async page => { await page.evaluate(() => document.querySelector<HTMLButtonElement>('#sidebar-scrim')!.click()); } },
+        { name: 'command palette', cover: async page => { await page.keyboard.press('Meta+Shift+P'); await page.locator('dialog.command-palette[open]').waitFor(); },
+          uncover: async page => { await page.keyboard.press('Escape'); await page.locator('dialog.command-palette[open]').waitFor({ state: 'detached' }).catch(() => {}); } },
+        { name: 'Pulso stage', options: { pulso: true }, cover: async page => { await page.locator('#open-pulso').click(); await page.waitForFunction(() => document.querySelector('#open-pulso')?.getAttribute('aria-pressed') === 'true'); },
+          uncover: async page => { await page.locator('#open-pulso').click(); } },
+      ];
+      for (const c of covers) {
+        await t.test(`covered terminal (${c.name}) is not attended: no automatic mark_seen until uncovered`, async () => {
+          await fixture({ runner: true, ...c.options }, async page => {
+            await open(page);
+            await page.waitForTimeout(600);
+            await c.cover(page);
+            await fx(page, `f.raise('foreground','bell',f.output('foreground','\\u0007bell\\r\\n'));`);
+            await page.waitForTimeout(2000);
+            assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.marks), [], 'the frame was consumed, but the terminal is covered');
+            await c.uncover(page);
+            await page.waitForFunction(() => (window as any).agentFixture.marks.length === 1);
+            assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.marks[0]), [{ id: 'foreground', epoch: 4503599627370495, through: 1 }]);
+          });
+        });
+      }
+
+      await t.test('degraded mode: a BEL behind the sidebar drawer at 760 px is an unread alert', async () => {
+        await fixture({ runner: false, viewport: { width: 760, height: 640 } }, async page => {
+          await open(page);
+          await page.waitForTimeout(900);
+          await page.locator('#toggle-sidebar').click();
+          await page.waitForFunction(() => getComputedStyle(document.querySelector('#sidebar-scrim')!).display !== 'none');
+          await fx(page, `f.output('foreground','\\u0007');`);
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '1');
+          assert.equal(await row(page, 'foreground').getAttribute('data-unseen'), 'true');
         });
       });
 

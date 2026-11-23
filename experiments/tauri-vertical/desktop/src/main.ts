@@ -104,6 +104,7 @@ let searchOpen = false;
 let sidebarKey = '';
 let projectListKey = '';
 let sessionSetKey = '';
+// Last heading word per listed session (turnEnded prunes absent ids; cleared on every connection).
 const programSeen = new Map<string, string>();
 // Pulso summary for the sidebar. Never a timer: see sidebar-projects.ts.
 const sidebarProjects = new SidebarProjects((op, args) => requestPulso(op, args), () => runner?.pulsoSummaryVersion === 1);
@@ -1041,7 +1042,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1134,8 +1135,10 @@ $('#close-inspector').addEventListener('click', () => setInspector(false));
 $('#toggle-sidebar').addEventListener('click', () => {
   const open = $('.workspace-shell').classList.toggle('sidebar-open'); $('#sidebar-scrim').hidden = !open;
   $('#toggle-sidebar').setAttribute('aria-expanded', String(open));
+  // The drawer covers or uncovers the terminal: «attended» changes with it.
+  refresh();
 });
-$('#sidebar-scrim').addEventListener('click', closeSidebar);
+$('#sidebar-scrim').addEventListener('click', () => { closeSidebar(); refresh(); });
 $('#session-search').addEventListener('input', () => { query = $<HTMLInputElement>('#session-search').value; refresh(); });
 function setSearchOpen(open: boolean) {
   searchOpen = open || !!query;
@@ -1162,7 +1165,24 @@ window.addEventListener('blur', refresh);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSidebarProjects(); refresh(); });
 // close does not bubble; capture refreshes Dock/header after native focus restoration.
 document.addEventListener('close', refresh, true);
-function isAttended(id: string) { return !document.querySelector('dialog[open]') && document.visibilityState === 'visible' && document.hasFocus() && stageView === 'terminal' && activeView()?.session.id === id; }
+/**
+ * Whether something covers the terminal stage: any open <dialog> (palette,
+ * Configuración, nueva sesión, renombrar, terminar, the Pulso drawer) or, in a
+ * window of 860 px or less, the sidebar drawer with its scrim. The scrim only
+ * displays in that layout, so its computed style is the breakpoint.
+ */
+function terminalCovered(): boolean {
+  if (document.querySelector('dialog[open]')) return true;
+  const scrim = $('#sidebar-scrim');
+  return !scrim.hidden && $('.workspace-shell').classList.contains('sidebar-open') && getComputedStyle(scrim).display !== 'none';
+}
+/**
+ * The one rule for «this session is being attended», used by both attention
+ * sources (automatic seen, client parser), native notices and activity
+ * consumption: visible document, focused window, terminal stage (not Pulso),
+ * nothing covering it, and the session in the focused pane.
+ */
+function isAttended(id: string) { return document.visibilityState === 'visible' && document.hasFocus() && stageView === 'terminal' && !terminalCovered() && activeView()?.session.id === id; }
 function showAttention() {
   filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = ''; setSearchOpen(false);
   $('.workspace-navigation').scrollTop = 0;
