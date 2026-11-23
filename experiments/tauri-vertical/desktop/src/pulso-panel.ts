@@ -1,11 +1,15 @@
 import './pulso-panel.css';
 import { readLastBoard,saveLastBoard } from './board-preferences';
 import { programStateLabel, type ProgramState } from './program-status';
+import { paintAgentIndicator, providerBadge } from './agent-list';
+import type { ActivityKind } from './session-activity';
 
 export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:ProgramState|null };
 type Timestamp = number | string;
 export type PulsoProject = { id: string; title: string; plan: string; mainSessionId: string | null; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp };
-export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null };
+export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null;
+  /** Runner 1.4 board cards (pulsoBoardCardsVersion): footer data. */
+  session?: { id: string; source: 'link' | 'checkpoint' } | null; checkpointCount?: number };
 export type PulsoCheckpoint = { id: string; itemId: string; brief: string; nextAction: string; sessionId?: string | null; actor: string; createdAt: Timestamp; revision?:number };
 type Link = { projectId?: string; itemId?: string; sessionId: string };
 export type PulsoPanelOptions = {
@@ -27,7 +31,14 @@ export type PulsoPanelOptions = {
   resumeSession?: (sourceId: string) => Promise<string|void>;
   /** Board selection or saved data changed (read-only signal for the sidebar summary). */
   onChange?: () => void;
+  /** Runner 1.4 (pulsoRevisionVersion): `statusChanged` replaces the 2 s revision timer. */
+  revisionFromStatus?: () => boolean;
+  /** Runner 1.4 (pulsoBoardCardsVersion): cards carry `session` and `checkpointCount`. */
+  cardFooters?: () => boolean;
+  /** Live activity of a session as the sidebar paints it; null when unknown. */
+  activityOf?: (id: string) => { kind: ActivityKind; label: string } | null;
 };
+export type PulsoLoadedPhases = { board: string; phases: { id: string; title: string; status: PulsoItem['status']; statusLabel: string }[] };
 type Page<T> = { rows: T[]; hasMore: boolean; cursor?: string | number };
 const labels = { todo: 'Por hacer', doing: 'En curso', waiting: 'En espera', done: 'Hecho' };
 export const isLivePulsoSession = (s: Session) => ['starting', 'running'].includes(s.status);
@@ -45,7 +56,8 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; dispose(): void } {
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void;
+  statusChanged(revision: number | null): void; syncLive(): void; loadedPhases(): PulsoLoadedPhases | null; openPhase(id: string): Promise<void>; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
   }
@@ -283,7 +295,65 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const menu=button('',()=>openMoveMenu(item,menu),'quiet pulso-card-menu');menu.setAttribute('aria-label',`Mover ${item.title}`);menu.title='Mover a otra columna';
     menu.setAttribute('aria-haspopup','menu');menu.setAttribute('aria-expanded','false');menu.dataset.focusKey=`move-${item.id}`;
     menu.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
-    controls.append(menu,handle);card.append(controls);return card;
+    controls.append(menu,handle);card.append(controls);
+    if(options.cardFooters?.()){const foot=cardFoot(item);if(foot)card.append(foot);}
+    return card;
+  }
+  /** Runner 1.4 footer: linked session (live state, never «working» without a declared state) and checkpoints. */
+  function cardFoot(item:PulsoItem){
+    const session=item.session&&typeof item.session.id==='string'?item.session:null;
+    const count=typeof item.checkpointCount==='number'&&item.checkpointCount>0?Math.floor(item.checkpointCount):0;
+    if(!session&&!count)return null;
+    const foot=el('div','','pulso-card-foot');
+    if(session){const slot=el('span','','pulso-card-session-slot');slot.dataset.sessionId=session.id;slot.dataset.source=session.source==='checkpoint'?'checkpoint':'link';slot.dataset.itemId=item.id;paintCardSession(slot);foot.append(slot);}
+    if(count)foot.append(el('span',`${count} ${count===1?'checkpoint':'checkpoints'}`,'pulso-card-checkpoints'));
+    return foot;
+  }
+  function fallbackActivity(s:Session):{kind:ActivityKind;label:string}{
+    const state=isLivePulsoSession(s)?s.programState:null;
+    if(state==='working')return{kind:'working',label:programStateLabel(state)};
+    if(state==='blocked'||state==='error')return{kind:'needs',label:programStateLabel(state)};
+    if(state==='done'||state==='idle')return{kind:'idle',label:programStateLabel(state)};
+    return{kind:'unreported',label:isLivePulsoSession(s)?'Sin estado del agente':'Sesión finalizada'};
+  }
+  /** Idempotent: only changed text and attributes are written, so each status can call it. */
+  function paintCardSession(slot:HTMLElement):boolean{
+    const id=slot.dataset.sessionId!,fromCheckpoint=slot.dataset.source==='checkpoint';
+    const s=options.sessions().find(x=>x.id===id);let created=false;
+    if(!s){
+      if(!slot.querySelector('.pulso-card-session-missing'))slot.replaceChildren(el('span','Sesión no disponible','pulso-card-session-missing'));
+      const title=fromCheckpoint?'Sesión del último checkpoint: no está en la lista de este perfil':'La sesión vinculada no está en la lista de este perfil';
+      if(slot.title!==title)slot.title=title;return false;
+    }
+    slot.removeAttribute('title');
+    let control=slot.querySelector<HTMLButtonElement>('button.pulso-card-session');
+    if(!control){
+      control=button('',()=>openCardSession(id),'pulso-card-session');control.dataset.focusKey=`session-${slot.dataset.itemId}`;
+      control.append(el('span','','agent-indicator'),el('span','','provider-badge'),el('span','','pulso-card-session-name'));
+      for(const n of Array.from(control.querySelectorAll('.agent-indicator,.provider-badge')))n.setAttribute('aria-hidden','true');
+      slot.replaceChildren(control);created=true;
+    }
+    const activity=options.activityOf?.(id)??fallbackActivity(s);
+    paintAgentIndicator(control.querySelector<HTMLElement>('.agent-indicator')!,activity.kind,activity.label);
+    const badge=control.querySelector<HTMLElement>('.provider-badge')!,provider=providerBadge(s.kind);
+    if(badge.dataset.provider!==provider.provider){badge.dataset.provider=provider.provider;badge.textContent=provider.letter;}
+    const name=control.querySelector<HTMLElement>('.pulso-card-session-name')!;if(name.textContent!==s.title)name.textContent=s.title;
+    const live=isLivePulsoSession(s);
+    const label=fromCheckpoint?`Sesión del último checkpoint: ${s.title} · ${activity.label}`:`Abrir sesión vinculada ${s.title} · ${activity.label}`;
+    const title=`${fromCheckpoint?'Sesión del último checkpoint · ':''}${s.title} · ${activity.label} · ${live?'Enfocar sesión viva':'Ver historial'}`;
+    if(control.getAttribute('aria-label')!==label)control.setAttribute('aria-label',label);
+    if(control.title!==title)control.title=title;
+    return created;
+  }
+  function syncCardFooters(){
+    if(!options.cardFooters?.())return;let created=false;
+    for(const slot of Array.from(board.querySelectorAll<HTMLElement>('.pulso-card-session-slot')))created=paintCardSession(slot)||created;
+    if(created)freeze();
+  }
+  /** Same function as «Enfocar sesión viva» / «Ver historial»; a draft or pending write keeps the board. */
+  function openCardSession(id:string){
+    if(busy||dirty||failed||navigating||dragging){say('Guarda o descarta el borrador antes de abrir otra sesión.');return;}
+    options.openSession(id);
   }
   let moveMenu:{node:HTMLElement;anchor:HTMLButtonElement;dispose:()=>void}|null=null;
   function closeMoveMenu(focusAnchor:boolean){
@@ -660,7 +730,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   function stop() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
   function schedule() {
-    stop(); if (!available()) return;
+    stop(); if (!available() || options.revisionFromStatus?.()) return;
     timer = setTimeout(async () => {
       if (!available()) return;
       try {
@@ -671,6 +741,36 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       } catch { if (available() && !failed) readError(() => refresh()); }
       finally { schedule(); }
     }, 2000);
+  }
+  /**
+   * Session set or connection changed while the board revision did not:
+   * repaint cards, linked sessions and labels from what is loaded, without
+   * reading Pulso (the 1.3.x timer did a full refresh for this).
+   */
+  function applySessionContext(){
+    const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';
+    if(shownSessions===sessionKey&&bindingContext===context)return;
+    bindings.clear();shownSessions=sessionKey;bindingContext=context;renderLists();syncProgramLabels();
+    if(drawerKind==='item'&&selectedItem)preserveDetailRender(()=>renderItem(selectedItem!,detailItemLinks,detailItemCheckpoints,false));
+    else if(drawerKind==='project'&&selectedProject)preserveDetailRender(()=>renderProject(false));
+  }
+  let lastAuto={key:'',at:0};
+  /** Runner 1.4: called on every status. Reads Pulso only when its revision moved past the loaded board. */
+  function statusChanged(revision:number|null){
+    if(disposed)return;
+    if(!options.revisionFromStatus?.()){if(timer===undefined&&available())schedule();return;}
+    stop();if(!available())return;
+    syncProgramLabels();syncCardFooters();
+    if(busy||refreshing||dirty||failed||dragging||navigating)return;
+    const context=options.bindingCacheKey?.()??'',sessionKey=sessionSignature();
+    const revisionChanged=typeof revision==='number'&&(typeof boardRevision!=='number'||revision>boardRevision);
+    const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;
+    if(!revisionChanged&&!sessionsChanged)return;
+    if(!revisionChanged){applySessionContext();return;}
+    // A failing read is retried at most every 2 s, like the old timer.
+    const key=`${revision}|${sessionKey}|${context}`;
+    if(key===lastAuto.key&&Date.now()-lastAuto.at<2000)return;
+    lastAuto={key,at:Date.now()};void refresh();
   }
   function visibility() { stop(); if (available()) { void refresh(); schedule(); } }
   document.addEventListener('visibilitychange', visibility);
@@ -686,6 +786,23 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(projectId===null)await choosePending();else await chooseProject(projectId);
     },
     currentBoard(){return selectedProject?.id??null;},
+    statusChanged,
+    /** Live session state in card footers (no Pulso read). */
+    syncLive(){if(available())syncCardFooters();},
+    /** Command palette: phases of the project board already loaded; never reads. */
+    loadedPhases(){
+      if(disposed||typeof boardScope!=='string'||!boardProject||boardProject.id!==boardScope)return null;
+      return{board:boardProject.title,phases:statuses.flatMap(status=>columns[status].rows.map(item=>({id:item.id,title:item.title,status:item.status,statusLabel:labels[item.status]})))};
+    },
+    /** Command palette: open a loaded phase's drawer with the usual draft guards. */
+    async openPhase(id){
+      if(disposed||!visible)return;
+      if(refreshing)await refreshing.catch(()=>{});
+      if(disposed||!visible)return;
+      const item=statuses.flatMap(status=>columns[status].rows).find(row=>row.id===id);
+      if(!item){say('Esa fase ya no está en el tablero cargado.');return;}
+      await chooseItem(item);
+    },
     /** Command palette: the same form as the "+" in the top bar (its own draft guards apply). */
     newProject(){if(!disposed&&visible)newProject();},
     /** Command palette: close the card "…" menu before opening over the board. */
