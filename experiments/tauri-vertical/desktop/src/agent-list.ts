@@ -23,6 +23,29 @@ export function agentIndicator(kind: ActivityKind): AgentIndicator {
   }
 }
 
+const checkSvg = '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.3 5 8.7l4.5-5.2"/></svg>';
+/**
+ * Paints an `.agent-indicator` (sidebar rows, top-bar tabs, pane heading,
+ * alerts and status bar share it). Writes only what changed; the label is the
+ * title so the state is also available as text.
+ */
+export function paintAgentIndicator(el: HTMLElement, kind: ActivityKind, label: string): void {
+  const shape = agentIndicator(kind);
+  if (el.dataset.state !== kind) el.dataset.state = kind;
+  if (el.dataset.tone !== shape.tone) el.dataset.tone = shape.tone;
+  if (el.dataset.shape !== shape.shape) {
+    el.dataset.shape = shape.shape;
+    // The check is drawn; the other shapes are CSS. All share one 12px box.
+    el.innerHTML = shape.shape === 'check' ? checkSvg : '';
+  }
+  if (el.title !== label) el.title = label;
+}
+
+/** Provider badge: C (Claude Code), X (Codex) or $ (terminal and anything else). */
+export function providerBadge(kind: string): { provider: 'claude' | 'codex' | 'terminal'; letter: string } {
+  return kind === 'claude' ? { provider: 'claude', letter: 'C' } : kind === 'codex' ? { provider: 'codex', letter: 'X' } : { provider: 'terminal', letter: '$' };
+}
+
 /** Same order as docs/SESSION_ALERTS.md: action, notices, unseen finish, working, waiting, no report. */
 export function agentRank(kind: ActivityKind): number {
   return ({ needs: 0, notice: 1, finished: 2, working: 3, idle: 4, unreported: 5 } as const)[kind] ?? 5;
