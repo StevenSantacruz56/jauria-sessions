@@ -64,6 +64,15 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Paleta de comandos: grupo **Fases** con las fases del tablero de proyecto ya cargado (columna y proyecto como detalle). Elegir una abre Pulso y su detalle con las guardas habituales; escribir no hace lecturas.
 - Con un runner 1.3.x (sin esas capacidades) la interfaz se comporta como antes: varias lecturas por proyecto, temporizador de 2 s, relectura al terminar un turno y tarjetas sin pie. Nueva suite `tests/browser/pulso-revision.test.ts` (Chrome y WebKit) con ambos modos.
 
+### Sin publicar · 1.4.0 entrega E: atención de agentes en el runner
+
+- El runner lee la salida de cada PTY y reconoce OSC 7501 raíz, BEL y notificaciones OSC 9/777 con las mismas reglas que la interfaz, aunque las secuencias lleguen partidas. Nunca guarda ni publica títulos, mensajes ni texto de las notificaciones. El estado es una declaración de la salida del terminal, no la verdad del agente. Vectores compartidos en `desktop/tests/fixtures/program-status-vectors.json`.
+- Registro por sesión: estado declarado, turno (inicio, fin, duración monotónica, interrumpido) y avisos `needs`, `finished`, `bell`, `notify` (1 por segundo), `ended` (solo `exited`/`stopped`/`failed`) y `permission` (solo solicitudes de Codex nuevas), cada uno con su secuencia y, si viene del PTY, el frame que lo completó.
+- `status` añade `agent` por sesión (primero las pendientes; como mucho 256, con `agentAttention.hasMore` y totales de pendientes) y `agentAttentionVersion: 1`; `terminal_live` añade el `agent` de la sesión. Ningún `*Version` existente cambia y los frames son los mismos: la app 1.3.x sigue igual.
+- Operación nueva `mark_seen {items:[{id, through}]}` (hasta 64), monótona e idempotente, en el runner y en el bridge. No toma el cerrojo de mutaciones, no toca custodia y no responde permisos. Marcar lo pintado nunca oculta un aviso posterior.
+- Persistencia en la tabla nueva `agent_attention` de `runner.sqlite`, sin cambiar `user_version` (5), sin FK, triggers ni prefijo `storage_`. `mark_seen` responde tras confirmar en disco (`durable`); el resto se confirma en menos de 250 ms y al cerrar el runner. Purgar o compactar el historial no borra la atención; los avisos sin ver nunca se descartan. Un runner 1.3.3 abre el perfil, purga y compacta sin tocar la tabla (comprobado con su binario).
+- El escaneo ocurre fuera del candado de publicación: en una ráfaga de 50 MiB con `resize` cada 5 ms, `resize` p99 bajó de 2,8–7,7 ms a 0,3–0,7 ms y el drenaje no empeoró. La interfaz que consume este contrato llega aparte.
+
 ## [1.3.3] - 2026-11-18
 
 ### Pulso para agentes

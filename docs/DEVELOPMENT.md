@@ -160,6 +160,7 @@ La interfaz decide qué usar según los campos `*Version` de `status`. La app 1.
 | `pulsoRevision`, `pulsoRevisionVersion: 1` | 1.4 | Revisión de Pulso confirmada, leída de memoria tras cada `COMMIT` (UI y MCP). Se inyecta después de la caché de `status`, así que sigue al día con la base de sesiones ocupada. Ausentes si Pulso no está disponible. |
 | `pulsoSummaryVersion: 1` | 1.4 | Operación de Pulso `sidebar_summary {ifRevision?}`, solo UI. |
 | `pulsoBoardCardsVersion: 1` | 1.4 | Tarjetas de `board` con `session` y `checkpointCount`. `pulsoBoardVersion` sigue en 1. |
+| `agentAttentionVersion: 1`, `agentAttention` | 1.4 | Estado declarado y avisos del runner: `agent` por sesión en `status` y `terminal_live`, y la operación `mark_seen`. Se inyecta desde memoria después de la caché de `status`. Ver [Atención de agentes en el runner](#atención-de-agentes-en-el-runner-14-e). |
 
 Las pruebas de `pulso_store.rs` comprueban con `EXPLAIN QUERY PLAN` que `sidebar_summary` y el pie de tarjeta usan los índices existentes. Dos mediciones son opt-in, sobre bases en memoria sintéticas, desde `experiments/tauri-vertical/runner`:
 
@@ -167,3 +168,38 @@ Las pruebas de `pulso_store.rs` comprueban con `EXPLAIN QUERY PLAN` que `sidebar
 cargo test --release --locked --bin aw-runner pulso_summary_scale -- --ignored --nocapture
 cargo test --release --locked --bin aw-runner pulso_board_cards_scale -- --ignored --nocapture
 ```
+
+## Atención de agentes en el runner (1.4 E)
+
+El comportamiento y sus límites están en [SESSION_ALERTS.md](SESSION_ALERTS.md#estado-y-vistos-en-el-runner-14-e). Contrato para la interfaz:
+
+- `status.sessions[i].agent` (solo sesiones con registro: primero las que tienen avisos pendientes, después las vivas o con estado; como mucho 256) y `terminal_live.agent` (la sesión pedida, o `null`): `state` (`working|blocked|error|done|idle|null`), `changedAt`, `stateFrame`, `turnOpen`, `turnStartedAt`, `turnEndedAt`, `lastTurnMs`, `turnInterrupted`, `alertSeq`, `seenSeq`, `finishedUnseen` y `pending`, un objeto con una entrada por tipo pendiente (`needs`, `finished`, `bell`, `notify`: `{seq, frame}`; `ended`: `{seq}`; `permission`: `{seq, requestId, generation}`). Las horas son milisegundos Unix del reloj del runner; las duraciones, monotónicas. `frame` y `stateFrame` son índices de frame del `terminalStream` de la generación actual del runner, o `null`.
+- `status.agentAttention`: `{hasMore, pendingSessions, pendingAlerts, durable, maxAgents}`. Con `hasMore` la lista de `agent` no está completa; los totales cuentan todas las sesiones.
+- `mark_seen {items:[{id, through}]}` (1 a 64; `through` entero no negativo) responde `{items:[{id, agent|null}], durable}`. Sube `seenSeq` a `max(seenSeq, min(through, alertSeq))`, sin cerrojo de mutaciones ni custodia; no responde permisos.
+- Reglas del cliente: `through` es el `alertSeq` que pintó, nunca uno leído después; solo vale dentro de la misma `generation` de `status`. Un aviso con `frame` se marca visto de forma automática solo cuando la interfaz ya consumió ese frame de `terminal_live` y no está en replay; con `frame: null` (otra generación o aviso sin frame, como `permission` y `ended`) solo por una acción explícita de la persona o al abrir la sesión.
+
+Pruebas, desde `experiments/tauri-vertical/runner` (perfiles, sockets y HOME temporales; solo sesiones `shell` sintéticas):
+
+```sh
+cargo test --locked --bin aw-runner agent_
+cargo test --locked --test agent_attention_rpc
+cargo test --release --locked --test agent_attention_rpc burst -- --ignored --nocapture
+```
+
+La tercera mide una ráfaga de 50 MiB con `resize` concurrente; con `AGENT_BASELINE_RUNNER=/ruta/absoluta/aw-runner` compara con otro binario (`AGENT_BASELINE_LAST=1` invierte el orden; `AGENT_BENCH_NO_RESIZE=1` mide solo el drenaje). Los vectores del parser son `desktop/tests/fixtures/program-status-vectors.json`, compartidos con las pruebas del cliente.
+
+### Vuelta atrás a la versión anterior (paso de la lista de release)
+
+Antes de publicar una versión que añada tablas a `runner.sqlite`, comprueba que el runner de la release anterior abre el perfil. Con 1.3.3:
+
+```sh
+S=$(mktemp -d)   # o el scratchpad de la sesión
+mkdir -p "$S/src"
+git archive v1.3.3 experiments/tauri-vertical/runner | tar -x -C "$S/src"
+(cd "$S/src/experiments/tauri-vertical/runner" && CARGO_TARGET_DIR="$S/target" cargo build --locked)
+JAURIA_PREVIOUS_RUNNER="$S/target/debug/aw-runner" \
+  cargo test --locked --test agent_attention_rpc rollback -- --ignored --nocapture
+```
+
+El runner se lanza siempre con `--data-dir`, `--socket` y `--token-file` explícitos dentro de un directorio temporal y con `HOME` propio; no tiene valores por defecto, así que nunca toca el perfil real ni el runner vivo. La prueba crea filas de `agent_attention` con el runner nuevo, abre el mismo perfil con el anterior, ejecuta allí `purge_history` y `compact_history` sobre una sesión final, y lo reabre con el nuevo: las filas quedan idénticas, `user_version` sigue en 5 y hay exactamente cinco triggers sobre `sessions`/`events`. Se ejecutó con éxito el 23 de noviembre de 2026 contra v1.3.3 (commit `b296f6e`).
+
