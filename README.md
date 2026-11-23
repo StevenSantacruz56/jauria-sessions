@@ -11,11 +11,11 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para editar un mismo repositorio en paralelo, usa un worktree Git distinto por sesión.
 
-**Versión estable: 1.3.3 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md), las [notas de 1.3.3](docs/RELEASE_1.3.3.md) y la [release de GitHub](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3). El DMG se publica sin firma Developer ID ni notarización; consulta sus límites antes de instalarlo.
+**Versión 1.4.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.4.0](docs/RELEASE_1.4.0.md). La última release publicada en GitHub es la [1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) ([notas](docs/RELEASE_1.3.3.md)). El DMG se publica sin firma Developer ID ni notarización; consulta sus límites antes de instalarlo.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
-> Esta rama (`feat/redesign-1.4`) contiene el rediseño **1.4 sin publicar**: describe funciones de 1.4 que aún no tienen release ni etiqueta. La versión publicada sigue siendo 1.3.3; su app no puede guardar **Configuración** con su propio runner (ver [CHANGELOG](CHANGELOG.md)).
+> **1.4.0 preparada, aún sin publicar:** esta rama (`feat/redesign-1.4`) tiene `VERSION` 1.4.0, pero todavía no hay etiqueta `v1.4.0`, DMG ni release de GitHub. La release publicada sigue siendo 1.3.3; su app no puede guardar **Configuración** con su propio runner, lo que corrige 1.4.0 (ver [CHANGELOG](CHANGELOG.md)).
 
 ## Para qué sirve
 
@@ -74,19 +74,22 @@ Puedes volver directamente a una sesión viva, consultar su historial o editar y
 
 ### Pulso con Claude Code y Codex
 
-Pulso es el tablero local de proyectos, fases y avances de Jauría. En 1.3.3, las sesiones nuevas de Claude Code y Codex iniciadas desde Jauría reciben automáticamente el MCP `jauria-pulso` y acceso a todos los proyectos locales, incluida la creación. El interruptor **Configuración → Pulso para agentes → Acceso automático a Pulso** está activado por defecto y permite apagarlo. Cada sesión usa una credencial privada revocada al terminar; Jauría no cambia los permisos nativos de archivos, comandos o red.
+Pulso es el tablero local de proyectos, fases y avances de Jauría. Desde 1.3.3, las sesiones nuevas de Claude Code y Codex iniciadas desde Jauría reciben automáticamente el MCP `jauria-pulso` y acceso a todos los proyectos locales, incluida la creación. El interruptor **Configuración → Pulso para agentes → Acceso automático a Pulso** está activado por defecto y permite apagarlo. Cada sesión usa una credencial privada revocada al terminar; Jauría no cambia los permisos nativos de archivos, comandos o red.
 
 Una conversación ya abierta no carga el MCP añadido después de iniciarse. Para continuar allí, usa **Configuración → Acceso manual para sesiones existentes** y **Copiar instrucciones para el agente**. Ese texto incluye la ruta del permiso privado, pero no su token; compártelo únicamente en la conversación elegida. Las políticas manuales recordadas pueden acotar el acceso por proyecto, herramienta y carpeta. [Alcance y seguridad](docs/PULSO.md#privacidad-permisos-y-límites).
 
-Cuando un programa emite explícitamente **OSC 7501**, la vista viva y **Actividad** muestran su estado. Esta señal no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión, la sesión aparece como **progreso no informado**, aunque su proceso siga abierto; el replay no genera estados ni avisos. Desde 1.4, con un runner 1.4, el runner lee esas señales y conserva el estado, la duración del turno y lo que ya viste: sobreviven a cerrar la ventana y reconectar. Con un runner 1.3.x la reconexión reinicia este estado efímero.
+Cuando un programa emite explícitamente **OSC 7501**, la barra lateral, la pestaña y la cabecera del panel muestran su estado. Esta señal no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión, la sesión aparece como **progreso no informado**, aunque su proceso siga abierto; el replay no genera estados ni avisos. Desde 1.4, con un runner 1.4, el runner lee esas señales y conserva el estado, la duración del turno y lo que ya viste: sobreviven a cerrar la ventana y reconectar. Con un runner 1.3.x la reconexión reinicia este estado efímero.
 
-El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md), [las reglas de estados de 1.3.1](docs/RELEASE_1.3.1.md) y [la entrega 1.3.3](docs/RELEASE_1.3.3.md).
+El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Desde 1.4, con un runner 1.4, la barra lateral y el tablero se actualizan en un segundo o menos cuando un agente edita Pulso, y cada tarjeta muestra en su pie la sesión vinculada y sus checkpoints; pulsarlo abre esa sesión. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md), [las reglas de estados de 1.3.1](docs/RELEASE_1.3.1.md) y [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
 
-La entrega **1.3.3** incluye un DMG verificado para Apple Silicon en GitHub Releases. Consulta [las pruebas y límites de esta versión](docs/RELEASE_1.3.3.md), [la implementación de actividad](docs/RELEASE_1.3.1.md) y [las pruebas anteriores de Pulso](docs/PULSO_VALIDATION_1.3.0.md). Las capturas utilizan un perfil sintético separado.
+La release publicada **1.3.3** incluye un DMG verificado para Apple Silicon en GitHub Releases ([pruebas y límites](docs/RELEASE_1.3.3.md)). Las pruebas y límites de 1.4.0 están en [sus notas](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); las pruebas anteriores de Pulso, en [la validación de 1.3.0](docs/PULSO_VALIDATION_1.3.0.md). Las capturas utilizan datos sintéticos.
 
-![Tablero Pulso en Jauria 1.3.2](docs/screenshots/pulso-1.3.2.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pulso-1.4.0-oscuro.png">
+  <img src="docs/screenshots/pulso-1.4.0.png" alt="Tablero de Pulso en Jauria 1.4.0 con pestañas de tableros y pies de tarjeta con la sesión vinculada y sus checkpoints">
+</picture>
 
-Tablero de ejemplo en Jauria 1.3.2. Captura sintética: no contiene sesiones ni tareas reales.
+Tablero de ejemplo en Jauria 1.4.0. Captura sintética: no contiene sesiones ni tareas reales.
 
 ## Sesiones e historial
 
@@ -100,14 +103,14 @@ Desde 1.4 Jauria ya no incluye **Repositorios** ni tareas Git (registro de repos
 
 **Historial local parcial** indica que Jauria dejó de guardar salida al alcanzar su límite local. La sesión sigue funcionando y puedes escribir, interrumpirla o terminarla. La salida nueva puede faltar al reconectar. Este estado no indica que hayas agotado la cuota de Claude o Codex.
 
-**Actividad** ordena las sesiones por acción requerida, avisos, turnos terminados, trabajo en curso y espera. La fila y la cabecera del terminal muestran el estado declarado por el agente; mientras trabaja se indica desde cuándo lo informa. Una sesión abierta sin reporte queda marcada como progreso no informado. **Avisos** reúne las causas pendientes y permite abrir la sesión desde la barra superior. La campana y el Dock cuentan avisos sin ver. El fin de un turno sigue pendiente aunque el agente pase a `idle` (con un runner 1.4, también aunque empiece otro turno), hasta que abres la sesión; un bloqueo permanece visible mientras el agente lo declare. Marcar visto no resuelve un fallo ni concede permisos. Los avisos de macOS siguen siendo opcionales y usan textos sin nombres ni rutas. Consulta [las reglas y límites](docs/SESSION_ALERTS.md#actividad-y-avisos-desde-131) y [la interfaz con el runner](docs/SESSION_ALERTS.md#la-interfaz-con-el-runner-14-e).
+Con **Agentes → Por estado**, la barra lateral ordena las sesiones por acción requerida, avisos, turnos terminados, trabajo en curso y espera (las secciones de Actividad). La fila, la pestaña y la cabecera del panel muestran el estado declarado por el agente; mientras trabaja se indica desde cuándo lo informa. Una sesión abierta sin reporte queda marcada como progreso no informado. La **campana** de la barra superior reúne las causas pendientes y permite abrir la sesión; la barra de estado dice cuántas te necesitan, terminaron o trabajan. La campana y el Dock cuentan avisos sin ver. El fin de un turno sigue pendiente aunque el agente pase a `idle` (con un runner 1.4, también aunque empiece otro turno), hasta que abres la sesión; un bloqueo permanece visible mientras el agente lo declare. Marcar visto no resuelve un fallo ni concede permisos. Con un runner 1.4, al abrir la ventana lo pendiente aparece en la campana, la barra de estado y el Dock, pero macOS no notifica lo atrasado. Los avisos de macOS siguen siendo opcionales y usan textos sin nombres ni rutas. Consulta [las reglas y límites](docs/SESSION_ALERTS.md#actividad-y-avisos-desde-131) y [la interfaz con el runner](docs/SESSION_ALERTS.md#la-interfaz-con-el-runner-14-e).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/actividad-1.3.2-aviso-oscuro.png">
-  <img src="docs/screenshots/actividad-1.3.2-aviso.png" alt="Actividad en 1.3.2 con una sesión que solicita atención y otra sin progreso informado">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/actividad-1.4.0-aviso-oscuro.png">
+  <img src="docs/screenshots/actividad-1.4.0-aviso.png" alt="Jauria 1.4.0 con la campana abierta: una sesión solicita atención, la barra de estado indica «1 te necesita» y otra sesión trabaja">
 </picture>
 
-![Actividad en 1.3.2 con una sesión que informa trabajo en curso](docs/screenshots/actividad-1.3.2-en-curso.png)
+![Dos paneles como tarjetas en Jauria 1.4.0, cada uno con su cabecera, su carpeta y su estado](docs/screenshots/terminal-dividida-1.4.0.png)
 
 *Capturas sintéticas de la interfaz: no contienen proyectos, sesiones ni rutas reales.*
 
@@ -135,23 +138,29 @@ El código propio está bajo GPL-3.0-only, con condiciones separadas para tercer
 
 ## Capturas
 
-Las capturas son de versiones publicadas (1.0.0 a 1.3.3) y **no muestran la interfaz de 1.4** (barra superior con pestañas y campana, barra lateral con Proyectos y Agentes, cabecera de panel de 32 px, barra de estado, paleta). Se sustituirán al publicar 1.4. Las dos primeras muestran la aplicación en macOS con sesiones temporales de demostración. La vista de Configuración de 1.3.3 y la de pestañas de 1.0.0 usan componentes reales con datos sintéticos, sin perfiles de usuario.
+Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles, sesiones ni rutas de usuario. La de Nueva sesión procede de una versión anterior con una demostración propia.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/terminal-1.4.0-oscuro.png">
+  <img src="docs/screenshots/terminal-1.4.0.png" alt="Jauria 1.4.0: barra lateral con Proyectos y Agentes, pestañas de sesión, cabecera del panel y barra de estado">
+</picture>
+
+*Barra lateral con Proyectos y Agentes, una pestaña por sesión abierta, la cabecera única del panel y la barra de estado.*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/paleta-1.4.0-oscuro.png">
+  <img src="docs/screenshots/paleta-1.4.0.png" alt="Paleta de comandos de Jauria 1.4.0 con sesiones, proyectos y acciones">
+</picture>
+
+*Paleta de comandos (`⌘⇧P`): sesiones, proyectos de Pulso y acciones; las no disponibles muestran el motivo.*
+
+![Configuración de Jauria 1.4.0 con filas compactas y acceso automático a Pulso](docs/screenshots/configuracion-1.4.0.png)
+
+*Configuración: apariencia, límite de sesiones, acceso automático a Pulso activado por defecto y permisos manuales en una sección desplegable.*
 
 ![Diálogo Nueva sesión para elegir herramienta, carpeta de trabajo y nombre](docs/screenshots/nueva-sesion.jpg)
 
-*Nueva sesión: selección de herramienta, carpeta y nombre opcional en una demostración propia.*
-
-![Vista de terminal dividida con dos sesiones de demostración en paneles separados](docs/screenshots/terminal-dividida.jpg)
-
-*Terminal dividida: dos sesiones de demostración visibles lado a lado, sin datos de usuarios.*
-
-![Configuración de Jauria 1.3.3 con acceso automático a Pulso](docs/screenshots/configuracion-1.3.3.png)
-
-*Configuración: acceso automático a Pulso activado por defecto y permisos manuales disponibles en una sección desplegable. Vista sintética de la interfaz.*
-
-![Pestañas Abiertas e Historial con apariencia de navegador](docs/screenshots/pestanas-1.0.0.png)
-
-*Pestaña activa elevada y contadores separados; el selector del panel distingue abiertas e historial.*
+*Nueva sesión (captura de una versión anterior): selección de herramienta, carpeta y nombre opcional.*
 
 ## CPU, RAM y cuotas
 
