@@ -34,7 +34,15 @@ Se calculan con una sola consulta para toda la página (como mucho 80 tarjetas) 
 
 `status` del runner incluye `pulsoRevision`, la revisión global de Pulso confirmada más reciente, y `pulsoRevisionVersion: 1`. Se lee de memoria, sin SQLite, y se actualiza tras cada `COMMIT`, venga de la UI o del MCP de un agente (ambos escriben a través del socket del runner). Un reintento con el mismo `requestId`, una escritura rechazada o un rollback no la mueven. Si Pulso no está disponible, los dos campos no aparecen.
 
-Mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos. No consulta por tarjeta; la vista oculta o el documento oculto detienen ese polling. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
+Con un runner 1.4 la interfaz usa esa revisión en lugar de sondear:
+
+- **Barra lateral:** relee `sidebar_summary` (una llamada, con `ifRevision`) solo cuando `pulsoRevision` cambia y la ventana está visible; si está oculta queda pendiente y se relee al volver. Los demás disparadores (foco, sesiones, salir del tablero) solo leen si el resumen ya no tiene la revisión del runner. Ya no relee al terminar un turno. Agrupa por proyecto las sesiones vinculadas al proyecto y a sus fases; muestra 20 proyectos y «Más proyectos…».
+- **Tablero visible:** cada `status` compara su revisión con la del tablero cargado y solo entonces vuelve a leer `projects` y `board`. Un cambio en las sesiones o en la conexión vuelve a pintar tarjetas, sesiones vinculadas y etiquetas de programa sin leer Pulso. Con un borrador, un error, una escritura, un arrastre o una navegación en curso espera al siguiente `status`.
+- **Pie de tarjeta:** sesión vinculada con su estado en vivo y «n checkpoints». Abre la sesión viva o su historial; con un borrador está deshabilitado. Si la sesión ya no está en este perfil se muestra «Sesión no disponible», sin acción. El estado se actualiza con cada `status` sin volver a leer `board`.
+
+Con un runner 1.3.x, mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos, y la barra lateral hace sus lecturas por proyecto en los eventos de antes, incluido el fin de turno. En ambos casos no consulta por tarjeta; la vista oculta o el documento oculto detienen las lecturas. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
+
+La paleta de comandos ofrece en **Fases** las fases del tablero de proyecto ya cargado; elegir una abre su detalle con las mismas guardas de borrador. No hace lecturas mientras escribes.
 
 ## Recuperar el trabajo
 

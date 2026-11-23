@@ -133,7 +133,10 @@ Desde `experiments/tauri-vertical/desktop`, con Chrome y Playwright WebKit insta
 ```sh
 PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/pulso-panel.test.ts
 PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/browser/pulso-workbench.test.ts
+PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1 node --test tests/browser/pulso-revision.test.ts
 ```
+
+`pulso-revision.test.ts` alterna en el arnés las capacidades `pulsoRevisionVersion`, `pulsoSummaryVersion` y `pulsoBoardCardsVersion`: con ellas cuenta las lecturas de Pulso por ciclo de `status` (cero sin cambios, una relectura por revisión nueva, ninguna con el documento oculto), comprueba el pie de tarjeta y las fases de la paleta; sin ellas, que se conserva el comportamiento 1.3.x. `PULSO_E_SCREENSHOT_DIR=/ruta/absoluta` guarda capturas sintéticas claras y oscuras.
 
 Los fixtures simulan solo la frontera nativa, sin datos personales ni proveedor. Cubren borradores, conflictos, reintentos, permisos, paginación y recuperación. La shell completa conserva xterm y posición de lectura. Para evitar recargas de Vite durante una regresión de terminal, no edites fuentes ni ejecutes varios servidores de estas suites sobre la misma caché al mismo tiempo.
 
