@@ -288,7 +288,7 @@ function historySuffix(view: View) {
   return view.catchup ? 'Recuperando salida guardada…' : view.stream?.desynchronized ? terminalGapNotice : isLocalHistoryLimit(streamMetadata(view.session)?.history) ? '' : historyLabel(streamMetadata(view.session)?.history);
 }
 /** The notice is a floating toast over the workbench (absolute), never part of the terminal's layout. */
-function syncMessageRail() {
+function syncNotice() {
   const notice = $('#notice');
   const view = activeView();
   const history = view && streamMetadata(view.session)?.history;
@@ -300,7 +300,7 @@ function syncMessageRail() {
     notice.dataset.persistent = 'true'; notice.classList.toggle('error', !!persistent);
   }
 }
-function notice(message: string, error = false) { $('#notice').dataset.persistent = 'false'; text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncMessageRail(); }
+function notice(message: string, error = false) { $('#notice').dataset.persistent = 'false'; text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncNotice(); }
 function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
 async function request<T = unknown>(op: string, args: object): Promise<T> {
   const response = await invoke<{ ok: boolean; result: T; error?: string }>('runner_request', { op, args });
@@ -422,7 +422,7 @@ function refresh() {
   $('#status-working').hidden = counts.working === 0; text('#status-working-text', workingLabel(counts.working));
   const quiet = quietLabel(total, counts);
   $('#status-quiet').hidden = quiet === null; text('#status-quiet', quiet ?? '');
-  syncMessageRail();
+  syncNotice();
   nativeAttention.update(source.nativeItems(alerts));
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
@@ -996,7 +996,7 @@ async function poll(version: number) {
           await flushWrites();
           replaying = false;
           refresh();
-          if ($('#notice-text').textContent?.startsWith('Conectado. Recuperando')) { $('#notice').hidden = true; syncMessageRail(); }
+          if ($('#notice-text').textContent?.startsWith('Conectado. Recuperando')) { $('#notice').hidden = true; syncNotice(); }
         }
       }
       await flushWrites();
@@ -1067,7 +1067,7 @@ async function connect() {
       if (!matchesSession(preferred.session, filter, query)) filter = isLive(preferred.session) ? openFilter() : matchesSession(preferred.session, 'attention', '') ? 'attention' : 'closed';
     }
     if (!split) assign(panes[1], null);
-    $('#notice').hidden = replayThrough === 0; syncMessageRail();
+    $('#notice').hidden = replayThrough === 0; syncNotice();
     for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
     if (replaying) notice('Conectado. Recuperando historial…');
     const version = loopVersion;
@@ -1128,7 +1128,7 @@ $('#confirm-stop').addEventListener('click', () => {
     catch (e) { notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true); }
   });
 });
-$('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; syncMessageRail(); });
+$('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; syncNotice(); });
 $('#toggle-split').addEventListener('click', () => setSplit(!split));
 $('#toggle-inspector').addEventListener('click', () => setInspector($('#inspector').hidden));
 $('#close-inspector').addEventListener('click', () => setInspector(false));

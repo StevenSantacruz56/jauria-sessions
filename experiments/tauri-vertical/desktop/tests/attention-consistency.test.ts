@@ -137,7 +137,7 @@ async function geometry(page: Page) {
     // No message rail since 1.4: the fixed chrome is the top bar, the pane heading and the status bar.
     const box = (selector: string) => { const r = document.querySelector(selector)!.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
     const terminal = (window as any).attentionFixture.snapshot().evidence.sessions.find((s: any) => s.id === 'foreground');
-    return { rail: { top: box('.workbench-header'), heading: box('.pane-heading'), status: box('.status-bar') }, rows: terminal.rows, cols: terminal.cols };
+    return { chrome: { top: box('.workbench-header'), heading: box('.pane-heading'), status: box('.status-bar') }, rows: terminal.rows, cols: terminal.cols };
   });
 }
 
@@ -181,10 +181,10 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
       await t.test('old seen Codex failure + unseen background Claude stop = two total, one new; viewing consumes only end activity', async () => {
         await fixture(async page => {
           const before = await geometry(page);
-          assert.deepEqual([before.rail.top.height, before.rail.heading.height, before.rail.status.height], [42, 32, 28]);
+          assert.deepEqual([before.chrome.top.height, before.chrome.heading.height, before.chrome.status.height], [42, 32, 28]);
           await transition(page, 'background', 'stopped'); // Simulated runner result, never send stop.
           await counts(page, 2, 1);
-          assert.deepEqual(await geometry(page), before, 'attention must not resize rail or fitted terminal');
+          assert.deepEqual(await geometry(page), before, 'attention must not resize the fixed chrome or fitted terminal');
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           const rows = page.locator('#session-list .session-item');
           assert.equal(await rows.count(), 2);
@@ -227,9 +227,9 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           assert.equal(dock, 0, 'already-attended end: header is quiet, Dock must also be clear');
           await counts(page, 1, 0);
           // The visible process ending also changes its lifecycle controls. Only
-          // the message rail must stay fixed here; the background-end case above
+          // the fixed chrome must stay fixed here; the background-end case above
           // isolates attention and checks fitted terminal rows/columns as well.
-          assert.deepEqual((await geometry(page)).rail, before.rail);
+          assert.deepEqual((await geometry(page)).chrome, before.chrome);
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           assert.equal(await page.locator('#session-list .session-item').count(), 1, 'attended transient must not remain listed');
           await page.locator('[data-filter="open"]').click();
