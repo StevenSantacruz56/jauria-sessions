@@ -64,29 +64,33 @@ export function mountSettings(options: Options): {
   const general = node('section', '', 'settings-dialog-section');
   const generalTitle = node('h3', 'General'); generalTitle.id = `${prefix}-general`;
   general.setAttribute('aria-labelledby', generalTitle.id);
-  const appearance = node('div', '', 'settings-dialog-row');
+  // Compact rows: label and one line of help on the left, the control on the right;
+  // longer explanations stay behind «Más detalles».
+  const row = (label: HTMLElement, help: HTMLElement | null, control: HTMLElement) => {
+    const wrap = node('div', '', 'settings-dialog-row'); const copy = node('div', '', 'settings-row-copy');
+    copy.append(label); if (help) copy.append(help); wrap.append(copy, control); return wrap;
+  };
+  const more = (...content: HTMLElement[]) => { const details = node('details', '', 'settings-more'); details.append(node('summary', 'Más detalles'), ...content); return details; };
   const themeLabel = node('label', 'Apariencia');
   const theme = node('select'); theme.id = `${prefix}-theme`; themeLabel.htmlFor = theme.id;
   for (const [value, label] of [['system', 'Sistema'], ['light', 'Clara'], ['dark', 'Oscura']]) {
     const option = node('option', label); option.value = value; theme.append(option);
   }
-  appearance.append(themeLabel, theme);
-  general.append(generalTitle, appearance);
+  const themeHelp = node('p', 'Sistema, clara u oscura. Se aplica al pulsar Guardar.', 'settings-row-help');
+  general.append(generalTitle, row(themeLabel, themeHelp, theme));
   const sessions = node('section', '', 'settings-dialog-section');
   const sessionsTitle = node('h3', 'Sesiones'); sessionsTitle.id = `${prefix}-sessions`;
   sessions.setAttribute('aria-labelledby', sessionsTitle.id);
-  const limitRow = node('div', '', 'settings-dialog-row');
   const limitLabel = node('label', 'Máximo de sesiones simultáneas');
   const limit = node('input'); limit.type = 'number'; limit.min = '1'; limit.max = '8'; limit.step = '1';
   limit.id = `${prefix}-limit`; limitLabel.htmlFor = limit.id;
   // No optimistic default: the runner supplies the actual persisted limit.
-  limitRow.append(limitLabel, limit);
-  const range = node('p', 'Consultando el límite del runner…', 'settings-dialog-help');
+  const range = node('p', 'Consultando el límite del runner…', 'settings-row-help');
   range.id = `${prefix}-range`; limit.setAttribute('aria-describedby', range.id);
   const explanation = node('p', 'El límite suma Codex, Claude Code y Terminal. Reducirlo no cierra sesiones existentes; un mismo worktree sigue admitiendo un solo escritor.', 'settings-dialog-help');
   const compatibility = node('p', 'Este runner no permite ajustar el límite. Puedes guardar la apariencia; para cambiar el máximo, actualiza el runner.', 'settings-dialog-help');
   compatibility.hidden = true;
-  sessions.append(sessionsTitle, limitRow, range, explanation, compatibility);
+  sessions.append(sessionsTitle, row(limitLabel, range, limit), compatibility, more(explanation));
   const pulso = node('section', '', 'settings-dialog-section settings-pulso');
   const pulsoTitle = node('h3', 'Pulso para agentes'); pulsoTitle.id = `${prefix}-pulso`;
   pulso.setAttribute('aria-labelledby', pulsoTitle.id);
@@ -107,7 +111,9 @@ export function mountSettings(options: Options): {
   const closeButton = node('button', 'Cerrar', 'quiet'); closeButton.type = 'button';
   const saveButton = node('button', 'Guardar', 'primary'); saveButton.type = 'submit';
   messages.append(error, retry, status, node('span', `Jauría ${options.version}`, 'settings-dialog-version'));
-  footer.append(messages, closeButton, saveButton);
+  // Visible unsaved-changes mark next to Guardar; the status line also announces it.
+  const dirtyMark = node('span', 'Sin guardar', 'settings-dirty'); dirtyMark.hidden = true;
+  footer.append(messages, dirtyMark, closeButton, saveButton);
   const permissionsDetails = node('details', '', 'settings-dialog-section settings-permissions-details');
   const permissionsSummary = node('summary', 'Acceso manual para sesiones existentes');
   const permissionsHost = node('section', '', 'settings-permissions');
@@ -176,6 +182,7 @@ export function mountSettings(options: Options): {
     pulsoCompatibility.hidden = current?.schemaVersion === 2;
     closeButton.disabled = blocked;
     closeButton.textContent = limitDirty || themeDirty || pulsoDirty ? 'Cerrar y conservar borrador' : 'Cerrar';
+    dirtyMark.hidden = !(limitDirty || themeDirty || pulsoDirty);
     saveButton.disabled = blocked || (editable && !loaded);
     saveButton.textContent = busy && !readFailed ? 'Esperando…' : 'Guardar';
     retry.disabled = busy; retry.hidden = !readFailed;
