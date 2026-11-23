@@ -23,7 +23,6 @@ colors:
   light-state-attention: "#955000"
   light-state-ready: "#177243"
   light-state-paused: "#62666f"
-  light-brand-text: "#8a5f00"
   light-error: "#b5313b"
   light-error-bg: "#fff0f1"
   light-notice-bg: "#e9ebee"
@@ -44,7 +43,6 @@ colors:
   dark-state-attention: "#ff9f43"
   dark-state-ready: "#2dbe7e"
   dark-state-paused: "#8d9199"
-  dark-brand-text: "#f0b323"
   dark-error: "#ff9da5"
   dark-error-bg: "#3a2329"
   dark-notice-bg: "#262a30"
@@ -112,14 +110,14 @@ Authority is the built source: `experiments/tauri-vertical/desktop/src/style.css
 
 ## Colors
 
-Frontmatter `light-*` and `dark-*` entries are the values of the CSS variables of the same name (`--sidebar`, `--canvas`, `--surface`, `--raised`, `--text`, `--muted`, `--dim`, `--border`, `--control-border`, `--hover`, `--selected`, `--pressed`, `--focus`, `--state-*`, `--brand-text`, `--error`, `--error-bg`, `--notice-bg`). Explicit `data-theme` wins; with no explicit light choice, system dark appearance applies. The system-dark and explicit-dark blocks in `style.css` are kept identical; a test compares them.
+Frontmatter `light-*` and `dark-*` entries are the values of the CSS variables of the same name (`--sidebar`, `--canvas`, `--surface`, `--raised`, `--text`, `--muted`, `--dim`, `--border`, `--control-border`, `--hover`, `--selected`, `--pressed`, `--focus`, `--state-*`, `--error`, `--error-bg`, `--notice-bg`). Explicit `data-theme` wins; with no explicit light choice, system dark appearance applies. The system-dark and explicit-dark blocks in `style.css` are kept identical; a test compares them.
 
 - **Surfaces.** `--sidebar` for the sidebar, `--canvas` for the workbench background, header and Pulso board, `--surface` for panels, cards, controls and dialogs, `--raised` for the active tab and menus. `--chrome` is an alias of the canvas tone for pane headings, the message rail and the footer.
 - **Lines and states of interaction.** One `--border` for structure; `--control-border` is stronger so inputs and selects stay identifiable. Hover, selection and pressed are translucent overlays (`--hover`, `--selected`, `--pressed`) that work on any surface.
 - **Text.** `--text`, `--muted` for secondary copy, `--dim` for counts, durations and section labels. All pass 4.5:1 on their surfaces.
-- **Focus.** `--focus` is the keyboard ring (2 px outline, 2 px offset), the focused pane outline and the mark of selected choices and interaction emphasis (drop targets, settings switch). `--accent` is kept as an alias of `--focus` for older rules. Focus never changes border width; the focused pane uses an inset outline.
+- **Focus.** `--focus` is the keyboard ring (2 px outline, 2 px offset), the focused pane outline and the mark of selected choices and interaction emphasis (drop targets, settings switch). Focus never changes border width; the focused pane uses an inset outline.
 - **States.** `--state-working`, `--state-attention`, `--state-ready`, `--state-paused`. `--working-text`, `--warning` and `--success` are aliases of the first three, so there is one state system. Errors keep their own `--error` / `--error-bg`.
-- **Amber.** `--brand` (`#f0b323` with `--brand-ink`) is used only by `.primary` buttons and the brand lockup. It is not used for focus, tabs, card hover, counters, provider icons or switches. `--brand-text` (`#8a5f00` on light, `#f0b323` on dark) is reserved for amber text if it is ever needed; the brand kit forbids amber text on white.
+- **Amber.** `--brand` (`#f0b323` with `--brand-ink`) is used only by `.primary` buttons and the brand lockup. It is not used for focus, tabs, card hover, counters, provider icons or switches. The brand kit forbids amber text on white; there is no amber text token.
 - **Terminal.** `--terminal` (`#16191d`) is the same in both appearances and equals the xterm theme background in `terminal-theme.ts`; change both together. `--terminal-text` and `--terminal-muted` style the empty pane that sits on the terminal surface. Provider badges use `--provider-claude`, `--provider-codex` and `--provider-terminal` with `--provider-ink`.
 
 ## Typography
@@ -134,8 +132,8 @@ Native Tauri/macOS app: minimum window 760 × 560 px, initial 1220 × 800 px. Th
 
 Sidebar, top to bottom:
 - **Header (46 px):** brand lockup, search button (⌘K, reveals the search field) and new session button (⌘N).
-- **Proyectos:** Pulso boards with their initial, title and done/total progress, then Pendientes with the count of unfinished cards. A row opens that board in Pulso; the layers button opens Pulso on the last board. The list scrolls inside at most about a third of the sidebar.
-- **Agentes:** heading with "N de M plazas", the Abiertas/Historial tabs, the Por proyecto / Por estado switch (remembered per profile), the attention shortcut when there are alerts, then groups of agent rows. Por proyecto groups by the Pulso project whose main session or project link is the session, and ends with "Sin proyecto". Por estado uses the activity sections: Necesitan tu acción, Avisos, Terminaron, En curso, En espera, Sin estado del agente. Inside a group: needs action, unseen finish, working, rest.
+- **Proyectos:** the first 20 Pulso boards with their initial, title and done/total progress, then Pendientes with the count of unfinished cards, and «Más proyectos…» (opens Pulso) when there are more. A row opens that board in Pulso and keeps keyboard focus; the layers button opens Pulso on the last board. The list scrolls inside at most about a third of the sidebar. The summary is read on events (connect, window focus, leaving or changing the board, session-set changes, an agent reporting done/idle), never on a timer; a Pulso revision in the runner status is planned for delivery E.
+- **Agentes:** heading with "N de M plazas" and an icon button that toggles Por proyecto / Por estado (pressed = Por estado; remembered per profile), the Abiertas/Historial tabs, the attention shortcut when there are alerts, then groups of agent rows. Por proyecto groups by the Pulso project whose main session or project link is the session, and ends with "Sin proyecto". Por estado uses the activity sections: Necesitan tu acción, Avisos, Terminaron, En curso, En espera, Sin estado del agente. Inside a group: needs action, notices, unseen finish, working, waiting, no report.
 - **Footer:** Uso y recursos (disclosure with its own chevron), Configuración (⌘,) and a quiet connection line.
 
 The Git repository and task entry is not shown in the sidebar in 1.4.
@@ -153,8 +151,8 @@ Three radii: 6 px for controls (buttons, inputs, tabs, badges), 8 px for rows an
 ## Components
 
 - **Buttons and fields:** minimum height 32 px, padding 6px 11px, weight 500. Primary is amber; secondary uses the surface and control border; quiet is transparent; icon buttons are transparent and muted until hover. Disabled is opacity .48.
-- **Tabs:** one raised style everywhere (sidebar Abiertas/Historial, the grouping switch and Pulso boards): the active tab gets `--raised` and a 1 px `--border`; no underline and no accent color.
-- **Agent row:** 30 px, one line: provider badge (C, X or $), truncated name, duration in `--dim`, and a state indicator on the right. The indicator spins only for an explicit `working` report (OSC 7501); a green dot means finished and unseen, an orange dot needs action or carries a notice, a grey dot is idle, an empty ring means no report. An open process without a declared state never spins. The state is also present as text (screen-reader label and title), so it never depends on color alone. Animation stops with reduced motion.
+- **Tabs:** one raised style everywhere (sidebar Abiertas/Historial and Pulso boards): the active tab gets `--raised` and a 1 px `--border`; no underline and no accent color.
+- **Agent row:** 30 px, one line: provider badge (C, X or $), truncated name, duration in `--dim`, and a state indicator on the right. Each state has its own shape in the same 12 px box: a spinning ring only for an explicit `working` report (OSC 7501), an orange dot with a halo for needs action or a notice, a green check for finished and unseen, a grey dash for waiting, an empty ring for no report. An open process without a declared state never spins. The state is also present as text (screen-reader label and title), so it never depends on color alone. Animation stops with reduced motion.
 - **Project row:** 30 px: initial tile, title, progress in `--dim`. The active board is marked with `--selected` and `aria-current`.
 - **Pulso cards:** 8 px radius, one `--border`, `--control-border` on hover or focus. The title/note button opens detail; the grip and the native "Mover" select move the card. Column headings are muted with a state dot.
 - **Feedback:** notices, errors and undo stay in normal flow, capped at 25% height, never floating over cards or inline creation.
