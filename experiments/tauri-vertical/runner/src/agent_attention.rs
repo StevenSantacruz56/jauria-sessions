@@ -29,7 +29,7 @@
 //! first; rows with a pending alert are never dropped.
 use crate::agent_signals::{Declared, Signal};
 use anyhow::{Result, ensure};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -532,12 +532,15 @@ fn writer(weak: std::sync::Weak<Shared>, mut conn: Connection) {
             tx.commit()?;
             Ok(())
         })();
+        let m_ok = result.is_ok();
         let mut m = lock(&owner.inner);
         match result {
             Ok(()) => { failures = 0; m.flushed = m.flushed.max(epoch); }
             Err(error) => {
-                failures += 1;
-                // Not committed: requeue. Repeated failure degrades to memory.
+                // Not committed: requeue. BUSY/LOCKED is retried indefinitely
+                // (mark_seen answers durable:false meanwhile); repeated other
+                // failures degrade to memory only.
+                if !crate::storage::Store::history_is_busy(&error) { failures += 1; }
                 m.dirty.extend(ids);
                 m.since.get_or_insert_with(Instant::now);
                 if failures >= 5 {
@@ -550,7 +553,7 @@ fn writer(weak: std::sync::Weak<Shared>, mut conn: Connection) {
         }
         owner.flushed.notify_all();
         drop(m);
-        if failures > 0 { thread::sleep(Duration::from_millis(50)); }
+        if !m_ok { thread::sleep(Duration::from_millis(50)); }
     }
 }
 
@@ -571,6 +574,7 @@ pub fn seen_items(args: &Value) -> Result<Vec<(String, u64)>> {
 /// Existing row count, for tests and diagnostics.
 #[cfg(test)]
 pub fn stored(conn: &Connection, id: &str) -> Result<Option<(u64, u64)>> {
+    use rusqlite::OptionalExtension;
     Ok(conn.query_row("SELECT alert_seq,seen_seq FROM agent_attention WHERE session_id=?", [id], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64))).optional()?)
 }
 

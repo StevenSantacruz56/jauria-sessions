@@ -162,6 +162,7 @@ pub struct Runner {
     status_cache: Mutex<Value>,
     settings: crate::app_settings::AppSettings,
     pulso: Option<Arc<crate::pulso::Service>>,
+    pub(crate) attention: Arc<crate::agent_attention::Attention>,
     // Per-instance fault injection: never change process-wide environment or inventory.
     #[cfg(test)]
     inventory: Arc<dyn Fn(u32) -> Result<Vec<u32>> + Send + Sync>,
@@ -224,6 +225,11 @@ impl Runner {
         File::open("/dev/urandom")?.read_exact(&mut random)?;
         let generation = STANDARD.encode(random);
         let terminal_streams = crate::terminal_stream::TerminalStreams::new(&data_dir.join("runner.sqlite"), generation.clone())?;
+        // Created after every migration and the startup recovery above. Its own
+        // connection; any failure keeps attention in memory, never the profile.
+        let known:Vec<(String,String)>=db.sessions()?.iter().filter_map(|s|Some((s["id"].as_str()?.to_owned(),s["status"].as_str()?.to_owned()))).collect();
+        let attention=crate::agent_attention::Attention::open(Some(&data_dir.join("runner.sqlite")),generation.clone(),&known,
+            crate::agent_attention::system_clock(),crate::agent_attention::Config::default());
         let db = Arc::new(Mutex::new(db));
         let pulso_db = db.clone();
         let pulso_streams = terminal_streams.clone();
@@ -234,7 +240,7 @@ impl Runner {
             Ok(service) => { service.set_auto_enabled(settings.pulso_auto_access()); Some(service) },
             Err(_) => { eprintln!("Pulso no disponible; las terminales siguen operativas. Conserva sus datos y revisa el módulo."); None },
         };
-        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
+        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, attention, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
             #[cfg(test)] inventory: Arc::new(session_survivors),
         })
     }
@@ -318,6 +324,8 @@ impl Runner {
         // Cleanup owned children only; never consult persisted PIDs.
         for child in children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
         self.terminal_streams.shutdown();
+        // Children are stopped, so their ended alerts are recorded: flush them.
+        self.attention.shutdown();
         // Release both gates before joining; quitting already fences every new writer.
         drop(_guard);drop(_workspace);
         for (_,job) in codex_jobs {let _=job.worker.join();}
@@ -370,11 +378,17 @@ impl Runner {
             "input" => &["id","data"], "resize" => &["id","rows","cols"],
             "stop" => &["id","generation"], "interrupt" => &["id"], "purge_history" | "compact_history" => &["id","confirmed"], "release" => &["id","confirmed","generation"], "events" => &["after","limit"],
             "terminal_live" => &["id","after","limit"],
+            "mark_seen" => &["items"],
             _ => bail!("unknown operation"),
         };
         ensure!(args.keys().all(|k| allowed.contains(&k.as_str())), "unexpected argument");
         let args = &request["args"];
         if op == "get_settings" { return Ok(self.settings.snapshot()); }
+        // Seen state only: no mutation gate, no custody, no permission change.
+        if op == "mark_seen" {
+            let items=crate::agent_attention::seen_items(args)?;
+            return Ok(self.attention.mark_seen(&items));
+        }
         if op == "set_settings" {
             let limit=args.get("maxConcurrentSessions").map(|value|value.as_u64().filter(|n|(1..=8).contains(n))
                 .context("maxConcurrentSessions must be an integer from 1 to 8")).transpose()?;
@@ -404,12 +418,15 @@ impl Runner {
             let after=args["after"].as_u64().context("invalid terminal cursor")?;
             let limit=args.get("limit").map(|v|v.as_u64().context("invalid terminal limit")).transpose()?.unwrap_or(64);
             ensure!((1..=64).contains(&limit),"invalid terminal limit");
+            let agent=|mut page:Value|{page["agent"]=self.attention.snapshot(id).unwrap_or(Value::Null);page};
             if self.terminal_streams.session(id).is_none() {
-                return Ok(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation}));
+                return Ok(agent(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation})));
             }
+            // The agent snapshot is taken after the frames: its frame cursors
+            // may point past lastFrame, never at frames already consumed.
             return match self.terminal_streams.live(id,after,limit as usize) {
-                Ok(page)=>Ok(page),
-                Err(_) if self.terminal_streams.session(id).is_none()=>Ok(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation})),
+                Ok(page)=>Ok(agent(page)),
+                Err(_) if self.terminal_streams.session(id).is_none()=>Ok(agent(json!({"archivedOnly":true,"sessionId":id,"generation":self.generation}))),
                 Err(error)=>Err(error),
             };
         }
@@ -501,6 +518,8 @@ impl Runner {
             for live in self.terminal_streams.sessions() {
                 if let Some(row)=sessions.iter_mut().find(|row|row["id"]==live["id"]) {*row=live;} else {sessions.push(live);}
             }
+            // Memory only, after the cache: current even when SQLite is busy.
+            self.attention.status_into(&mut result);
             return Ok(result);
         }
         if op == "events" {
@@ -813,6 +832,8 @@ impl Runner {
             // Lifecycle remains the actual wait/stop result. History completeness
             // is tracked separately and persisted asynchronously, best effort.
             runner.terminal_streams.finish(&id,status,detail);
+            // The reader has drained (or timed out); the turn closes here.
+            runner.attention.process_ended(&id,status);
             if let Some(pulso)=&runner.pulso { let _=pulso.revoke_session(&id); }
             *owned.done.lock().unwrap() = true;
             owned.wake.notify_all();
@@ -877,14 +898,24 @@ impl Runner {
         let runner=self.clone();
         thread::spawn(move || {
             let mut buffer=[0u8;12*1024];
+            let mut scanner=crate::agent_signals::Scanner::new();
+            let mut signals=Vec::new();
             loop {
                 let was_exited=child.exited.load(Ordering::Acquire);
-                let result={
+                let (result,frames)={
                     let _publication=child.publication.lock().unwrap();
                     let result=reader.read(&mut buffer);
-                    if let Ok(n)=result {if n>0 {runner.terminal_streams.output(&id,&buffer[..n]);}}
-                    result
+                    let frames=match result {Ok(n) if n>0=>runner.terminal_streams.output(&id,&buffer[..n]),_=>Vec::new()};
+                    (result,frames)
                 };
+                // Scan after releasing publication: resize never waits for it.
+                // Only this thread reads `buffer`, so the bytes are unchanged.
+                if let Ok(n)=result {
+                    if n>0 {
+                        scanner.feed(&buffer[..n],|offset,signal|signals.push((signal,frames.get(offset/crate::terminal_stream::CHUNK).copied().flatten())));
+                        if !signals.is_empty() {runner.attention.pty(&id,&signals);signals.clear();}
+                    }
+                }
                 match result {
                     Ok(0)=>break,
                     Ok(_)=>{},
@@ -1391,6 +1422,31 @@ mod session_preferences_tests {
         assert_eq!(cached["settings"]["maxConcurrentSessions"],4);
         assert_eq!(cached["settingsVersion"],2);assert_eq!(cached["sessionRenameVersion"],1);
         for row in cached["sessions"].as_array().unwrap() {assert_eq!(row["title"],"renamed");}
+        Ok(())
+    }
+
+    #[test]
+    fn busy_store_status_still_carries_agent_attention()->Result<()> {
+        use crate::agent_signals::{Declared,Signal};
+        let tmp=tempfile::Builder::new().prefix("aw-agent-cache-").tempdir_in("/tmp")?;
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
+        let root=fs::canonicalize(tmp.path())?;
+        let runner=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
+        let request=|op:&str,args:Value|runner.request(json!({"version":1,"token":runner.token,"op":op,"args":args}));
+        runner.db.lock().unwrap().insert(&json!({"id":"a1","title":"a1","kind":"fixture","status":"running","rows":24,"cols":80}))?;
+        request("status",json!({}))?;
+        let _busy=runner.db.lock().unwrap();
+        runner.attention.pty("a1",&[(Signal::State(Declared::Blocked),Some(4))]);
+        let cached=request("status",json!({}))?;
+        let row=cached["sessions"].as_array().unwrap().iter().find(|r|r["id"]=="a1").unwrap();
+        assert_eq!(row["agent"]["state"],"blocked");
+        assert_eq!(row["agent"]["pending"]["needs"],json!({"seq":1,"frame":4}));
+        assert_eq!(cached["agentAttentionVersion"],1);
+        // mark_seen never takes the Store mutex nor the mutation gate.
+        let _gate=runner.mutations.lock().unwrap();
+        let seen=request("mark_seen",json!({"items":[{"id":"a1","through":1}]}))?;
+        assert_eq!(seen["items"][0]["agent"]["seenSeq"],1);
+        assert_eq!(seen["durable"],true);
         Ok(())
     }
 }

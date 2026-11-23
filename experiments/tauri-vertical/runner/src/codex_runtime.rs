@@ -14,10 +14,12 @@ pub enum Intent {
     Permission { request: Value, decision: String },
 }
 #[derive(Clone)]
-pub struct Control { pub stop: Arc<AtomicBool>, pub ready:Arc<AtomicBool>, pub tx: SyncSender<Intent>, pub generation: i64 }
+pub struct Control { pub stop: Arc<AtomicBool>, pub ready:Arc<AtomicBool>, pub tx: SyncSender<Intent>, pub generation: i64,
+    /// Runner attention ledger; told only about newly inserted permission requests.
+    pub attention: Option<Arc<crate::agent_attention::Attention>> }
 pub fn channel(generation: i64) -> (Control, Receiver<Intent>) {
     let (tx, rx) = mpsc::sync_channel(32);
-    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation }, rx)
+    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation, attention: None }, rx)
 }
 fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
     m.lock().map_err(|_| anyhow::anyhow!("Actor mutex poisoned"))
@@ -295,8 +297,10 @@ impl Actor<'_> {
         ensure!(serde_json::to_vec(&payload)?.len() <= 16*1024, "Approval presentation exceeds 16 KiB");
         let mut row = t.identity.clone(); row["id"] = json!(rid); row["nativeRpcId"] = rpc_value(id);
         row["method"] = json!(method); row["payload"] = payload;
-        ledger::record_request(&db.0,&row)?;
+        let (_,inserted)=ledger::record_request_reporting(&db.0,&row)?;
         drop(db);
+        // Committed (autocommit savepoint) and new: a deduplicated retry is not an alert.
+        if inserted { if let Some(attention)=&self.control.attention { attention.permission(self.sid,&rid,self.control.generation); } }
         self.approvals.insert(rid.clone(),a);
         self.event(json!({"method":"runtime/approval","params":{"id":rid,"method":method,"payload":row["payload"]}}))
     }

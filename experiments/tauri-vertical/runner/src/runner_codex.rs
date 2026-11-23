@@ -96,7 +96,7 @@ impl Runner {
     fn codex_control(&self,id:&str,generation:i64)->Result<Control>{
         let jobs=self.codex_jobs.lock().unwrap();let job=jobs.get(id).context("La conexión no está bajo custodia de este runner; no se reenvía la instrucción")?;
         ensure!(!job.worker.is_finished() && job.control.generation==generation && !job.control.stop.load(Ordering::Acquire),"La conexión cambió o se está cerrando");
-        Ok(Control{stop:job.control.stop.clone(),ready:job.control.ready.clone(),tx:job.control.tx.clone(),generation})
+        Ok(Control{stop:job.control.stop.clone(),ready:job.control.ready.clone(),tx:job.control.tx.clone(),generation,attention:job.control.attention.clone()})
     }
     pub(super) fn stop_codex(&self,id:&str,generation:i64)->Result<Value>{
         {
@@ -152,7 +152,7 @@ impl Runner {
                 Some(crate::pulso_mcp_config::PulsoMcp::new(std::env::current_exe()?,self.data_dir.join("pulso-grants").join(format!("{id}.json")))?)
             }else{None}
         }else{None};
-        let (control,rx)=codex_runtime::channel(generation);let worker_control=Control{stop:control.stop.clone(),ready:control.ready.clone(),tx:control.tx.clone(),generation};let owner=self.clone();let sid=id.to_owned();
+        let (control,rx)=codex_runtime::channel(generation);let worker_control=Control{stop:control.stop.clone(),ready:control.ready.clone(),tx:control.tx.clone(),generation,attention:Some(self.attention.clone())};let owner=self.clone();let sid=id.to_owned();
         let worker=thread::Builder::new().name("jauria-codex".into()).spawn(move||{
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||codex_runtime::run(owner.db.clone(),owner.mutations.clone(),worker_control,rx,sid.clone(),cwd,pulso_mcp)));
             if let Some(pulso)=&owner.pulso {let _=pulso.revoke_session(&sid);}
