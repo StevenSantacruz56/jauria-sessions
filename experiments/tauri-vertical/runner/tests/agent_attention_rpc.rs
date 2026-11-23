@@ -191,7 +191,11 @@ fn process_end_closes_the_turn_and_unseen_alerts_survive_a_restart() {
 #[ignore]
 fn burst_with_concurrent_resize_latency() {
     let mut runs = vec![("current", PathBuf::from(env!("CARGO_BIN_EXE_aw-runner")))];
-    if let Some(path) = std::env::var_os("AGENT_BASELINE_RUNNER") { runs.insert(0, ("baseline", PathBuf::from(path))); }
+    if let Some(path) = std::env::var_os("AGENT_BASELINE_RUNNER") {
+        // Alternate the order to expose machine noise (AGENT_BASELINE_LAST=1).
+        let at = if std::env::var_os("AGENT_BASELINE_LAST").is_some() { 1 } else { 0 };
+        runs.insert(at, ("baseline", PathBuf::from(path)));
+    }
     for (name, binary) in runs {
         for round in 0..3 {
             let app = Arc::new(Instance::with_binary(binary.clone()));
@@ -201,7 +205,9 @@ fn burst_with_concurrent_resize_latency() {
             let resizer = { let app = app.clone(); let done = done.clone(); thread::spawn(move || {
                 let mut samples = Vec::new();
                 let mut cols = 80;
-                while !done.load(Ordering::Acquire) {
+                // AGENT_BENCH_NO_RESIZE=1 isolates the reader's own throughput.
+                let enabled = std::env::var_os("AGENT_BENCH_NO_RESIZE").is_none();
+                while enabled && !done.load(Ordering::Acquire) {
                     cols = if cols == 80 { 100 } else { 80 };
                     let at = Instant::now();
                     let response = app.try_rpc("resize", json!({"id":"burst","rows":24,"cols":cols}));
@@ -223,9 +229,63 @@ fn burst_with_concurrent_resize_latency() {
             done.store(true, Ordering::Release);
             let mut samples = resizer.join().unwrap();
             samples.sort_by(f64::total_cmp);
+            if samples.is_empty() { samples.push(f64::NAN); }
             let pick = |q: f64| samples[((samples.len() as f64 * q) as usize).min(samples.len() - 1)];
             eprintln!("{name} round {round}: 50 MiB in {total:.2}s, resize n={} p50={:.2}ms p99={:.2}ms max={:.2}ms, final={}",
                 samples.len(), pick(0.5), pick(0.99), samples[samples.len() - 1], app.row("burst")["status"]);
         }
     }
+}
+
+fn attention_rows(app: &Instance) -> Vec<String> {
+    let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
+    db.prepare("SELECT * FROM agent_attention ORDER BY session_id").unwrap()
+        .query_map([], |r| Ok((0..25).map(|i| format!("{:?}", r.get_ref(i).unwrap())).collect::<Vec<_>>().join("|"))).unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+}
+
+/// Release checklist step (docs/DEVELOPMENT.md): a 1.4 profile with
+/// agent_attention opens in the previous release's runner, which purges and
+/// compacts a final session without touching the table; 1.4 then reopens it.
+/// JAURIA_PREVIOUS_RUNNER=/abs/path/to/v1.3.3/aw-runner \
+///   cargo test --test agent_attention_rpc rollback -- --ignored --nocapture
+#[test]
+#[ignore]
+fn rollback_to_previous_runner_keeps_rows_and_schema_version() {
+    let previous = PathBuf::from(std::env::var_os("JAURIA_PREVIOUS_RUNNER").expect("JAURIA_PREVIOUS_RUNNER"));
+    let mut app = Instance::new();
+    app.shell("done1");
+    app.rpc("input", json!({"id":"done1","data":"printf '\\033]7501;state=working\\007'; sleep 0.1; printf '\\033]7501;state=done\\007\\007'; sleep 0.1; exit\n"}));
+    app.wait_agent("done1", "ended", |a| a["pending"]["ended"].is_object() && a["pending"]["finished"].is_object());
+    app.shell("live1");
+    app.rpc("input", json!({"id":"live1","data":"printf '\\033]7501;state=blocked\\007'\n"}));
+    app.wait_agent("live1", "blocked", |a| a["state"] == "blocked");
+    app.stop();
+    let before = attention_rows(&app);
+    assert_eq!(before.len(), 2);
+    // Previous runner: same disposable data dir, socket, token and HOME.
+    app.binary = previous;
+    app.launch();
+    let status = app.rpc("status", json!({}));
+    assert!(status.get("agentAttentionVersion").is_none(), "this must be the previous runner");
+    assert!(status["sessions"].as_array().unwrap().iter().all(|r| r.get("agent").is_none()));
+    let purged = app.rpc("purge_history", json!({"id":"done1","confirmed":true}));
+    let compacted = app.rpc("compact_history", json!({"id":"done1","confirmed":true}));
+    eprintln!("previous runner: purge {} ranges, compaction {} ranges", purged["purgedRanges"], compacted["purgedRanges"]);
+    app.stop();
+    assert_eq!(attention_rows(&app), before, "previous runner left agent_attention untouched");
+    let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
+    assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
+    drop(db);
+    // Back to this runner: rows intact, unseen alerts still pending.
+    app.binary = PathBuf::from(env!("CARGO_BIN_EXE_aw-runner"));
+    app.launch();
+    let status = app.rpc("status", json!({}));
+    let agent = |id: &str| status["sessions"].as_array().unwrap().iter().find(|r| r["id"] == id).unwrap()["agent"].clone();
+    assert!(agent("done1")["pending"]["ended"].is_object() && agent("done1")["pending"]["finished"].is_object());
+    assert!(agent("live1")["pending"]["needs"].is_object());
+    let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
+    assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
+    assert_eq!(db.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('sessions','events')", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
+    eprintln!("rollback: {} rows kept across the previous runner", before.len());
 }
