@@ -57,6 +57,11 @@ async function install(page:Page) {
   });
 }
 
+// Session picker in the pane heading (replaces the native select since 1.4).
+async function choose(page:Page,pane:number,id:string){
+  await page.locator(`#session-${pane}`).click();
+  await page.locator(`.pane:nth-child(${pane+1}) .session-picker [role="option"][data-session-id="${id}"]`).click();
+}
 try {
   for(const engine of [chromium,webkit])await test(`${engine.name()}: slow background terminal cannot hold focused echo`,async()=>{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});
@@ -75,7 +80,7 @@ try {
       await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent?.includes('a'),undefined,{timeout:250});
       assert.equal(await page.evaluate(()=>(window as any).priorityFixture.waiting),true,'background response remains held while foreground echo paints');
       // A previously background session must become responsive immediately on selection.
-      await page.locator('#session-0').selectOption('background');
+      await choose(page,0,'background');
       assert.equal(await page.locator('.xterm-rows').textContent()?.then(text=>text?.includes('b')),false);
       await page.locator('.xterm-helper-textarea').focus();
       await page.keyboard.press('b');
@@ -88,7 +93,7 @@ try {
       await page.waitForTimeout(200);
       assert.equal((await page.locator('.xterm-rows').textContent())?.split('b').length,2,'stale response cannot duplicate output');
       assert.equal(await page.locator('.pane-heading .session-state').first().textContent(),'Cerrada','late snapshot cannot reopen a closed session');
-      await page.locator('#session-0').selectOption('foreground');
+      await choose(page,0,'foreground');
       await page.evaluate(()=>(window as any).priorityFixture.hold());
       await page.waitForFunction(()=>(window as any).priorityFixture.waiting);
       await page.locator('#connect').click();

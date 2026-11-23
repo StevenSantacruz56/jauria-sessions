@@ -1,4 +1,9 @@
 /** Real application + real xterm, synthetic Tauri boundary only; no native app,
+ * profiles, providers, or live runner. Since 1.4 there is no message rail: the
+ * priority alert lives in the pane heading label, the top-bar bell (popover)
+ * and the status bar; generic notices float. This proves none of them, nor the
+ * session picker, ever moves the terminal host or sends a resize RPC.
+ * (Original header:)
  * profiles, providers, or live runner. Run from desktop:
  * node --test tests/browser/notification-geometry.test.ts
  * Historical UI/CSS/main (served in memory; never replaces checkout files):
@@ -28,18 +33,21 @@ async function installMock(page: Page) {
     const w = window as any;
     const session = { id: 'foreground', title: 'Codex PTY geometry fixture', kind: 'codex',
       transport: 'pty', status: 'running', cwd: '/synthetic/notification-geometry', rows: 24, cols: 80 };
+    const other = { id: 'background', title: 'Background shell fixture', kind: 'terminal',
+      transport: 'pty', status: 'running', cwd: '/synthetic/other', rows: 24, cols: 80 };
     const events: any[] = [];
     const resizes: any[] = [];
+    const inputs: any[] = [];
     const badges: any[] = [];
     const unexpected: string[] = [];
     let focused = true, holdReplay = false, interruptError = '', evidence: any;
     const status = () => structuredClone({ pid: 123, generation: 'synthetic-geometry',
-      normalTerminalVersion: 1, sessions: [session], lastSeq: events.length });
+      normalTerminalVersion: 1, sessions: [session, other], lastSeq: events.length });
     Object.defineProperty(document, 'hasFocus', { value: () => focused });
-    const output = (data: string) => events.push({ seq: events.length + 1,
-      sessionId: session.id, kind: 'output', data: btoa(data) });
+    const output = (data: string, sessionId = session.id) => events.push({ seq: events.length + 1,
+      sessionId, kind: 'output', data: btoa(data) });
     w.geometryFixture = {
-      resizes, badges, unexpected, output,
+      resizes, badges, unexpected, output, inputs,
       focus(value: boolean) { focused = value; },
       failInterrupt(value: string) { interruptError = value; },
       holdReplay(value: boolean) { holdReplay = value; },
@@ -62,9 +70,11 @@ async function installMock(page: Page) {
           } };
           if (args.op === 'resize') {
             resizes.push(structuredClone(args.args));
-            session.cols = args.args.cols; session.rows = args.args.rows;
-            return { ok: true, result: { cols: session.cols, rows: session.rows } };
+            const target = args.args.id === other.id ? other : session;
+            target.cols = args.args.cols; target.rows = args.args.rows;
+            return { ok: true, result: { cols: target.cols, rows: target.rows } };
           }
+          if (args.op === 'input') { inputs.push(structuredClone(args.args)); return { ok: true, result: {} }; }
           if (args.op === 'interrupt') return interruptError ? { ok: false, error: interruptError } : { ok: true, result: {} };
         }
         unexpected.push(`${cmd}:${args?.op ?? ''}`);
@@ -95,7 +105,7 @@ try {
       const browser = await engine.launch(engine === chromium ? { channel: 'chrome' } : {});
       try {
         for (const viewport of [{ width: 1220, height: 800 }, { width: 760, height: 640 }]) {
-          await t.test(`${viewport.width}x${viewport.height}: attention, notices and replay never resize PTY`, async () => {
+          await t.test(`${viewport.width}x${viewport.height}: attention, pane state, popover, picker, notices and replay never resize PTY`, async () => {
             const page = await browser.newPage({ viewport });
             const errors: string[] = [];
             page.on('pageerror', error => errors.push(error.message));
@@ -111,8 +121,11 @@ try {
               assert.equal(await page.locator('#attention-banner').isVisible(), false);
               assert.equal(await page.locator('#notice').isVisible(), false);
               if (!baselineRef) {
-                assert.equal(await page.locator('#workbench-messages').evaluate(el => el.getBoundingClientRect().height), 50);
-                assert.equal(await page.locator('#workbench-messages').getAttribute('data-active'), 'idle');
+                // Fixed chrome: 42 px top bar, 32 px pane heading, 28 px status bar.
+                assert.equal(await page.locator('.workbench-header').evaluate(el => el.getBoundingClientRect().height), 42);
+                assert.equal(await page.locator('.pane-heading').first().evaluate(el => el.getBoundingClientRect().height), 32);
+                assert.equal(await page.locator('.status-bar').evaluate(el => el.getBoundingClientRect().height), 28);
+                assert.equal(await page.locator('#workbench-messages').count(), 0, 'no message rail in the flow');
               }
               const before = await snapshot(page);
               assert.ok(before.cols > 2 && before.rows > 2, 'evidence reports actual fitted xterm dimensions');
@@ -131,9 +144,13 @@ try {
                   if (w.geometrySampling) requestAnimationFrame(sample);
                 }; sample();
               });
+              const chrome = () => page.evaluate(() => ['.workbench-header', '.pane-heading', '.status-bar'].map(selector =>
+                document.querySelector(selector)!.getBoundingClientRect().height));
+              const chromeBefore = await chrome();
               const check = async (label: string) => {
                 await settle(page);
                 const after = await snapshot(page);
+                assert.deepEqual(await chrome(), chromeBefore, `${label}: fixed top bar, pane heading and status bar`);
                 t.diagnostic(JSON.stringify({ viewport, label, before, after }));
                 assert.deepEqual(after.bounds, before.bounds, `${label}: terminal host bounds`);
                 assert.equal(after.resizeCount, before.resizeCount, `${label}: no extra PTY resize RPC / SIGWINCH`);
@@ -159,7 +176,7 @@ try {
                 assert.equal(await page.locator('#attention-banner').isVisible(), false);
                 assert.equal(await page.locator('#session-alerts').isVisible(), false);
                 assert.equal(await page.locator('#attention-filter').isVisible(), false);
-                assert.equal(await page.locator('#workbench-messages').getAttribute('data-active'), 'idle');
+                assert.equal(await page.locator('#notice').isVisible(), false);
                 assert.deepEqual(await page.evaluate(() => (window as any).geometryFixture.badges.filter((args: any) => args.value > 0)), [], 'no positive Dock writes');
               }
               // Each explicit protocol must still alert, recur after consumption,
@@ -167,12 +184,14 @@ try {
               for (const data of ['\x07', '\x1b]9;explicit Codex notice\x07', '\x1b]777;notify;Codex;review needed\x1b\\']) {
                 await page.evaluate(data => (window as any).geometryFixture.output(data), data);
                 await page.waitForFunction(() => !(document.querySelector('#session-alerts') as HTMLElement).hidden);
-                // The bell is the primary alert. The contextual rail opens only
-                // when the user selects its attention filter (since 1.0.1).
+                // The bell is the primary alert; it opens the popover. The status
+                // bar counts the session; neither changes the terminal.
+                await check('explicit notification before opening the popover');
                 await page.evaluate(() => (document.querySelector('#session-alerts') as HTMLButtonElement).click());
-                if (await page.locator('#sidebar-scrim').isVisible()) await page.locator('#sidebar-scrim').click();
                 await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
                 assert.equal(await page.locator('#session-alerts').isVisible(), true);
+                assert.equal(await page.locator('#session-alerts').getAttribute('aria-expanded'), 'true');
+                assert.match(await page.locator('#attention-announcer').textContent() ?? '', /Nuevo aviso/, 'polite live region announces it');
                 await page.waitForFunction(() => (window as any).geometryFixture.badges.some((args: any) => args.value === 1));
                 await check('explicit notification shown');
                 await page.evaluate(() => { (window as any).geometryFixture.focus(true); window.dispatchEvent(new Event('focus')); });
@@ -185,8 +204,8 @@ try {
                 await page.evaluate(() => { const f = (window as any).geometryFixture;
                   f.focus(false); f.output('foreground output while window unfocused\r\n\x07'); });
                 await page.waitForFunction(() => !(document.querySelector('#session-alerts') as HTMLElement).hidden);
-                await page.evaluate(() => (document.querySelector('#session-alerts') as HTMLButtonElement).click());
-                if (await page.locator('#sidebar-scrim').isVisible()) await page.locator('#sidebar-scrim').click();
+                if (await page.locator('#session-alerts').getAttribute('aria-expanded') !== 'true')
+                  await page.evaluate(() => (document.querySelector('#session-alerts') as HTMLButtonElement).click());
                 await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
               };
               await attention();
@@ -195,24 +214,60 @@ try {
               t.diagnostic(JSON.stringify({ viewport, label: 'foreground output/BEL attention shown', before, after: shown }));
               await page.evaluate(() => { (window as any).geometryFixture.focus(true); window.dispatchEvent(new Event('focus')); });
               await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
-              await page.locator('.workbench-heading').click();
+              await page.locator('.top-spacer').click();
               await check('window focus and blank header consume activity');
               assert.deepEqual(shown.bounds, before.bounds, 'attention shown: terminal host bounds');
               assert.equal(shown.resizeCount, before.resizeCount, 'attention shown: no extra resize RPC');
               assert.deepEqual([shown.cols, shown.rows], [before.cols, before.rows], 'attention shown: actual xterm cols/rows');
               await attention();
+              // Popover open/close by keyboard and pointer, with an alert present.
+              await page.locator('#session-alerts').focus(); await page.keyboard.press('Escape');
+              await page.locator('#attention-banner').locator('button').first().focus();
+              await page.keyboard.press('Escape');
+              await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
+              assert.equal(await page.evaluate(() => document.activeElement?.id), 'session-alerts', 'Escape returns focus to the bell');
+              await check('alerts popover closed with Escape');
+              await page.locator('#session-alerts').click();
+              await page.waitForFunction(() => !(document.querySelector('#attention-banner') as HTMLElement).hidden);
+              await check('alerts popover reopened');
               await page.locator('#see-attention').click();
               await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
               await check('mark seen hides attention');
+              // Program states change the pane heading label and the status bar only.
+              for (const state of ['working', 'blocked', 'done', 'idle', 'clear']) {
+                await page.evaluate(state => (window as any).geometryFixture.output(`\x1b]7501;state=${state}\x07`), state);
+                await page.waitForFunction(state => (document.querySelector('.pane-heading .session-state') as HTMLElement)?.textContent !== '' &&
+                  (state === 'clear' || (document.querySelector('.pane-heading .pane-status .agent-indicator') as HTMLElement)?.dataset.state !== undefined), state);
+                await check(`pane heading state ${state}`);
+              }
+              assert.equal(await page.locator('.pane-heading .session-state').first().evaluate(el => getComputedStyle(el).whiteSpace), 'nowrap');
+              await page.evaluate(() => (window as any).geometryFixture.output('\x1b]7501;state=blocked\x07'));
+              await page.waitForFunction(() => document.querySelector('#status-needs-text')?.textContent === '1 te necesita');
+              await check('status bar counts a session that needs you');
+              await page.evaluate(() => (window as any).geometryFixture.output('\x1b]7501;state=clear\x07'));
+              await page.waitForFunction(() => (document.querySelector('#status-needs') as HTMLElement).hidden);
+              await check('status bar counter cleared');
+              // The session picker floats over the pane; typing in its search never reaches the PTY.
+              const inputsBefore = await page.evaluate(() => (window as any).geometryFixture.inputs.length);
+              await page.locator('#session-0').click();
+              await page.locator('.session-picker-search').first().waitFor();
+              await page.keyboard.type('Background shell');
+              await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowUp');
+              await check('session picker open with a query');
+              await page.keyboard.press('Escape');
+              await page.waitForFunction(() => (document.querySelector('.session-picker') as HTMLElement).hidden);
+              await check('session picker closed');
+              assert.equal(await page.evaluate(() => (window as any).geometryFixture.inputs.length), inputsBefore, 'picker keys never reach the PTY');
               await page.evaluate(() => (window as any).geometryFixture.focus(true));
               await page.locator('[data-action="interrupt"]').first().click();
               await page.locator('#notice').waitFor({ state: 'visible' });
               assert.match(await page.locator('#notice-text').innerText(), /enviado/);
               await check('generic success notice shown');
               await attention();
-              assert.equal(await page.locator('#workbench-messages').getAttribute('data-active'), 'attention', 'attention takes priority over generic notice');
+              assert.equal(await page.locator('#notice').isVisible(), true, 'the floating notice and the popover coexist');
               await check('attention and generic notice coexist');
               await page.locator('#see-attention').click();
+              await page.waitForFunction(() => (document.querySelector('#attention-banner') as HTMLElement).hidden);
               await page.locator('#dismiss-notice').click();
               await check('generic notice dismissed');
               const longError = 'Synthetic interrupt failure: ' + 'long/path-without-spaces/'.repeat(100);
@@ -224,10 +279,12 @@ try {
                 'long error really wraps beyond the available notice height');
               await check('long wrapping error notice shown');
               await attention();
-              assert.equal(await page.locator('#workbench-messages').getAttribute('data-active'), 'notice', 'error takes priority over attention');
+              assert.equal(await page.locator('#notice').isVisible(), true, 'the error stays visible beside the popover');
               await check('long error and attention coexist');
               await page.locator('#dismiss-notice').click();
               await check('error dismissed with attention retained');
+              await page.locator('#session-alerts').click();
+              if (await page.locator('#attention-banner').isHidden()) await page.locator('#session-alerts').click();
               await page.locator('#see-attention').click();
               await check('all messages dismissed');
               // Reconnect only the mock, retaining its fitted cols/rows. Hold

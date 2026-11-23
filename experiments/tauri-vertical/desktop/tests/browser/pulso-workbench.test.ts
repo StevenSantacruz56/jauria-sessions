@@ -59,13 +59,13 @@ try{
   const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
   try{
    await install(page);await page.goto(url);await page.locator('#open-pulso').waitFor({state:'visible'});await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-   await page.getByRole('button',{name:/Plan sintético · Integración/}).click();
+   await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();
    await page.locator('#toggle-split').click();await page.waitForTimeout(300);await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.original=document.querySelector('.xterm');f.output(Array.from({length:120},(_,i)=>`Synthetic line ${i}`).join('\r\n')+'\r\n');});
    await page.waitForTimeout(500);await page.evaluate(()=>{const viewport=document.querySelector('.xterm-viewport')as HTMLElement;viewport.scrollTop=200;(window as any).pulsoFixture.scroll=viewport.scrollTop;});
    const prior=await page.evaluate(()=>(window as any).pulsoFixture.resizes.length);
    await page.locator('#open-pulso').click();await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
    assert.equal(await page.locator('dialog[open]').count(),0,'project tab opens only the board');
-   await page.getByLabel('Mover Validar la fluidez de las terminales',{exact:true}).selectOption('waiting');
+   await page.getByRole('button',{name:'Mover Validar la fluidez de las terminales',exact:true}).click();await page.getByRole('menuitem',{name:'Mover a En espera',exact:true}).click();
    await page.getByRole('region',{name:'En espera',exact:true}).getByRole('button',{name:'Abrir Validar la fluidez de las terminales',exact:true}).waitFor();
    assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='grant'||c.op==='link').length),0);
    await page.getByRole('button',{name:'Abrir Validar la fluidez de las terminales',exact:true}).click();
@@ -107,14 +107,14 @@ try{
       await page.waitForFunction(before=>(window as any).pulsoFixture.statusReads>before,pressedAt);
       await page.mouse.up();
       assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
-      assert.equal(await page.locator('#session-0').inputValue(),'related');
-      await page.locator('#session-0').selectOption('main');
+      assert.equal(await page.locator('#session-0').getAttribute('data-session-id'),'related');
+      await page.locator('#session-0').click();await page.locator('.pane:nth-child(1) .session-picker [role="option"][data-session-id="main"]').click();
       assert.equal(await page.locator('#workspace-title').textContent(),'Plan sintético · Integración');
       await page.locator('#toggle-split').click();
-      assert.equal(await page.locator('#session-1').inputValue(),'related');
+      assert.equal(await page.locator('#session-1').getAttribute('data-session-id'),'related');
       await other.click();
       assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
-      assert.equal(await page.locator('#session-0').inputValue(),'main','split navigation must keep the other pane');
+      assert.equal(await page.locator('#session-0').getAttribute('data-session-id'),'main','split navigation must keep the other pane');
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0,'switching must not send terminal input');
       await page.keyboard.type('x');
       await page.waitForFunction(()=>(window as any).pulsoFixture.inputs.length>0);
@@ -154,7 +154,7 @@ try{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
     try {
       await install(page); await page.goto(url); await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      await page.getByRole('button',{name:/Plan sintético · Integración/}).click();
+      await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
       await page.getByRole('button',{name:'Plan y sesiones',exact:true}).click();
       await page.getByRole('button',{name:'Configurar permisos…',exact:true}).click();
@@ -216,11 +216,11 @@ try{
     try{
       await install(page);await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
       await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(300);
-      await page.getByRole('button',{name:/Plan sintético · Integración/}).click();await page.waitForTimeout(300);
+      await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();await page.waitForTimeout(300);
       const prior=await page.evaluate(()=>(window as any).pulsoFixture.resizes.length);
       await page.locator('#open-pulso').click();await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
       await page.setViewportSize({width:760,height:640});await page.waitForTimeout(300);
-      await page.getByLabel('Mover Validar la fluidez de las terminales',{exact:true}).selectOption('waiting');
+      await page.getByRole('button',{name:'Mover Validar la fluidez de las terminales',exact:true}).click();await page.getByRole('menuitem',{name:'Mover a En espera',exact:true}).click();
       const undo=page.locator('.pulso-undo');await undo.getByRole('button',{name:'Deshacer cambio de estado',exact:true}).waitFor();
       const waiting=page.getByRole('region',{name:'En espera',exact:true});
       const add=waiting.getByRole('button',{name:'Añadir fase',exact:true});
@@ -247,7 +247,7 @@ try{
     try{
       await install(page,'\x1b]7501;state=blocked\x07\x1b]7501;state=done\x07');await page.goto(url);
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      const session=page.getByRole('button',{name:/Plan sintético · Integración/});
+      const session=page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/});
       assert.doesNotMatch(await session.innerText(),/Trabajando|Solicita atención|Turno finalizado/,'replayed history stays quiet');
       await session.click();
       const before=await page.evaluate(()=>(window as any).pulsoFixture.phase());
@@ -382,7 +382,12 @@ try{
       await page.locator('#agent-grouping').click();
       assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true','Por estado stays inside Abiertas');
       await page.locator('.session-group[data-activity="needs"]').waitFor();
-      assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
+      // The priority alert reaches the pane heading, the status bar and the bell's list (no message rail since 1.4).
+      assert.equal(await page.locator('.pane').first().locator('.session-state').textContent(),'Solicita atención');
+      assert.equal(await page.locator('#status-needs-text').textContent(),'1 te necesita');
+      await page.locator('#session-alerts').click();
+      assert.match(await page.locator('#attention-list .alerts-row').first().textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
+      await page.keyboard.press('Escape');
       const screenshotDir=process.env.PULSO_SCREENSHOT_DIR;
       if(screenshotDir){
         await mkdir(screenshotDir,{recursive:true});

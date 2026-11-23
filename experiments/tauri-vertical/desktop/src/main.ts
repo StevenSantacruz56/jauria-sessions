@@ -26,11 +26,15 @@ import { attachTerminalKeyboard } from './terminal-keyboard';
 import { preserveTerminalViewport, syncTerminalViewport } from './terminal-viewport';
 import { terminalTheme, terminalTypography } from './terminal-theme';
 import { hasTaskWorkspace, taskStateLabel, validateDraft, type Project, type Task, type WorkspaceData } from './tasks';
-import { shell, paneMarkup, icon } from './ui';
+import { shell, icon } from './ui';
+import { paneMarkup, paintPaneHeader } from './pane-header';
+import { SessionPicker, sessionPickerOptions } from './session-picker';
+import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, needsLabel, workingLabel } from './alerts-popover';
+import { renderSessionTabs, sessionTabs } from './top-bar';
 import { mountPulsoPanel } from './pulso-panel';
 import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
 import { sessionActivity } from './session-activity';
-import { agentIndicator, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
+import { paintAgentIndicator, providerBadge, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
 import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
 
@@ -38,7 +42,7 @@ type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean
 type RunnerStatus = WorkspaceData & { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; workspaceRevision?:string; workspaceNotModified?:boolean; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
-type Pane = { root: HTMLElement; host: HTMLElement; select: HTMLSelectElement; state: HTMLElement; cwd: HTMLElement; size: HTMLElement; id: string | null };
+type Pane = { root: HTMLElement; host: HTMLElement; trigger: HTMLButtonElement; picker: SessionPicker; id: string | null };
 
 // Resolve the supplied mono font before xterm measures its cell geometry.
 const terminalFontsReady = document.fonts ? Promise.all([
@@ -118,7 +122,7 @@ function loadSidebarProjects() {
   if (disposed || !pulsoReadable()) return;
   void sidebarProjects.load().then(changed => { if (changed && !disposed) refresh(); }).catch(() => { /* Keep the last summary; the next trigger retries. */ });
 }
-let selectKey = '';
+let announcedAlerts = new Set<string>();
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
 const stopping = new Set<string>();
@@ -129,6 +133,8 @@ function programLabel(id:string){const state=programStatuses.display(id);return 
 function attentionSessions(): Session[] { return [...views.values()].map(v => ({...v.session, programState:programStatuses.get(v.session.id), programFinishedUnseen:programStatuses.finishedUnseen(v.session.id)})); }
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const newDialog = $<HTMLDialogElement>('#new-session-dialog');
+const alertsPopover = new AlertsPopover({ button: $<HTMLButtonElement>('#session-alerts'), panel: $('#attention-banner'), list: $('#attention-list'),
+  onOpenSession: id => { if (views.has(id)) selectSession(id); }, onToggle: () => queueMicrotask(() => { if (!disposed) refresh(); }) });
 const stopDialog = $<HTMLDialogElement>('#stop-session-dialog');
 let dialogReturn: HTMLElement | null = null;
 let newDialogVersion = 0;
@@ -196,9 +202,16 @@ for (let i = 0; i < 2; i++) {
   root.setAttribute('aria-label', `Panel de sesión ${i + 1}`);
   root.innerHTML = paneMarkup(i);
   $('#panes').append(root);
-  const pane: Pane = { root, host: root.querySelector('.terminal-host')!, select: root.querySelector('select')!, cwd: root.querySelector('.session-directory')!, state: root.querySelector('.session-state')!, size: root.querySelector('.terminal-size')!, id: null };
+  const trigger = root.querySelector<HTMLButtonElement>('.pane-session-button')!;
+  // The picker floats inside the pane (absolute), above the terminal host; it never resizes it.
+  const picker = new SessionPicker({
+    trigger, container: root, label: `Sesión del panel ${i + 1}`,
+    options: () => sessionPickerOptions([...views.values()].map(view => view.session), i, panes.map(p => p.id), split),
+    onSelect: id => { focusedPane = i; if (id) selectSession(id); else { assign(pane, null); refresh(); trigger.focus(); } },
+    onClose: restore => { if (!restore) return; const view = pane.id ? views.get(pane.id) : undefined; if (view && focusedPane === i) focusView(view); else trigger.focus(); },
+  });
+  const pane: Pane = { root, host: root.querySelector('.terminal-host')!, trigger, picker, id: null };
   panes.push(pane);
-  pane.select.addEventListener('change', () => { focusedPane = i; if (pane.select.value) selectSession(pane.select.value); else { assign(pane, null); refresh(); } });
   root.addEventListener('pointerdown', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
   root.addEventListener('focusin', () => { const consumed = pane.id ? attention.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
@@ -215,6 +228,7 @@ for (let i = 0; i < 2; i++) {
       if (op === 'shell') { requireSessionCapacity(); await start(`shell-${crypto.randomUUID()}`, 'shell', `Shell ${i + 1}`, pane); return; }
       const view = pane.id ? views.get(pane.id) : null;
       if (!view) throw new Error('Selecciona una sesión primero.');
+      const label = button.dataset.label ?? button.textContent?.trim() ?? op;
       if (op === 'stop') {
         stopTarget = view.session.id;stopGeneration=view.session.transport==='app-server'?view.session.codex?.generation??null:null;
         text('#stop-session-description', `${view.session.title} · ${providerLabel(view.session.kind)} · ${view.session.cwd ?? 'Sin carpeta'}`);
@@ -238,7 +252,7 @@ for (let i = 0; i < 2; i++) {
         });
       }
       else await request(op, { id: view.session.id });
-      notice(`${button.textContent} enviado a ${view.session.title}.`);
+      notice(`${label} enviado a ${view.session.title}.`);
       focusView(view);
     }));
   });
@@ -249,6 +263,7 @@ function streamReplaying(view?: View) { return !!view && (!!view.streamReplay ||
 function historySuffix(view: View) {
   return view.catchup ? 'Recuperando salida guardada…' : view.stream?.desynchronized ? terminalGapNotice : isLocalHistoryLimit(streamMetadata(view.session)?.history) ? '' : historyLabel(streamMetadata(view.session)?.history);
 }
+/** The notice is a floating toast over the workbench (absolute), never part of the terminal's layout. */
 function syncMessageRail() {
   const notice = $('#notice');
   const view = activeView();
@@ -260,8 +275,6 @@ function syncMessageRail() {
     text('#notice-text', persistent); notice.hidden = !persistent;
     notice.dataset.persistent = 'true'; notice.classList.toggle('error', !!persistent);
   }
-  $('#workbench-messages').dataset.active = !notice.hidden && notice.classList.contains('error') ? 'notice'
-    : !$('#attention-banner').hidden ? 'attention' : !notice.hidden ? 'notice' : 'idle';
 }
 function notice(message: string, error = false) { $('#notice').dataset.persistent = 'false'; text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncMessageRail(); }
 function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
@@ -355,14 +368,32 @@ function refresh() {
   alertButton.setAttribute('aria-label', alertLabel);
   text('#session-alerts-count', String(unseen)); $('#session-alerts-count').hidden = unseen === 0;
   $('#session-alerts').title = `${alertLabel}. ${alerts.length - unseen} ya vistas o atendidas.\n` + alerts.map(a => `${views.get(a.id)?.session.title}: ${a.reason}`).join('\n');
-  const firstAlert = [...alerts].sort((a,b) => {
-    const priority = (id:string) => ({ needs: 0, notice: 1, finished: 2, working: 3, idle: 4, unreported: 5 })[activityById.get(id)?.kind ?? 'unreported'];
-    return priority(a.id)-priority(b.id) || Number(b.unseen)-Number(a.unseen);
-  })[0];
-  $('#attention-banner').hidden = !['attention','activity'].includes(filter) || !firstAlert;
-  text('#attention-summary', firstAlert ? `${views.get(firstAlert.id)?.session.title ?? 'Sesión'} · ${activityById.get(firstAlert.id)?.label ?? 'Aviso'}. ${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}; ${unseen} sin ver.` : 'Sin avisos nuevos.');
+  // Same priority as the sidebar: action, notices, unseen finish, working, waiting, no report.
+  const rows = alertRows(alerts, id => views.get(id)?.session.title, id => activityById.get(id));
+  const firstAlert = rows[0];
+  if (!firstAlert && alertsPopover.isOpen) alertsPopover.close(document.activeElement instanceof HTMLElement && $('#attention-banner').contains(document.activeElement));
+  // The popover floats over the workbench; showing or hiding it never resizes a pane.
+  $('#attention-banner').hidden = !alertsPopover.isOpen || !firstAlert;
+  $('#attention-banner').dataset.open = String(alertsPopover.isOpen && !!firstAlert);
+  alertsPopover.render(rows);
+  text('#attention-summary', firstAlert ? `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}; ${unseen} sin ver.` : 'Sin avisos nuevos.');
   $('#open-attention-session').dataset.sessionId = firstAlert?.id ?? '';
+  $('#open-attention-session').setAttribute('aria-label', firstAlert ? `Abrir sesión ${firstAlert.title}` : 'Abrir sesión');
   $('#see-attention').hidden = unseen === 0;
+  // Polite announcement of new unseen alerts; the live region is visually hidden.
+  const announcement = connected && !replaying ? alertAnnouncement(announcedAlerts, rows) : null;
+  announcedAlerts = unseenKeys(rows);
+  if (announcement) text('#attention-announcer', announcement);
+  // Status bar: fixed 28 px, one line. Counters keep their slot when they change.
+  const counts = statusCounts(sessions.map(s => activityById.get(s.id)?.kind ?? 'unreported'));
+  $('#status-needs').hidden = counts.needs === 0; text('#status-needs-text', needsLabel(counts.needs));
+  // The button opens the session that needs you most: the priority alert when it is one, else the first such session.
+  const needsKind = (id: string) => ['needs', 'notice'].includes(activityById.get(id)?.kind ?? '');
+  const needsTarget = firstAlert && needsKind(firstAlert.id) ? sessions.find(s => s.id === firstAlert.id) : sessions.find(s => needsKind(s.id));
+  $('#status-needs').dataset.sessionId = needsTarget?.id ?? '';
+  $('#status-needs').title = needsTarget ? `Abrir ${needsTarget.title} · ${activityById.get(needsTarget.id)?.label ?? ''}` : '';
+  $('#status-working').hidden = counts.working === 0; text('#status-working-text', workingLabel(counts.working));
+  $('#status-quiet').hidden = counts.needs > 0 || counts.working > 0;
   syncMessageRail();
   nativeAttention.update(alerts);
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
@@ -374,7 +405,6 @@ function refresh() {
   text('#open-count', String(open)); text('#closed-count', String(count('closed')));
   text('#attention-count', `${alerts.length} ${alerts.length === 1 ? 'aviso' : 'avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
-  text('#session-total', `${open} abiertas · ${count('closed')} en historial`);
   const tab = filter === 'activity' ? 'open' : filter;
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === tab)));
   const groupingButton = $('#agent-grouping');
@@ -398,51 +428,28 @@ function refresh() {
   if (turnEnded) loadSidebarProjects();
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
-  for (const id of ['new-session', 'welcome-create']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying || occupied >= sessionLimit();
+  for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying || occupied >= sessionLimit();
   for (const id of ['choose-directory', 'use-home-directory']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction || connecting;
   const terminalSupported = runner?.normalTerminalVersion === 1;
   $<HTMLInputElement>('input[name=provider][value=terminal]').disabled = !terminalSupported || busyAction;
   text('#new-terminal-status', connecting ? 'Conectando…' : !connected ? 'Sin conexión' : terminalSupported ? 'Shell zsh' : 'Requiere reiniciar runner');
   $<HTMLButtonElement>('#start-session').disabled = !selectedDirectory || !connected || connecting || busyAction || replaying || occupied >= sessionLimit() || (!document.querySelector<HTMLInputElement>('input[name=provider]:checked') || ($<HTMLInputElement>('input[name=provider]:checked').value === 'terminal' && !terminalSupported));
   for (const id of ['cancel-session', 'cancel-session-x']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction;
-  const selectionKey = JSON.stringify(sessions.map(s => [s.id, s.title, s.kind, s.status, s.cwd]));
-  if (selectKey !== selectionKey) {
-    selectKey = selectionKey;
-    for (const pane of panes) {
-      const blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Elegir sesión';
-      pane.select.replaceChildren(blank);
-      for (const [label, history] of [['Abiertas', false], ['Historial', true]] as const) {
-        const group = document.createElement('optgroup'); group.label = label;
-        for (const s of sessions.filter(s => ['exited','stopped','failed','interrupted','released'].includes(s.status) === history)) {
-          const option = document.createElement('option'); option.value = s.id;
-          const provider = providerLabel(s.kind);
-          const name = s.title.trim().toLocaleLowerCase() === provider.toLocaleLowerCase() ? s.title : `${s.title} · ${provider}`;
-          const duplicates = sessions.filter(other => other.title === s.title);
-          const folder = s.cwd?.split('/').filter(Boolean).pop();
-          const sameFolder = duplicates.filter(other => other.cwd?.split('/').filter(Boolean).pop() === folder).length > 1;
-          option.textContent = name + (duplicates.length > 1 ? ` · ${folder ?? s.id.slice(-8)}${folder && sameFolder ? ` (${s.id.slice(-8)})` : ''}` : '');
-          group.append(option);
-        }
-        if (group.children.length) pane.select.append(group);
-      }
-    }
-  }
   for (const pane of panes) {
-    pane.select.value = pane.id ?? '';
-    for (const option of Array.from(pane.select.options)) option.disabled = !!option.value && panes.some(p => p !== pane && (split || p === panes[0]) && p.id === option.value);
+    const index = panes.indexOf(pane);
     const view = pane.id ? views.get(pane.id) : null;
     pane.root.hidden = pane === panes[1] && !split;
-    pane.root.classList.toggle('is-focused', panes.indexOf(pane) === focusedPane);
-    pane.state.textContent = view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión';
-    pane.state.title = pane.state.textContent ?? '';
-    pane.state.dataset.state = view && isLive(view.session) ? programStatuses.display(view.session.id) ?? 'unreported' : view?.session.status ?? '';
-    pane.cwd.textContent = view?.session.cwd ?? 'Sin carpeta de sesión';
-    pane.cwd.title = view?.session.cwd ?? '';
-    pane.size.textContent = view?.session.transport==='app-server' ? 'Conversación' : view ? `${view.term.cols} × ${view.term.rows}` : '—';
-    pane.root.querySelector('.pane-provider')!.innerHTML = icon(view?.session.kind === 'claude' ? 'spark' : 'terminal');
-    const history = pane.root.querySelector<HTMLElement>('.history-banner')!;
-    history.hidden = !view || isLive(view.session);
-    history.textContent = view ? (['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · Solo lectura' : `${statusLabel(view.session.status)} · Entrada deshabilitada`) : '';
+    pane.root.classList.toggle('is-focused', index === focusedPane);
+    pane.trigger.dataset.sessionId = pane.id ?? '';
+    const activity = view && (isLive(view.session) || alertById.has(view.session.id)) ? activityById.get(view.session.id) : undefined;
+    paintPaneHeader(pane.root, {
+      paneIndex: index, kind: view?.session.kind ?? null, title: view?.session.title ?? null, cwd: view?.session.cwd ?? null,
+      state: view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
+      stateKey: view && isLive(view.session) ? programStatuses.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
+      activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
+      history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · Solo lectura' : `${statusLabel(view.session.status)} · Entrada deshabilitada`,
+    });
+    pane.picker.refresh();
     (pane.root.querySelector('.fixture-controls') as HTMLElement).hidden = !smoke;
     if (view) view.term.options.disableStdin = view.session.transport==='app-server' || replaying || streamReplaying(view) || !connected || !isLive(view.session) || stopping.has(view.session.id);
     pane.root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
@@ -460,14 +467,21 @@ function refresh() {
       button.disabled = !connected || connecting || busyAction || replaying || (kind === 'shell' && occupied >= sessionLimit()) || (kind !== 'shell' && (!view || !isLive(view.session) || stopping.has(view.session.id))) || (['ping', 'size', 'flood'].includes(kind) && view?.session.kind !== 'fixture');
     });
   }
+  const focusedView = activeView();
+  text('#terminal-size', focusedView?.session.transport === 'app-server' ? 'Conversación' : focusedView ? `${focusedView.term.cols} × ${focusedView.term.rows}` : '—');
   for(const view of views.values())view.chat?.select(connected && !replaying && taskScreen==='terminal' && panes.some((pane,index)=>pane.id===view.session.id && (index===0||split))?view.session:null);
   const hasVisibleSession = panes.some((pane, index) => !!pane.id && (index === 0 || split));
   $('#welcome').hidden = hasVisibleSession || taskScreen !== 'terminal';
   $('#panes').hidden = !hasVisibleSession || taskScreen !== 'terminal';
   $('#panes').dataset.split = String(split);
   $('#toggle-split').setAttribute('aria-pressed', String(split));
+  $('#toggle-split').hidden = planning;
   $<HTMLButtonElement>('#toggle-split').disabled = sessions.length < 2 || planning;
   const current = activeView()?.session;
+  // Top bar: session tabs in terminal views, Pulso board tabs while planning.
+  $('#session-tabs').hidden = planning; $('#tab-new-session').hidden = planning; $('#pulso-tabs-host').hidden = !planning;
+  $('.workbench-header').dataset.view = planning ? 'pulso' : 'terminal';
+  if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), taskScreen === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
   text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
   text('#workspace-breadcrumb', current?.cwd?.split('/').filter(Boolean).pop() ?? (current ? providerLabel(current.kind) : 'Sesiones locales'));
   text('#inspector-provider', current ? providerLabel(current.kind) : '');
@@ -540,17 +554,9 @@ function refresh() {
     button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
     button.dataset.activity = activity.kind;
     const badge = button.querySelector<HTMLElement>('.provider-badge')!;
-    const provider = s.kind === 'claude' || s.kind === 'codex' ? s.kind : 'terminal';
-    if (badge.dataset.provider !== provider) { badge.dataset.provider = provider; badge.textContent = provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$'; }
-    const indicator = button.querySelector<HTMLElement>('.agent-indicator')!;
-    const shape = agentIndicator(activity.kind);
-    indicator.dataset.state = activity.kind; indicator.dataset.tone = shape.tone;
-    if (indicator.dataset.shape !== shape.shape) {
-      indicator.dataset.shape = shape.shape;
-      // The check is drawn; other shapes are CSS. All share one 12px box.
-      indicator.innerHTML = shape.shape === 'check' ? '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.3 5 8.7l4.5-5.2"/></svg>' : '';
-    }
-    if (indicator.title !== activity.label) indicator.title = activity.label;
+    const provider = providerBadge(s.kind);
+    if (badge.dataset.provider !== provider.provider) { badge.dataset.provider = provider.provider; badge.textContent = provider.letter; }
+    paintAgentIndicator(button.querySelector<HTMLElement>('.agent-indicator')!, activity.kind, activity.label);
     const title = button.querySelector('.session-item-title')!;
     if (title.textContent !== s.title) title.textContent = s.title;
     const duration = isLive(s) ? compactDuration(programStatuses.changedAt(s.id)) : '';
@@ -1011,7 +1017,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();programStatuses.reset();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; selectKey = ''; sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();programStatuses.reset();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1052,7 +1058,7 @@ function returnToTerminal() {
   taskScreen = 'terminal'; refresh();
   for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
   if (activeView()) focusView(activeView());
-  else if (panes.some(pane => pane.id)) panes[focusedPane].select.focus();
+  else if (panes.some(pane => pane.id)) panes[focusedPane].trigger.focus();
   else $('#welcome-create').focus();
 }
 function showTask(id: string) {
@@ -1349,7 +1355,13 @@ $('#new-session-form').addEventListener('submit', event => {
   });
 });
 document.querySelectorAll<HTMLInputElement>('input[name=provider]').forEach(input => input.addEventListener('change', refresh));
-for (const id of ['new-session', 'welcome-create']) $(`#${id}`).addEventListener('click', () => openNew());
+for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $(`#${id}`).addEventListener('click', () => openNew());
+// Vertical wheel scrolls the tab strip sideways; the strip hides its scrollbar.
+$('#session-tabs').addEventListener('wheel', event => {
+  const strip = $('#session-tabs');
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || strip.scrollWidth <= strip.clientWidth) return;
+  strip.scrollLeft += event.deltaY; event.preventDefault();
+}, { passive: false });
 $('#new-in-folder').addEventListener('click', () => openNew(activeView()?.session.cwd));
 for (const id of ['cancel-session', 'cancel-session-x']) $(`#${id}`).addEventListener('click', closeNew);
 newDialog.addEventListener('cancel', event => { if (busyAction) event.preventDefault(); });
@@ -1425,10 +1437,17 @@ $('#enable-native-notifications').addEventListener('click', async () => {
 });
 window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
 window.addEventListener('beforeunload', () => { void dockBadge.dispose(); }, { once: true });
-$('#session-alerts').addEventListener('click', showAttention);
-$('#open-attention-session').addEventListener('click', () => { const id = $('#open-attention-session').dataset.sessionId; if (id && views.has(id)) selectSession(id); });
+$('#session-alerts').addEventListener('click', () => {
+  alertsPopover.toggle(); refresh();
+  if (alertsPopover.isOpen) $<HTMLButtonElement>('#open-attention-session').focus({ preventScroll: true });
+});
+$('#attention-show-list').addEventListener('click', () => { alertsPopover.close(false); showAttention(); });
+$('#status-needs').addEventListener('click', () => { const id = $('#status-needs').dataset.sessionId; if (id && views.has(id)) selectSession(id); });
+$('#open-attention-session').addEventListener('click', () => { const id = $('#open-attention-session').dataset.sessionId; alertsPopover.close(false); if (id && views.has(id)) selectSession(id); });
 $('#see-attention').addEventListener('click', () => {
-  attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh(); ($('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
+  attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh();
+  // Marking seen is presentation only; persistent causes keep the popover open on its next action.
+  (!$('#attention-banner').hidden ? $('#open-attention-session') : $('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
 });
 document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => {
   if (button.dataset.filter === 'attention') showAttention();
@@ -1617,6 +1636,7 @@ $('#probe').addEventListener('click', () => void probeTools(true));
 void probeTools();
 pulsoPanel = mountPulsoPanel({
   host: $('#pulso-panel-host'),
+  tabsHost: $('#pulso-tabs-host'),
   request: requestPulso,
   persistenceKey: () => profileDataDir,
   bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,

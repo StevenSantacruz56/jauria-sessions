@@ -89,14 +89,12 @@ async function counts(page: Page, total: number, unseen: number) {
   await page.waitForFunction(({ total, unseen }) => {
     const header = document.querySelector<HTMLElement>('#session-alerts')!;
     const banner = document.querySelector<HTMLElement>('#attention-banner')!;
-    const pressed = (selector: string) => document.querySelector(selector)?.getAttribute('aria-pressed') === 'true';
     return document.querySelector('#attention-count')?.textContent === `${total} ${total === 1 ? 'aviso' : 'avisos'}`
       && header.hidden === (total === 0)
       && header.dataset.total === String(total) && header.dataset.unread === String(unseen)
       && document.querySelector<HTMLElement>('#session-alerts-count')!.hidden === (unseen === 0)
-      // The banner belongs to the visible controls that show it: the attention
-      // list, or the Abiertas tab while the grouping button is in Por estado.
-      && banner.hidden === (!(pressed('[data-filter="attention"]') || (pressed('[data-filter="open"]') && pressed('#agent-grouping'))) || total === 0);
+      // Since 1.4 the alert list is the bell's popover: shown only while open and non-empty.
+      && banner.hidden === (header.getAttribute('aria-expanded') !== 'true' || total === 0);
   }, { total, unseen });
   assert.equal(await page.title(), unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría');
   const dock = await page.evaluate(() => (window as any).attentionFixture.badges.at(-1) ?? 0);
@@ -113,9 +111,10 @@ async function geometry(page: Page) {
   // Allow the production ResizeObserver debounce and evidence cadence to settle.
   await page.waitForTimeout(700);
   return page.evaluate(() => {
-    const r = document.querySelector('#workbench-messages')!.getBoundingClientRect();
+    // No message rail since 1.4: the fixed chrome is the top bar, the pane heading and the status bar.
+    const box = (selector: string) => { const r = document.querySelector(selector)!.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
     const terminal = (window as any).attentionFixture.snapshot().evidence.sessions.find((s: any) => s.id === 'foreground');
-    return { rail: { x: r.x, y: r.y, width: r.width, height: r.height }, rows: terminal.rows, cols: terminal.cols };
+    return { rail: { top: box('.workbench-header'), heading: box('.pane-heading'), status: box('.status-bar') }, rows: terminal.rows, cols: terminal.cols };
   });
 }
 
@@ -159,11 +158,11 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
       await t.test('old seen Codex failure + unseen background Claude stop = two total, one new; viewing consumes only end activity', async () => {
         await fixture(async page => {
           const before = await geometry(page);
-          assert.equal(before.rail.height, 50);
+          assert.deepEqual([before.rail.top.height, before.rail.heading.height, before.rail.status.height], [42, 32, 28]);
           await transition(page, 'background', 'stopped'); // Simulated runner result, never send stop.
           await counts(page, 2, 1);
           assert.deepEqual(await geometry(page), before, 'attention must not resize rail or fitted terminal');
-          await page.locator('#session-alerts').click();
+          await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           const rows = page.locator('#session-list .session-item');
           assert.equal(await rows.count(), 2);
           assert.equal(await rows.filter({ hasText: 'Codex historical failure' }).getAttribute('data-unseen'), 'false');
@@ -192,7 +191,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           // the message rail must stay fixed here; the background-end case above
           // isolates attention and checks fitted terminal rows/columns as well.
           assert.deepEqual((await geometry(page)).rail, before.rail);
-          await page.locator('#session-alerts').click();
+          await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           assert.equal(await page.locator('#session-list .session-item').count(), 1, 'attended transient must not remain listed');
           await page.locator('[data-filter="open"]').click();
           await page.locator('#session-list .session-item').filter({ hasText: 'Claude background' }).click();
@@ -206,7 +205,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
         await fixture(async page => {
           await transition(page, 'foreground', 'failed');
           await counts(page, 2, 0);
-          await page.locator('#session-alerts').click();
+          await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           const failed = page.locator('#session-list .session-item').filter({ hasText: 'Claude foreground' });
           assert.match(await failed.textContent() ?? '', /Falló/);
           assert.doesNotMatch(await failed.textContent() ?? '', /El proceso terminó/);
@@ -218,7 +217,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await page.locator('#session-alerts').click();
           await page.locator('#see-attention').click();
           await counts(page, 3, 0);
-          await page.locator('#session-alerts').click();
+          await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           assert.equal(await page.locator('#session-list .session-item').count(), 3);
           assert.match(await page.locator('#session-list').textContent() ?? '', /custodia/);
           const states = await page.evaluate(() => (window as any).attentionFixture.snapshot().sessions);
@@ -235,7 +234,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await page.locator('#session-alerts').click();
           await page.locator('#see-attention').click();
           await counts(page, 2, 0);
-          await page.locator('#session-alerts').click();
+          await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           assert.match(await page.locator('#session-list').textContent() ?? '', /Visto.*2 permisos pendientes/s);
           const reads = await page.evaluate(() => (window as any).attentionFixture.snapshot().permissionReads);
           await page.waitForFunction(n => (window as any).attentionFixture.snapshot().permissionReads > n, reads);
@@ -259,11 +258,15 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await page.getByLabel('Nombre de la sesión').fill('Claude Code');
           await page.getByRole('button', {name: 'Guardar nombre', exact: true}).click();
           await page.waitForFunction(() => !document.querySelector('dialog[open]'));
-          assert.equal(await pane.locator('select option:checked').textContent(), 'Claude Code');
+          assert.equal(await pane.locator('.pane-session-name').textContent(), 'Claude Code');
           assert.deepEqual(await geometry(page), before, 'dialogs and rename preserve fitted terminal geometry');
-          assert.deepEqual(await pane.locator('select optgroup').evaluateAll(groups => groups.map(g => ({label: (g as HTMLOptGroupElement).label, count: g.children.length}))), [
+          await pane.locator('.pane-session-button').click();
+          assert.deepEqual(await pane.locator('.session-picker [role="group"]').evaluateAll(groups => groups.map(g => ({label: g.querySelector('.session-picker-group')?.textContent, count: g.querySelectorAll('[role="option"]').length}))), [
             {label: 'Abiertas', count: 2}, {label: 'Historial', count: 1},
           ]);
+          assert.equal(await pane.locator('.session-picker [role="option"][aria-selected="true"]').textContent().then(t => t?.includes('Claude Code')), true);
+          await page.keyboard.press('Escape');
+          assert.deepEqual(await geometry(page), before, 'the session picker preserves fitted terminal geometry');
           await page.evaluate(() => (window as any).attentionFixture.history('foreground', 'limited', 'quota'));
           await page.waitForTimeout(1300);
           assert.equal(await pane.locator('.session-state').textContent(), 'Abierta');
