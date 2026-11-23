@@ -27,7 +27,7 @@ runner=APP/'runner';desktop=APP/'desktop'
 run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],desktop)
 run(['npm','run','build'],desktop)
 run(['node','--test',*map(str,sorted((desktop/'tests').glob('*.test.ts')))],desktop)
-run(['cargo','test','--locked','--bin','aw-runner','--test','rpc','--test','storage_retention','--test','terminal_stream_rpc','--test','app_settings','--test','session_preferences_rpc','--test','listener_latency','--test','pulso_rpc','--test','native_resume_rpc','--test','legacy_profile_rpc','--test','pulso_latency'],runner)
+run(['cargo','test','--locked','--bin','aw-runner','--test','rpc','--test','storage_retention','--test','terminal_stream_rpc','--test','app_settings','--test','session_preferences_rpc','--test','listener_latency','--test','pulso_rpc','--test','native_resume_rpc','--test','legacy_profile_rpc','--test','pulso_latency','--test','agent_attention_rpc'],runner)
 run(['cargo','build','--release','--locked'],runner)
 run(['cargo','test','--locked'],desktop/'src-tauri')
 if not args.check_only:
