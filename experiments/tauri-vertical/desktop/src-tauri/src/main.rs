@@ -105,6 +105,7 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         "input" => &["id","data"], "resize" => &["id","rows","cols"],
         "stop" => &["id","generation"], "interrupt" => &["id"], "events" => &["after","limit"],
         "terminal_live" => &["id","after","limit"],
+        "mark_seen" => &["items"],
         _ => return Err("Operación no permitida".into()),
     };
     if obj.keys().any(|k| !fields.contains(&k.as_str())) { return Err("Argumento no permitido".into()); }
@@ -143,6 +144,16 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     if op == "input" && args["data"].as_str().is_none_or(|s| s.len() > 16 * 1024) { return Err("Entrada inválida o mayor de 16 KiB".into()); }
     if op == "events" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=1000).contains(&n))) { return Err("Cursor o límite inválido".into()); }
     if op == "terminal_live" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=64).contains(&n))) { return Err("Cursor o límite de terminal inválido".into()); }
+    if op == "mark_seen" {
+        // Seen state only: 1..64 items of exactly {id, through:u64}.
+        let items = args["items"].as_array().filter(|items| (1..=64).contains(&items.len())).ok_or("Lista de vistos inválida")?;
+        for item in items {
+            let fields = item.as_object().ok_or("Elemento de vistos inválido")?;
+            if fields.len() != 2 || item["through"].as_u64().is_none() { return Err("Elemento de vistos inválido".into()); }
+            let id = item["id"].as_str().ok_or("Falta id")?;
+            if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') { return Err("ID inválido".into()); }
+        }
+    }
     Ok(())
 }
 #[tauri::command]
@@ -508,6 +519,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mark_seen_bridge_accepts_only_bounded_id_through_items() {
+        assert!(validate("mark_seen", &json!({"items":[{"id":"session-1","through":0},{"id":"b","through":u64::MAX}]})).is_ok());
+        let full: Vec<_> = (0..64).map(|n| json!({"id":format!("s{n}"),"through":n})).collect();
+        assert!(validate("mark_seen", &json!({"items":full})).is_ok());
+        let over: Vec<_> = (0..65).map(|n| json!({"id":format!("s{n}"),"through":n})).collect();
+        for args in [json!({}), json!({"items":[]}), json!({"items":over}), json!({"items":{"id":"a","through":1}}),
+            json!({"items":[{"id":"a","through":1}],"generation":1}), json!({"items":[{"id":"a"}]}),
+            json!({"items":[{"through":1}]}), json!({"items":[{"id":"a","through":-1}]}), json!({"items":[{"id":"a","through":1.5}]}),
+            json!({"items":[{"id":"a","through":"1"}]}), json!({"items":[{"id":"a","through":1,"seen":true}]}),
+            json!({"items":[{"id":"../x","through":1}]}), json!({"items":[{"id":"","through":1}]}),
+            json!({"items":[{"id":"x".repeat(65),"through":1}]}), json!({"items":["a"]}), json!(null)] {
+            assert!(validate("mark_seen", &args).is_err(), "{args}");
+        }
+    }
     #[test]
     fn settings_bridge_has_strict_fields_and_integer_limits() {
         assert!(validate("get_settings", &json!({})).is_ok());
