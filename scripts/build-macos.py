@@ -4,7 +4,8 @@ from pathlib import Path
 import argparse, os, platform, shlex, shutil, subprocess
 ROOT=Path(__file__).resolve().parents[1]
 APP=ROOT/'experiments/tauri-vertical'
-p=argparse.ArgumentParser();p.add_argument('--check-only',action='store_true');p.add_argument('--debug',action='store_true',help='Build a development desktop bundle instead of the optimized release.');args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--check-only',action='store_true');p.add_argument('--debug',action='store_true',help='Build a development desktop bundle instead of the optimized release.')
+p.add_argument('--skip-browser-tests',action='store_true',help='Do not run the browser suites (scripts/browser-tests.py). The output says so; a release build must not use it.');args=p.parse_args()
 if platform.system()!='Darwin' or platform.machine()!='arm64':raise SystemExit('This release supports macOS Apple Silicon only.')
 for tool in ('cargo','rustc','node','npm','xcodebuild'):
     if not shutil.which(tool):raise SystemExit('Install '+tool+' and expose it on PATH before building.')
@@ -27,6 +28,9 @@ runner=APP/'runner';desktop=APP/'desktop'
 run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],desktop)
 run(['npm','run','build'],desktop)
 run(['node','--test',*map(str,sorted((desktop/'tests').glob('*.test.ts')))],desktop)
+SKIPPED='AVISO: se saltaron TODAS las pruebas de navegador (--skip-browser-tests): tests/browser, pulso-panel, settings, agent-permissions, attention-consistency y terminal-stream. Este build no valida la interfaz.'
+if args.skip_browser_tests: print(SKIPPED,flush=True)
+else: run(['python3','scripts/browser-tests.py'],ROOT)
 run(['cargo','test','--locked','--bin','aw-runner','--test','rpc','--test','storage_retention','--test','terminal_stream_rpc','--test','app_settings','--test','session_preferences_rpc','--test','listener_latency','--test','pulso_rpc','--test','native_resume_rpc','--test','legacy_profile_rpc','--test','pulso_latency','--test','agent_attention_rpc'],runner)
 run(['cargo','build','--release','--locked'],runner)
 run(['cargo','test','--locked'],desktop/'src-tauri')
@@ -35,3 +39,4 @@ if not args.check_only:
     if args.debug: command.append('--debug')
     run([*command,'--','--locked'],desktop)
     print('Unsigned local bundle:',desktop/'src-tauri/target'/('debug' if args.debug else 'release')/'bundle/macos')
+if args.skip_browser_tests: print(SKIPPED,flush=True)
