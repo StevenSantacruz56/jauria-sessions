@@ -487,6 +487,14 @@ impl Runner {
             result["settings"]=self.settings.snapshot();
             result["settingsVersion"]=json!(2);
             result["sessionRenameVersion"]=json!(1);
+            // New capabilities get new fields: 1.3.x clients compare the existing
+            // *Version values with === 1, so none of them may ever be raised.
+            // In-memory counter published after each Pulso COMMIT; no SQLite here,
+            // so it stays current even when the session store uses the cache.
+            if let Some(pulso)=self.pulso.as_ref().filter(|p|p.available()) {
+                result["pulsoRevision"]=json!(pulso.revision());
+                result["pulsoRevisionVersion"]=json!(1);
+            }
             let sessions=result["sessions"].as_array_mut().context("Invalid session cache")?;
             for live in self.terminal_streams.sessions() {
                 if let Some(row)=sessions.iter_mut().find(|row|row["id"]==live["id"]) {*row=live;} else {sessions.push(live);}
@@ -1565,4 +1573,86 @@ mod terminal_history_recovery_tests {
     fn failed_final_checkpoint_does_not_block_new_admission_or_purge()->Result<()> {final_checkpoint_failure(false)}
     #[test]
     fn release_uses_observed_custody_even_when_database_still_says_running()->Result<()> {final_checkpoint_failure(true)}
+}
+
+#[cfg(test)]
+mod pulso_revision_tests {
+    use super::*;
+    use std::{io::BufRead, os::unix::net::UnixStream};
+    // Synthetic profile, own socket and token in a temporary directory.
+    fn fixture() -> Result<(tempfile::TempDir,PathBuf,Arc<Runner>)> {
+        let tmp=tempfile::Builder::new().prefix("aw-pulso-rev-").tempdir_in("/tmp")?;
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
+        let root=fs::canonicalize(tmp.path())?;
+        let runner=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
+        Ok((tmp,root,runner))
+    }
+    fn status(r:&Arc<Runner>)->Result<Value> { r.request(json!({"version":1,"token":r.token,"op":"status","args":{}})) }
+    fn pulso(root:&Path,op:&str,args:Value)->Result<Value> {
+        let token=fs::read_to_string(root.join("pulso.token"))?;
+        let mut stream=UnixStream::connect(root.join("pulso.sock"))?;
+        writeln!(stream,"{}",json!({"version":1,"token":token,"op":op,"args":args}))?;
+        let mut line=String::new();std::io::BufReader::new(stream).read_line(&mut line)?;
+        let reply:Value=serde_json::from_str(&line)?;
+        ensure!(reply["ok"]==true,"{}",reply["error"]);
+        Ok(reply["result"].clone())
+    }
+    fn meta(root:&Path)->Result<u64> { pulso(root,"revision",json!({}))?["revision"].as_u64().context("revision") }
+
+    #[test]
+    fn status_revision_tracks_ui_and_mcp_commits_but_not_rejections() -> Result<()> {
+        let (_tmp,root,runner)=fixture()?;
+        let initial=status(&runner)?;
+        assert_eq!(initial["pulsoRevisionVersion"],1);
+        assert_eq!(initial["pulsoRevision"],0);
+        assert_eq!(initial["statusVersion"],2);assert_eq!(initial["pulsoVersion"],1);assert_eq!(initial["pulsoBoardVersion"],1);
+        // UI write through the Pulso socket.
+        pulso(&root,"project_create",json!({"id":"p","requestId":"p","title":"Synthetic"}))?;
+        assert_eq!(meta(&root)?,1);
+        assert_eq!(status(&runner)?["pulsoRevision"],1);
+        // Real MCP path: tool mapping from pulso_mcp and the scoped client over the socket.
+        runner.db.lock().unwrap().insert(&json!({"id":"agent-s","title":"agent","kind":"claude","status":"running","rows":24,"cols":80,"cwd":root.to_str()}))?;
+        let grant=pulso(&root,"grant",json!({"sessionId":"agent-s","projectId":"p"}))?;
+        let handle=PathBuf::from(grant["handle"].as_str().context("handle")?);
+        let (op,args)=crate::pulso_mcp::operation("jauria_create_phase",&json!({"projectId":"p","title":"Phase","idempotencyKey":"k1"}))?;
+        crate::pulso_client::request(&handle,op,args.clone())?;
+        assert_eq!(meta(&root)?,2);
+        assert_eq!(status(&runner)?["pulsoRevision"],2);
+        // A receipt replay, a rejected write and an unauthorized UI-only read move nothing.
+        crate::pulso_client::request(&handle,op,args)?;
+        assert!(crate::pulso_client::request(&handle,"item_update",json!({"id":"phase-k1","requestId":"bad","expectedRevision":999,"status":"done"})).is_err());
+        assert!(crate::pulso_client::request(&handle,"board",json!({"projectId":"p"})).is_err());
+        assert!(pulso(&root,"project_create",json!({"id":"p","requestId":"dup","title":"Duplicate"})).is_err());
+        assert_eq!(meta(&root)?,2);
+        assert_eq!(status(&runner)?["pulsoRevision"],2);
+        // Budget rollback: the transaction aborts after allocating a revision.
+        runner.pulso.as_ref().unwrap().with_store_for_test(|c|c.execute("UPDATE pulso_budget SET bytes=? WHERE id=1",[64*1024*1024]).map(|_|()))?;
+        assert!(pulso(&root,"project_create",json!({"id":"q","requestId":"q","title":"Blocked"})).is_err());
+        assert_eq!(meta(&root)?,2);
+        assert_eq!(status(&runner)?["pulsoRevision"],2);
+        Ok(())
+    }
+
+    #[test]
+    fn status_revision_is_current_while_the_session_store_is_busy() -> Result<()> {
+        let (_tmp,root,runner)=fixture()?;
+        status(&runner)?;
+        let busy=runner.db.lock().unwrap();
+        pulso(&root,"project_create",json!({"id":"p","requestId":"p","title":"Synthetic"}))?;
+        let cached=status(&runner)?;
+        assert_eq!(cached["pulsoRevision"],1);
+        assert_eq!(cached["pulsoRevisionVersion"],1);
+        drop(busy);
+        Ok(())
+    }
+
+    #[test]
+    fn status_omits_revision_when_pulso_is_unavailable() -> Result<()> {
+        let (_tmp,_root,runner)=fixture()?;
+        runner.pulso.as_ref().unwrap().shutdown();
+        let value=status(&runner)?;
+        assert_eq!(value["pulsoAvailable"],false);
+        assert!(value.get("pulsoRevision").is_none() && value.get("pulsoRevisionVersion").is_none());
+        Ok(())
+    }
 }

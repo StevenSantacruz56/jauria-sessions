@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -42,6 +42,8 @@ struct Shared {
     tokens: Mutex<HashMap<String, (String, u64)>>,
     revoked: Mutex<HashMap<String, u64>>,
     lookup: SessionLookup,
+    // Same counter as `State.store.1`; read without the state mutex or SQLite.
+    revision: Arc<AtomicU64>,
     quitting: AtomicBool,
     listening: AtomicBool,
     auto_enabled: AtomicBool,
@@ -121,6 +123,7 @@ impl Service {
             return Err(e);
         }
         owned.push(identity(&socket)?);
+        let revision = store.1.clone();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 store,
@@ -129,6 +132,7 @@ impl Service {
             tokens: Mutex::new(HashMap::new()),
             revoked: Mutex::new(HashMap::new()),
             lookup,
+            revision,
             quitting: AtomicBool::new(false),
             listening: AtomicBool::new(true),
             auto_enabled: AtomicBool::new(true),
@@ -273,6 +277,15 @@ impl Service {
     }
     pub fn set_auto_enabled(&self, enabled: bool) {
         self.shared.auto_enabled.store(enabled,Ordering::Release);
+    }
+    /// Last committed `meta.revision`, published by the store after COMMIT
+    /// while the service mutex is held. Covers UI and MCP writes alike: both
+    /// reach this process through the Pulso socket. Never touches SQLite.
+    pub fn revision(&self) -> u64 { self.shared.revision.load(Ordering::Acquire) }
+    #[cfg(test)]
+    pub(crate) fn with_store_for_test<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> Result<T> {
+        let state = self.shared.state.lock().map_err(|_| anyhow::anyhow!("Pulso unavailable"))?;
+        Ok(f(&state.store.0)?)
     }
     pub fn available(&self)->bool { self.shared.listening.load(Ordering::Acquire) && !self.shared.quitting.load(Ordering::Acquire) }
     pub fn shutdown(&self) {

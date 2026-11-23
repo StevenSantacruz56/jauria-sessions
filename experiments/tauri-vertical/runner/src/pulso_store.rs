@@ -5,10 +5,14 @@ use serde_json::{Value, json};
 use std::{
     collections::HashSet,
     path::Path,
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub(super) struct Store(pub Connection);
+/// The second field mirrors `meta.revision` for readers that must not touch
+/// SQLite (runner `status`). It is set from `meta` on open and republished only
+/// after a successful COMMIT, while the caller still holds the service mutex.
+pub(super) struct Store(pub Connection, pub Arc<AtomicU64>);
 #[derive(Clone)]
 pub(super) struct Principal {
     pub id: String,
@@ -129,11 +133,10 @@ impl Store {
             );
         }
         configure_budget(&c)?;
-        let store = Self(c);
-        ensure!(
-            store.revision()? < i64::MAX as u64,
-            "invalid Pulso revision"
-        );
+        let store = Self(c, Arc::new(AtomicU64::new(0)));
+        let revision = store.revision()?;
+        ensure!(revision < i64::MAX as u64, "invalid Pulso revision");
+        store.1.store(revision, Ordering::Release);
         Ok(store)
     }
     pub fn revision(&self) -> Result<u64> {
@@ -396,6 +399,7 @@ impl Store {
         let req = id(a, "requestId")?;
         let body = json!({"op":op,"args":a}).to_string();
         self.0.execute_batch("BEGIN IMMEDIATE")?;
+        let mut committed: Option<u64> = None;
         let result = (|| -> Result<Value> {
             let receipt: Option<(String, String)> = self
                 .0
@@ -658,6 +662,7 @@ impl Store {
                 "INSERT INTO receipts VALUES(?,?,?,?)",
                 params![p.id, req, body, result.to_string()],
             )?;
+            committed = Some(rev);
             Ok(result)
         })();
         match result {
@@ -665,6 +670,11 @@ impl Store {
                 if let Err(e) = self.0.execute_batch("COMMIT") {
                     let _ = self.0.execute_batch("ROLLBACK");
                     return Err(e.into());
+                }
+                // Publish only a committed revision. A receipt replay returns
+                // before allocating one, and a rollback never reaches here.
+                if let Some(rev) = committed {
+                    self.1.store(rev, Ordering::Release);
                 }
                 if op == "project_create" && p.session.is_some() {
                     if let Some(i) = v["project"]["id"].as_str() {
@@ -806,6 +816,32 @@ mod store_tests {
         // must read only meta and still succeed.
         store.0.execute_batch("DROP TABLE docs").unwrap();
         assert_eq!(store.read(&ui, "board", &json!({"projectId":"p","ifRevision":revision+1})).unwrap(), json!({"revision":revision+1,"unchanged":true}));
+    }
+
+    #[test]
+    fn published_revision_follows_commits_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pulso.sqlite");
+        let mut ui = Principal::ui();
+        {
+            let mut store = Store::open(&path).unwrap();
+            assert_eq!(store.1.load(Ordering::Acquire), 0);
+            store.write(&mut ui, "project_create", &json!({"id":"p","requestId":"p","title":"P"})).unwrap();
+            assert_eq!(store.1.load(Ordering::Acquire), store.revision().unwrap());
+            assert_eq!(store.1.load(Ordering::Acquire), 1);
+            // Receipt replay, validation failure and budget rollback leave it alone.
+            store.write(&mut ui, "project_create", &json!({"id":"p","requestId":"p","title":"P"})).unwrap();
+            assert!(store.write(&mut ui, "project_create", &json!({"id":"p","requestId":"p2","title":"P"})).is_err());
+            store.0.execute("UPDATE pulso_budget SET bytes=? WHERE id=1", [BUDGET_BYTES]).unwrap();
+            assert!(store.write(&mut ui, "project_create", &json!({"id":"q","requestId":"q","title":"Q"})).is_err());
+            assert_eq!(store.revision().unwrap(), 1);
+            assert_eq!(store.1.load(Ordering::Acquire), 1);
+            store.0.execute("UPDATE pulso_budget SET bytes=0 WHERE id=1", []).unwrap();
+            store.write(&mut ui, "item_create", &json!({"id":"i","requestId":"i","projectId":"p","title":"I"})).unwrap();
+        }
+        // Reopening initializes the counter from meta.
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.1.load(Ordering::Acquire), 2);
     }
 
     #[test]

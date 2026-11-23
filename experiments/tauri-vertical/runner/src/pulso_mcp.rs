@@ -36,7 +36,7 @@ fn key(args: &Value, prefix: &str) -> Result<(String, String)> {
     Ok((format!("{prefix}-{value}"), value.to_owned()))
 }
 
-fn operation(name: &str, args: &Value) -> Result<(&'static str, Value)> {
+pub(crate) fn operation(name: &str, args: &Value) -> Result<(&'static str, Value)> {
     ensure!(args.is_object(), "Los argumentos deben ser un objeto");
     let fields: &[&str]=match name {
         "jauria_projects"=>&["limit","cursor"],
