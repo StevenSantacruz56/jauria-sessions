@@ -6,8 +6,7 @@ mod runner;
 mod storage;
 mod terminal_stream;
 mod app_settings;
-mod projects;
-mod git_worktree;
+mod legacy_tasks;
 mod pulso;
 mod pulso_client;
 mod pulso_mcp;
@@ -80,25 +79,19 @@ fn run() -> Result<()> {
 mod resources;
 mod quotas;
 
-mod workflow;
-mod snapshots;
-
 mod diagnostics;
 
 mod claude_quota;
 
 mod resource_tree;
 
-mod verification_process;
-
-mod verification;
+mod process_custody;
 
 mod codex_transport;
 
 mod codex_protocol;
 
 mod codex_store;
-mod handoff;
 
 mod codex_runtime;
 

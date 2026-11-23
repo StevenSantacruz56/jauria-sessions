@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{io::{self, Read, Write}, os::{fd::AsRawFd, unix::process::CommandExt},
     path::Path, process::{ChildStdin, ChildStdout, Command, Stdio}, time::{Duration, Instant}};
-use crate::verification_process::{Owned, identity, tool_path, survivors};
+use crate::process_custody::{Owned, identity, tool_path, survivors};
 use crate::codex_protocol::{Incoming,parse_line};
 
 const LINE_LIMIT:usize=1024*1024;

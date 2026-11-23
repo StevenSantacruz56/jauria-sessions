@@ -142,8 +142,6 @@ impl Drop for ClientPermit { fn drop(&mut self){self.0.fetch_sub(1,Ordering::Acq
 
 struct CodexJob {control:crate::codex_runtime::Control,worker:thread::JoinHandle<()>}
 
-struct VerificationJob { cancel: Arc<AtomicBool>, worker: thread::JoinHandle<()> }
-
 pub struct Runner {
     data_dir: PathBuf,
     socket: PathBuf,
@@ -158,7 +156,6 @@ pub struct Runner {
     quota_cache: Mutex<Value>,
     quota_refreshing: AtomicBool,
     quota_task: Mutex<Option<thread::JoinHandle<()>>>,
-    verification_jobs: Mutex<HashMap<String,VerificationJob>>,
     codex_jobs:Mutex<HashMap<String,CodexJob>>,
     resources: Mutex<crate::resources::ResourcesSampler>,
     terminal_streams: Arc<crate::terminal_stream::TerminalStreams>,
@@ -237,7 +234,7 @@ impl Runner {
             Ok(service) => { service.set_auto_enabled(settings.pulso_auto_access()); Some(service) },
             Err(_) => { eprintln!("Pulso no disponible; las terminales siguen operativas. Conserva sus datos y revisa el módulo."); None },
         };
-        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None), verification_jobs:Mutex::new(HashMap::new()),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
+        Ok(Self {data_dir, socket, token, generation, terminal_streams, settings, pulso, status_cache:Mutex::new(Value::Null), _lock:lock, db, owned:Mutex::new(HashMap::new()), mutations:Arc::new(Mutex::new(())), workspace_mutations:Mutex::new(()), quitting:AtomicBool::new(false), quota_cache:Mutex::new(json!({"codex":{"available":false,"error":"Pulsa actualizar para consultar"},"claude":{"available":false,"error":"Sin consultar"}})), quota_refreshing:AtomicBool::new(false), quota_task:Mutex::new(None),codex_jobs:Mutex::new(HashMap::new()), resources:Mutex::new(crate::resources::ResourcesSampler::default()),
             #[cfg(test)] inventory: Arc::new(session_survivors),
         })
     }
@@ -318,15 +315,11 @@ impl Runner {
         let codex_jobs=std::mem::take(&mut *self.codex_jobs.lock().unwrap());
         for job in codex_jobs.values(){job.control.stop.store(true,Ordering::Release);}
         let children: Vec<_> = self.owned.lock().unwrap().values().cloned().collect();
-        let verification_jobs=std::mem::take(&mut *self.verification_jobs.lock().unwrap());
-        for job in verification_jobs.values(){job.cancel.store(true,Ordering::Release);}
         // Cleanup owned children only; never consult persisted PIDs.
         for child in children { if let Err(e) = child.stop() { eprintln!("cleanup: {e:#}"); } }
         self.terminal_streams.shutdown();
-        // Verification post-capture takes the workspace gate. Release both
-        // gates before joining; quitting already fences every new writer.
+        // Release both gates before joining; quitting already fences every new writer.
         drop(_guard);drop(_workspace);
-        for (_,job) in verification_jobs {let _=job.worker.join();}
         for (_,job) in codex_jobs {let _=job.worker.join();}
         // Join the bounded account-query task so its child is reaped before the
         // supervisor exits. No query runs while holding the session mutation lock.
@@ -358,6 +351,8 @@ impl Runner {
         let op = request["op"].as_str().context("op required")?;
         let args = request["args"].as_object().context("args must be an object")?;
         let allowed: &[&str] = match op {
+            // workspaceAfter is still accepted, and ignored, so a 1.3.x app can
+            // connect while this runner keeps serving its sessions.
             "status" => &["workspaceAfter"],
             "get_settings" => &[],
             "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
@@ -365,23 +360,7 @@ impl Runner {
             "native_binding" => &["id"],
             "resume_native" => &["id","sourceId","rows","cols"],
             "shutdown" | "diagnostic_preview" | "telemetry" | "refresh_quotas" => &[],
-            "register_project" => &["id","path"],
-            "close_project" | "reopen_project" => &["id"],
-            "create_task" => &["id","projectId","title","objective","acceptanceCriteria"],
-            "prepare_task" | "revalidate_task" | "workflow" | "reopen_task" | "verifications" => &["id"],
-            "verification" | "cancel_verification" => &["id","runId"],
-            "prepare_verification" => &["id","requestId","snapshotId","argv"],
-            "begin_verification" => &["id","runId","approvalNonce"],
-            "release_verification" => &["id","runId","confirmed"],
-            "purge_verifications" => &["id","confirmed"],
-            "snapshot_task" | "workflow_artifact" => &["id","artifactId"],
-            "review_task" => &["id","artifactId","snapshotId","verdict","notes","confirmed","verificationId"],
-            "handoff_task" => &["id","artifactId","snapshotId","destination","notes"],
-            "archive_task" | "purge_workflow" => &["id","confirmed"],
-            "start_task" => &["id","sessionId","kind","rows","cols"],
-            "open_handoff" => &["id","artifactId","requestId","sessionId","rows","cols"],
             "start_codex" => &["id","title","kind","cwd","rows","cols"],
-            "start_codex_task" => &["id","sessionId","kind","rows","cols"],
             "codex_state" => &["id"],"codex_request" => &["id","requestId"],
             "codex_resume" => &["id","generation"],
             "codex_turn" | "codex_command" => &["id","commandId","turnId","attemptId","generation","prompt"],
@@ -447,10 +426,10 @@ impl Runner {
                 return self.native_control(op,id,args,&child);
             }
         }
-        if matches!(op,"start"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"close_project"|"prepare_task"|"revalidate_task"|"open_handoff"|"prepare_verification"|"begin_verification") {
+        if matches!(op,"start"|"start_codex"|"codex_resume") {
             self.sync_native_lifecycle()?;
         }
-        if matches!(op,"start_codex"|"start_codex_task"|"codex_state"|"codex_request"|"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") {return self.codex_request(op,args);}
+        if matches!(op,"start_codex"|"codex_state"|"codex_request"|"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") {return self.codex_request(op,args);}
         if op=="stop" {
             let id=args["id"].as_str().context("Falta sesión")?;
             let structured=self.db.lock().unwrap().session(id)?.is_some_and(|s|s["transport"]=="app-server");
@@ -494,8 +473,7 @@ impl Runner {
         if op == "status" {
             self.db.try_lock().ok().and_then(|db| {
                 let value=(|| -> Result<Value> {
-                let revision:String=db.0.query_row("SELECT printf('%d:%d:%d:%d',(SELECT count(*) FROM projects),(SELECT count(*) FROM tasks),(SELECT COALESCE(MAX(seq),0) FROM task_audit),(SELECT COALESCE(sum(revision),0) FROM project_states))",[],|row|row.get(0))?;
-                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"pulsoVersion":1,"pulsoBoardVersion":1,"pulsoAvailable":self.pulso.as_ref().is_some_and(|p|p.available()),"nativeResumeVersion":1,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"projectLifecycleVersion":1,"workspaceVersion":1,"workflowVersion":1,"telemetryVersion":1,"verificationVersion":1,"recoveryVersion":1,"handoffVersion":1,"codexVersion":1,"retention":db.retention()?,"workspaceRevision":revision,"projects":crate::projects::projects(&db.0)?,"tasks":crate::projects::tasks(&db.0)?}))
+                Ok(json!({"pid":std::process::id(),"generation":self.generation,"sessions":db.sessions()?,"lastSeq":db.last_seq()?,"statusVersion":2,"pulsoVersion":1,"pulsoBoardVersion":1,"pulsoAvailable":self.pulso.as_ref().is_some_and(|p|p.available()),"nativeResumeVersion":1,"terminalSessionVersion":1,"normalTerminalVersion":1,"claudeNativeConfigVersion":1,"terminalStreamVersion":1,"nativePermissionsVersion":1,"runnerVersion":env!("CARGO_PKG_VERSION"),"telemetryVersion":1,"codexVersion":1,"retention":db.retention()?}))
                 })().ok()?;
                 // Publish while holding DB -> cache, the same order as rename.
                 // A pre-rename snapshot cannot overwrite the renamed fallback.
@@ -513,9 +491,6 @@ impl Runner {
             for live in self.terminal_streams.sessions() {
                 if let Some(row)=sessions.iter_mut().find(|row|row["id"]==live["id"]) {*row=live;} else {sessions.push(live);}
             }
-            let unchanged=args["workspaceAfter"].as_str()==result["workspaceRevision"].as_str();
-            result["workspaceNotModified"]=json!(unchanged);
-            if unchanged {result.as_object_mut().unwrap().remove("projects");result.as_object_mut().unwrap().remove("tasks");}
             return Ok(result);
         }
         if op == "events" {
@@ -523,122 +498,8 @@ impl Runner {
             let limit = args.get("limit").map(|v| v.as_u64().context("invalid limit")).transpose()?.unwrap_or(128);
             return self.db.lock().unwrap().events(after, limit.min(256) as usize);
         }
-        if matches!(op,"verifications"|"verification") {
-            let db=self.db.lock().unwrap();let id=args["id"].as_str().context("Falta tarea")?;
-            return if op=="verifications" {crate::verification::summary(&db.0,id)} else {crate::verification::get(&db.0,id,args["runId"].as_str().context("Falta verificación")?)};
-        }
-        if op=="cancel_verification" {
-            let _guard=self.mutations.lock().unwrap();
-            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-            let id=args["id"].as_str().context("Falta tarea")?;let run=args["runId"].as_str().context("Falta verificación")?;
-            crate::verification::get(&self.db.lock().unwrap().0,id,run)?;
-            let jobs=self.verification_jobs.lock().unwrap();
-            // A durable begin may precede job registration. Persist cancellation
-            // even in that gap; registration reads this intent under mutations.
-            let result=crate::verification::cancel_requested(&self.db,run)?;
-            if let Some(job)=jobs.get(run){job.cancel.store(true,Ordering::Release);}
-            return Ok(result);
-        }
-        if matches!(op,"prepare_verification"|"begin_verification"|"release_verification"|"purge_verifications") {
-            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Operación de proyecto en curso. Espera y consulta el estado."))?;
-            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-            if matches!(op,"prepare_verification"|"begin_verification") {
-                crate::projects::ensure_task_open(&self.db.lock().unwrap().0,args["id"].as_str().context("Falta tarea")?)?;
-            }
-            return match op {
-                "prepare_verification"=>crate::verification::prepare(&self.db,args),
-                "begin_verification"=>self.begin_verification(args),
-                "release_verification"=>crate::verification::release(&self.db,args),
-                "purge_verifications"=>crate::verification::purge(&self.db,args),
-                _=>unreachable!(),
-            };
-        }
-        if matches!(op,"purge_workflow"|"workflow_artifact"|"workflow"|"snapshot_task"|"review_task"|"handoff_task"|"archive_task"|"reopen_task") {
-            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Operación de proyecto en curso. Espera y consulta el estado."))?;
-            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-            return crate::git_worktree::operation(||crate::workflow::request(&self.db,op,args));
-        }
-        if matches!(op,"register_project"|"close_project"|"reopen_project"|"create_task"|"prepare_task"|"revalidate_task"|"open_handoff"|"start_task") {
-            let _workspace = self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay una operación de proyecto en curso; consulta su estado antes de reintentar"))?;
-            ensure!(!self.quitting.load(Ordering::Acquire), "runner is shutting down");
-            let id = args["id"].as_str().context("id required")?;
-            crate::projects::id(id)?;
-            return crate::git_worktree::operation(|| {
-                match op {
-                    "register_project" => crate::projects::register(&self.db,id,args["path"].as_str().context("Falta ruta")?),
-                    "close_project" | "reopen_project" => {
-                        let _guard=self.mutations.lock().map_err(|_|anyhow::anyhow!("No se pudo confirmar el estado; reconecta antes de continuar"))?;
-                        crate::projects::set_closed(&self.db,id,op=="close_project")
-                    },
-                    "create_task" => crate::projects::create(&self.db,&self.data_dir,args),
-                    "revalidate_task" => {
-                        crate::workflow::revalidatable(&self.db,id)?;
-                        crate::projects::revalidate(&self.db,&self.data_dir,id)
-                    },
-                    "prepare_task" => {
-                        {let db=self.db.lock().unwrap();crate::verification::ensure_available(&db.0,id)?;
-                        let task=crate::projects::task(&db.0,id)?;
-                        ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta inválida")?),&db.sessions_with_live(&self.terminal_streams.sessions())?)?;}
-                        crate::projects::prepare(&self.db,&self.data_dir,id)
-                    },
-                    "open_handoff" => {
-                        crate::projects::ensure_task_open(&self.db.lock().unwrap().0,id)?;
-                        let effect=crate::handoff::claim(&self.db,args)?;
-                        let sid=args["sessionId"].as_str().context("Falta sesión")?;
-                        if effect["shouldStart"]!=true {
-                            let mut result=effect;result["session"]=self.db.lock().unwrap().session(sid)?.unwrap_or(Value::Null);return Ok(result);
-                        }
-                        let _guard=self.mutations.lock().unwrap();
-                        let started=if self.quitting.load(Ordering::Acquire){Err(anyhow::anyhow!("Runner closing; handoff session not started"))}
-                            else {
-                                (|| -> Result<Value> {
-                                    crate::workflow::writable(&self.db,id)?;
-                                    let grant=crate::handoff::claimed_start(&self.db.lock().unwrap().0,args)?;
-                                    let launch=json!({"id":sid,"kind":effect["kind"],"title":effect["title"],"cwd":effect["cwd"],"taskId":id,"rows":args["rows"],"cols":args["cols"]});
-                                    self.start_claimed(sid,&launch,Some(&grant))
-                                })()
-                            };
-                        let stored=self.db.lock().unwrap().session(sid)?;
-                        let phase=if started.is_ok(){"opened"}else if stored.is_some(){"uncertain"}else{"failed"};
-                        let mut result=crate::handoff::complete(&self.db,args,&json!({"phase":phase,"sessionId":stored.as_ref().map(|_|sid)}))?;
-                        result["shouldStart"]=json!(false);result["session"]=stored.unwrap_or(Value::Null);
-                        if started.is_err(){result["notice"]=json!("La apertura no se confirmó. Consulta el estado; no se reintenta ni se envía contexto automáticamente.");}
-                        Ok(result)
-                    },
-                    "start_task" => {
-                        let session_id = args["sessionId"].as_str().context("Falta ID de sesión")?;
-                        validate_id(session_id)?;
-                        let kind = args["kind"].as_str().context("Falta proveedor")?;
-                        ensure!(["codex","claude","fixture","shell"].contains(&kind),"Proveedor de tarea inválido");
-                        if let Some(existing) = self.db.lock().unwrap().session(session_id)? {
-                            ensure!(existing["taskId"] == id && existing["kind"] == kind,"El ID de sesión ya tiene otro contenido");
-                            return Ok(existing);
-                        }
-                        crate::handoff::session_admission(&self.db.lock().unwrap().0,session_id,&Value::Null,None)?;
-                        let size = dimensions(args)?;
-                        // Do not inspect Git while an existing task writer may be
-                        // committing/rebasing. Refuse before any task-state change.
-                        {
-                            let db = self.db.lock().unwrap();
-                            let sessions = db.sessions_with_live(&self.terminal_streams.sessions())?;
-                            ensure!(!sessions.iter().any(|s|s["taskId"]==id && matches!(s["status"].as_str(),Some("starting"|"running"|"needs_attention"))), "La tarea ya tiene una sesión abierta o incierta");
-                            let task = crate::projects::task(&db.0,id)?;
-                            ensure_workspace_available(Path::new(task["worktreePath"].as_str().context("Ruta de tarea inválida")?),&sessions)?;
-                            ensure!(occupied_slots(&sessions)<self.settings.limit(),"concurrency limit is {}",self.settings.limit());
-                        }
-                        ensure!(!crate::workflow::archived(&self.db.lock().unwrap().0,id)?,"La tarea está archivada. Reábrela antes de iniciar una sesión.");
-                        crate::verification::ensure_available(&self.db.lock().unwrap().0,id)?;
-                        let task = crate::projects::ready(&self.db,id)?;
-                        let _guard = self.mutations.lock().unwrap();
-                        ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-                        self.start(session_id,&json!({"id":session_id,"kind":kind,"title":task["title"],"cwd":task["worktreePath"],"taskId":id,"rows":size.rows,"cols":size.cols}))
-                    }
-                    _ => unreachable!(),
-                }
-            });
-        }
         if op=="resume_native" {
-            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay una operación de proyecto en curso; consulta su estado antes de reintentar"))?;
+            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay otra apertura de sesión en curso; consulta su estado antes de reintentar"))?;
             let _guard=self.mutations.lock().unwrap();
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
             let id=args["id"].as_str().context("Falta nueva sesión")?;validate_id(id)?;
@@ -653,15 +514,10 @@ impl Runner {
             ensure!(old["kind"]=="claude" && old["transport"]!="app-server","Solo se reanudan conversaciones nativas con identidad registrada");
             ensure!(old["pid"].as_u64().is_some(),"La conversación no llegó a iniciarse; usa un punto de continuidad");
             crate::native_sessions::load(&self.data_dir,source)?.context("No se registró la identidad nativa; usa el historial o un punto de continuidad")?;
-            if let Some(task)=old["taskId"].as_str() {
-                crate::projects::ensure_task_open(&self.db.lock().unwrap().0,task)?;
-                ensure!(!crate::workflow::archived(&self.db.lock().unwrap().0,task)?,"La tarea Git está archivada; reábrela antes de reanudar");
-                crate::projects::ready(&self.db,task)?;
-            }
-            return self.start(id,&json!({"id":id,"kind":old["kind"],"title":old["title"],"cwd":old["cwd"],"taskId":old["taskId"],"rows":args["rows"],"cols":args["cols"],"resumeFrom":source}));
+            return self.start(id,&json!({"id":id,"kind":old["kind"],"title":old["title"],"cwd":old["cwd"],"rows":args["rows"],"cols":args["cols"],"resumeFrom":source}));
         }
         if op=="start" {
-            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay una operación de proyecto en curso; consulta su estado antes de reintentar"))?;
+            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay otra apertura de sesión en curso; consulta su estado antes de reintentar"))?;
             let _guard=self.mutations.lock().unwrap();
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
             let id=args["id"].as_str().context("id required")?;validate_id(id)?;
@@ -670,7 +526,6 @@ impl Runner {
         let _guard = self.mutations.lock().unwrap();
         ensure!(!self.quitting.load(Ordering::Acquire), "runner is shutting down");
         if op == "shutdown" {
-            for job in self.verification_jobs.lock().unwrap().values(){job.cancel.store(true,Ordering::Release);}
             self.quitting.store(true, Ordering::Release);
             return Ok(json!({"shuttingDown":true}));
         }
@@ -771,83 +626,16 @@ impl Runner {
         }
     }
 
-    // Caller holds workspace/session admission gates only through durable begin
-    // and worker registration. No gate is held during command execution.
-    fn begin_verification(self:&Arc<Self>,args:&Value)->Result<Value>{
-        let existing=crate::verification::get(&self.db.lock().unwrap().0,args["id"].as_str().context("Falta tarea")?,args["runId"].as_str().context("Falta verificación")?)?;
-        if existing["status"]!="prepared" {return Ok(existing);}
-        {
-            let mut jobs=self.verification_jobs.lock().unwrap();
-            jobs.retain(|_,job|!job.worker.is_finished());
-            ensure!(jobs.len()<1,"Ya hay una verificación en curso. Espera o cancélala.");
-        }
-        let run=crate::verification::begin(&self.db,args)?;
-        if run["shouldExecute"]!=true{return Ok(run);}
-        self.register_begun_verification(args,run)
-    }
-
-    fn register_begun_verification(self:&Arc<Self>,args:&Value,run:Value)->Result<Value>{
-        let _launch_registration=self.mutations.lock().unwrap();
-        if self.quitting.load(Ordering::Acquire){
-            return crate::verification::finish(&self.db,run["runId"].as_str().context("Falta verificación")?,json!({"status":"cancelled","spawned":false,"stdout":"","stderr":"","truncated":false}),Err(anyhow::anyhow!("Runner closing before spawn")));
-        }
-        let run_id=args["runId"].as_str().context("Falta verificación")?.to_owned();
-        let execution=(||->Result<_>{
-            let argv=run["argv"].as_array().context("Comando inválido")?.iter().map(|arg|arg.as_str().map(str::to_owned).context("Argumento inválido")).collect::<Result<Vec<_>>>()?;
-            let cwd=PathBuf::from(run["cwd"].as_str().context("Carpeta inválida")?);
-            let approved=crate::verification_process::ApprovedDirectory::open(&cwd,run["cwdDev"].as_u64().context("Identidad de carpeta inválida")?,run["cwdIno"].as_u64().context("Identidad de carpeta inválida")?)?;
-            Ok((argv,approved))
-        })();
-        let (argv,approved)=match execution {
-            Ok(values)=>values,
-            Err(_)=>return crate::verification::finish(&self.db,&run_id,json!({"status":"cancelled","spawned":false,"stdout":"","stderr":"","truncated":false}),Err(anyhow::anyhow!("Approved execution could not be validated; command not started"))),
-        };
-        let cancel=Arc::new(AtomicBool::new(false));
-        // cancel_verification and registration share mutations: cancellation in
-        // the durable-begin gap is transferred before any worker can launch.
-        let current=crate::verification::get(&self.db.lock().unwrap().0,args["id"].as_str().context("Falta tarea")?,&run_id)?;
-        cancel.store(current["status"]=="cancel_requested",Ordering::Release);
-        let token=cancel.clone();let owner=self.clone();let identity=run_id.clone();
-        let worker=thread::Builder::new().name("jauria-verification".into()).spawn(move||{
-            let executed=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||crate::verification_process::execute_approved(&argv,&approved,&token,&owner.mutations)));
-            let process=match executed {
-                Ok(Ok(value))=>value,
-                Ok(Err(error))=>json!({"status":"uncertain","stdout":"","stderr":"","truncated":true,"explanation":error.to_string().chars().take(512).collect::<String>()}),
-                Err(_)=>json!({"status":"uncertain","stdout":"","stderr":"","truncated":true,"explanation":"Execution supervisor panicked; explicit inspection required"}),
-            };
-            let after={
-                let _workspace=owner.workspace_mutations.lock().unwrap();
-                if owner.quitting.load(Ordering::Acquire){Err(anyhow::anyhow!("Runner closing; post-command snapshot not captured"))}
-                else{crate::verification::capture_for_run(&owner.db,&identity)}
-            };
-            if crate::verification::finish(&owner.db,&identity,process,after).is_err(){
-                eprintln!("verification persistence failed; retaining recovery fence");owner.quitting.store(true,Ordering::Release);
-            }
-        });
-        let worker=match worker {
-            Ok(worker)=>worker,
-            Err(_)=>return crate::verification::finish(&self.db,&run_id,json!({"status":"failed","spawned":false,"stdout":"","stderr":"","truncated":false}),Err(anyhow::anyhow!("Verification worker unavailable; command not started"))),
-        };
-        self.verification_jobs.lock().unwrap().insert(run_id,VerificationJob{cancel,worker});
-        let mut response=run;response["shouldExecute"]=json!(false);response["executionStarted"]=json!(true);
-        Ok(response)
-    }
-
-    fn start(self: &Arc<Self>, id: &str, args: &Value) -> Result<Value> {
-        self.start_claimed(id,args,None)
-    }
     // Callers hold workspace_mutations then mutations through durable insert/spawn.
-    fn start_claimed(self: &Arc<Self>, id: &str, args: &Value, grant: Option<&crate::handoff::ClaimedStart>) -> Result<Value> {
-        if grant.is_some(){crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;}
+    fn start(self: &Arc<Self>, id: &str, args: &Value) -> Result<Value> {
         if let Some(existing) = self.db.lock().unwrap().session(id)? {
-            ensure!(existing["kind"] == args["kind"] && existing["title"] == args["title"] && existing["taskId"] == args["taskId"] && (args["cwd"].is_null() || existing["cwd"] == args["cwd"]), "El ID de sesión ya tiene otro contenido");
+            ensure!(existing["kind"] == args["kind"] && existing["title"] == args["title"] && (args["cwd"].is_null() || existing["cwd"] == args["cwd"]), "El ID de sesión ya tiene otro contenido");
             if let Some(source)=args["resumeFrom"].as_str() {
                 let binding=crate::native_sessions::load(&self.data_dir,id)?.context("El ID ya pertenece a otra sesión")?;
                 ensure!(binding.resumed_from.as_deref()==Some(source),"El ID ya pertenece a otra reanudación");
             }
             return Ok(self.terminal_streams.session(id).unwrap_or(existing));
         }
-        crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;
         {let db=self.db.lock().unwrap();db.ensure_native_capacity()?;ensure!(occupied_slots(&db.sessions_with_live(&self.terminal_streams.sessions())?)<self.settings.limit(),"El límite es {}; las sesiones inciertas conservan su plaza hasta liberarlas",self.settings.limit());}
         let size = dimensions(args)?;
         let title = args["title"].as_str().context("title required")?;
@@ -855,19 +643,15 @@ impl Runner {
         let kind = args["kind"].as_str().context("kind required")?;
         ensure!(["fixture","shell","terminal","claude_probe","codex_probe","claude","codex"].contains(&kind), "unknown kind");
         let interactive = matches!(kind, "claude" | "codex" | "terminal");
-        let selected = if interactive || args["taskId"].is_string() {
+        let selected = if interactive {
             let requested = PathBuf::from(args["cwd"].as_str().context("select a working directory first")?);
             ensure!(requested.is_absolute(), "working directory must be absolute");
             let cwd = fs::canonicalize(&requested).context("working directory is unavailable")?;
             ensure!(cwd.is_dir(), "working directory must be a directory");
-            ensure!(!cwd.starts_with(self.data_dir.join("worktrees")) || args["taskId"].is_string(), "Inicia una carpeta administrada desde su tarea, no como sesión independiente");
             let workspace = git_workspace_for(&cwd)?;
-            ensure!(workspace.is_some() || !args["taskId"].is_string(), "task working directory must be a Git worktree");
             if let Some(workspace) = &workspace {
                 ensure_workspace_available(workspace, &self.db.lock().unwrap().sessions_with_live(&self.terminal_streams.sessions())?)?;
             }
-            // A standalone cwd may still be an ancestor of a fenced worktree.
-            crate::verification::ensure_path_available(&self.db.lock().unwrap().0,workspace.as_deref().unwrap_or(&cwd))?;
             Some((cwd,workspace))
         } else {
             ensure!(args.get("cwd").is_none_or(Value::is_null), "cwd is only accepted for interactive sessions");
@@ -924,7 +708,7 @@ impl Runner {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         ensure!(flags >= 0 && unsafe { libc::fcntl(fd,libc::F_SETFL,flags | libc::O_NONBLOCK) } >= 0, "cannot set PTY nonblocking");
         let mut session = json!({"id":id,"title":title,"kind":kind,"status":"starting","pid":null,"rows":size.rows,"cols":size.cols,
-            "cwd":cwd,"workspace":workspace,"taskId":args["taskId"],"detail":{"terminalStream":{"generation":self.generation,"history":{"state":"recording","lastFrame":0,"durableFrame":0}}}});
+            "cwd":cwd,"workspace":workspace,"detail":{"terminalStream":{"generation":self.generation,"history":{"state":"recording","lastFrame":0,"durableFrame":0}}}});
         self.terminal_streams.prepare_register(&session)?;
         self.db.lock().unwrap().insert_native(&session)?;
         let mut child = match pair.slave.spawn_command(cmd) {
@@ -1499,42 +1283,18 @@ mod standalone_native_tests {
     }
 
     #[test]
-    fn malformed_git_and_managed_directories_never_become_standalone() -> Result<()> {
+    fn malformed_git_directories_never_become_standalone() -> Result<()> {
         let (_tmp, r, cwd) = fixture()?;
         let broken = cwd.join("broken"); fs::create_dir(&broken)?;
         fs::write(broken.join(".git"),"invalid gitfile")?;
         assert!(git_workspace_for(&broken).is_err());
-        let managed = r.data_dir.join("worktrees"); fs::create_dir(&managed)?;
         for kind in ["codex", "claude", "terminal"] {
             assert!(request(&r,"broken",kind,&broken).unwrap_err().to_string().contains("cannot determine Git workspace safely"));
-            assert!(request(&r,"managed",kind,&managed).unwrap_err().to_string().contains("desde su tarea"));
         }
         for cwd in [Value::Null, json!("relative"), json!(42)] {
             let error = r.request(json!({"version":1,"token":r.token,"op":"start","args":{"id":"invalid","title":"invalid","kind":"codex","cwd":cwd}})).unwrap_err();
             assert!(!error.to_string().contains("fixture reached durable insert"));
         }
-        assert!(r.db.lock().unwrap().sessions()?.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn non_git_standalone_keeps_verification_fences_for_ancestor_cwd() -> Result<()> {
-        let (_tmp, r, home) = fixture()?;
-        let repo = home.join("repo"); init_git(&repo)?;
-        {
-            let db = r.db.lock().unwrap();
-            db.0.execute("INSERT INTO projects VALUES('p',?,?,'fixture','base',NULL)",
-                rusqlite::params![repo.to_str(),repo.join(".git").to_str()])?;
-            db.0.execute("INSERT INTO tasks VALUES('t','p','T','O','','base','b',?,'ready',NULL)", [repo.to_str()])?;
-            db.0.execute("INSERT INTO verification_runs VALUES('v','t','req','hash','needs_attention',0,?)",
-                [json!({"cwd":repo}).to_string()])?;
-        }
-        for kind in ["codex","claude","terminal"] {
-            assert!(request(&r,"fenced",kind,&home).unwrap_err().to_string().contains("fenced by verification"));
-            assert!(request(&r,"fenced",kind,&repo).unwrap_err().to_string().contains("fenced by verification"));
-        }
-        let sibling = home.parent().unwrap().join("home-extra"); fs::create_dir(&sibling)?;
-        admitted(request(&r,"sibling","codex",&sibling).unwrap_err());
         assert!(r.db.lock().unwrap().sessions()?.is_empty());
         Ok(())
     }
@@ -1594,7 +1354,7 @@ mod workspace_queue_tests {
         assert!(observed("READY_SHELL")?,"real shell did not report readiness");
         let gate=runner.workspace_mutations.lock().unwrap();
         let started=Instant::now();
-        assert!(request("create_task",json!({"id":"task-busy","projectId":"p","title":"t","objective":"o","acceptanceCriteria":""})).unwrap_err().to_string().contains("en curso"));
+        assert!(request("start",json!({"id":"busy","title":"busy","kind":"shell","rows":24,"cols":80})).unwrap_err().to_string().contains("en curso"));
         request("input",json!({"id":"live","data":"printf 'PTY_%s\n' GATE_OK
 "}))?;
         let until=Instant::now()+Duration::from_secs(2);
@@ -1605,63 +1365,25 @@ mod workspace_queue_tests {
         request("interrupt",json!({"id":"live"}))?;
         request("stop",json!({"id":"live"}))?;
         drop(gate);
-        assert!(crate::projects::tasks(&runner.db.lock().unwrap().0)?.is_empty(),"busy request acquired a late effect");
+        assert!(runner.db.lock().unwrap().session("busy")?.is_none(),"busy request acquired a late effect");
         Ok(())
     }
 }
 
 #[cfg(test)]
-mod verification_registration_tests {
+mod cleanup_tests {
     use super::*;
-    fn fixture() -> Result<(tempfile::TempDir,Arc<Runner>,Value,Value,PathBuf)> {
-        let tmp=tempfile::Builder::new().prefix("jauria-cancel-gap-").tempdir_in("/tmp")?;
+    #[test]
+    fn poisoned_admission_gate_cleanup_stops_owned_pty() -> Result<()> {
+        let tmp=tempfile::Builder::new().prefix("aw-cleanup-").tempdir_in("/tmp")?;
         fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
-        let root=fs::canonicalize(tmp.path())?;let repo=root.join("repo");fs::create_dir(&repo)?;
-        let git=|args:&[&str]|->Result<()> {
-            let output=std::process::Command::new("/usr/bin/git").env_clear().env("HOME",&root).env("PATH","/usr/bin:/bin")
-                .args(["-c","core.hooksPath=/dev/null","-c","commit.gpgsign=false","-c","user.name=Fixture","-c","user.email=fixture@local.invalid","-C"]).arg(&repo).args(args).output()?;
-            ensure!(output.status.success(),"Git fixture failed");Ok(())
-        };
-        git(&["init","-b","main"])?;fs::write(repo.join("base"),"base\n")?;git(&["add","base"])?;git(&["commit","-m","base"])?;
+        let root=fs::canonicalize(tmp.path())?;
         let runner=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
-        let request=|op:&str,args:Value|runner.request(json!({"version":1,"token":runner.token,"op":op,"args":args}));
-        request("register_project",json!({"id":"p","path":repo}))?;
-        request("create_task",json!({"id":"t","projectId":"p","title":"T","objective":"O","acceptanceCriteria":""}))?;
-        let task=request("prepare_task",json!({"id":"t"}))?;
-        request("snapshot_task",json!({"id":"t","artifactId":"s"}))?;
-        let run=request("prepare_verification",json!({"id":"t","requestId":"r","snapshotId":"s","argv":["/usr/bin/touch","must-not-exist"]}))?;
-        let args=json!({"id":"t","runId":run["runId"],"approvalNonce":run["approvalNonce"]});
-        let begun=crate::verification::begin(&runner.db,&args)?;assert_eq!(begun["shouldExecute"],true);
-        Ok((tmp,runner,args,begun,PathBuf::from(task["worktreePath"].as_str().unwrap())))
-    }
-    #[test]
-    fn cancellation_in_durable_begin_registration_gap_never_launches() -> Result<()> {
-        let (_tmp,runner,args,begun,cwd)=fixture()?;
-        let result=runner.request(json!({"version":1,"token":runner.token,"op":"cancel_verification","args":{"id":"t","runId":args["runId"]}}))?;
-        assert_eq!(result["status"],"cancel_requested");
-        runner.register_begun_verification(&args,begun)?;
-        let job=runner.verification_jobs.lock().unwrap().remove(args["runId"].as_str().unwrap()).unwrap();
-        job.worker.join().unwrap();
-        let run=crate::verification::get(&runner.db.lock().unwrap().0,"t",args["runId"].as_str().unwrap())?;
-        assert_eq!(run["process"]["spawned"],false);assert_eq!(run["outcome"],"cancelled");assert_eq!(run["verification"],"not_verified");assert!(!cwd.join("must-not-exist").exists());
-        Ok(())
-    }
-    #[test]
-    fn quitting_before_registration_never_launches() -> Result<()> {
-        let (_tmp,runner,args,begun,cwd)=fixture()?;runner.quitting.store(true,Ordering::Release);
-        let run=runner.register_begun_verification(&args,begun)?;
-        assert_eq!(run["process"]["spawned"],false);assert_eq!(run["verification"],"not_verified");
-        assert!(runner.verification_jobs.lock().unwrap().is_empty());assert!(!cwd.join("must-not-exist").exists());Ok(())
-    }
-    #[test]
-    fn poisoned_admission_gate_cleanup_stops_owned_pty_and_does_not_launch_verification() -> Result<()> {
-        let (_tmp,runner,args,_begun,cwd)=fixture()?;
         runner.request(json!({"version":1,"token":runner.token,"op":"start","args":{"id":"cleanup-shell","title":"fixture","kind":"shell","rows":24,"cols":80}}))?;
         let owned=runner.owned.lock().unwrap()["cleanup-shell"].clone();
         let poison=runner.clone();assert!(thread::spawn(move||{let _guard=poison.mutations.lock().unwrap();panic!("owned gate poison fixture");}).join().is_err());
         runner.cleanup_owned();assert!(owned.wait_done(Duration::from_secs(5)));assert!(owned.lifecycle.lock().unwrap().reaped);
-        let run=crate::verification::get(&runner.db.lock().unwrap().0,"t",args["runId"].as_str().unwrap())?;
-        assert_eq!(run["status"],"running");assert!(!cwd.join("must-not-exist").exists());Ok(())
+        Ok(())
     }
     #[test]
     fn client_permit_releases_capacity_on_panic() {
@@ -1669,89 +1391,43 @@ mod verification_registration_tests {
         assert!(thread::spawn(move||{let _permit=ClientPermit(counter);panic!("owned client permit fixture");}).join().is_err());
         assert_eq!(clients.load(Ordering::Acquire),0);
     }
-    #[test]
-    fn malformed_post_begin_parameters_finish_without_owner_or_fence() -> Result<()> {
-        let (_tmp,runner,args,mut begun,cwd)=fixture()?;begun["argv"]=json!(false);
-        let result=runner.register_begun_verification(&args,begun)?;
-        assert_eq!(result["process"]["spawned"],false);assert_eq!(result["outcome"],"cancelled");
-        assert!(runner.verification_jobs.lock().unwrap().is_empty());
-        crate::verification::ensure_available(&runner.db.lock().unwrap().0,"t")?;
-        assert!(!cwd.join("must-not-exist").exists());Ok(())
-    }
 }
 
 #[path="runner_codex.rs"] mod codex;
 
 #[cfg(test)]
-mod handoff_admission_tests {
+mod session_admission_tests {
     use super::*;
     fn fixture() -> Result<(tempfile::TempDir,Arc<Runner>)> {
         let tmp=tempfile::tempdir_in("/tmp")?;
         fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700))?;
         let root=fs::canonicalize(tmp.path())?;
         let r=Arc::new(Runner::open(root.join("data"),root.join("sock"),root.join("token"))?);
-        {
-            let db=r.db.lock().unwrap();
-            db.0.execute("INSERT INTO projects VALUES('p','/r','/r/.git','r','base',NULL)",[])?;
-            db.0.execute("INSERT INTO tasks VALUES('t','p','Title','Objective','','base','b','/w','draft',NULL)",[])?;
-        }
         Ok((tmp,r))
     }
     fn request(r:&Arc<Runner>,op:&str,args:Value)->Result<Value>{
         r.request(json!({"version":1,"token":r.token,"op":op,"args":args}))
     }
-    fn starts()->Vec<(&'static str,Value)>{vec![
-        ("start",json!({"id":"reserved","title":"Title","kind":"shell","rows":24,"cols":80})),
-        ("start_task",json!({"id":"t","sessionId":"reserved","kind":"shell","rows":24,"cols":80})),
-        ("start_codex",json!({"id":"reserved","title":"Title","kind":"codex","cwd":"/missing","rows":24,"cols":80})),
-        ("start_codex_task",json!({"id":"t","sessionId":"reserved","kind":"codex","rows":24,"cols":80})),
-    ]}
-    #[test]
-    fn every_generic_creator_rejects_handoff_reservations_and_rpc_bypass() -> Result<()> {
-        let (_tmp,r)=fixture()?;
-        for phase in ["prepared","uncertain","failed","opened","purged"] {
-            let db=r.db.lock().unwrap();
-            db.0.execute("DELETE FROM task_artifacts",[])?;
-            let payload=if phase=="purged"{json!({"originalKind":"handoff_open","sessionId":"reserved"})}
-                else{json!({"phase":phase,"sessionId":"reserved","request":{"sessionId":"reserved"}})};
-            db.0.execute("INSERT INTO task_artifacts VALUES('effect','t',?,?)",rusqlite::params![if phase=="purged"{"purged"}else{"handoff_open"},payload.to_string()])?;
-            drop(db);
-            for (op,args) in starts(){
-                let error=request(&r,op,args.clone()).unwrap_err().to_string();
-                assert!(error.contains("reserved"),"{phase}/{op}: {error}");
-                for key in ["requestId","claimed","handoffGrant"] {
-                    let mut forged=args.clone();forged[key]=json!("effect");
-                    assert!(request(&r,op,forged).unwrap_err().to_string().contains("unexpected argument"));
-                }
-            }
-            assert!(r.db.lock().unwrap().sessions()?.is_empty());
-            assert!(r.owned.lock().unwrap().is_empty());assert!(r.codex_jobs.lock().unwrap().is_empty());
-        }
-        Ok(())
-    }
     #[test]
     fn every_start_admission_is_serialized_by_workspace_gate() -> Result<()> {
         let (_tmp,r)=fixture()?;let _gate=r.workspace_mutations.lock().unwrap();
-        let mut calls=starts();calls.push(("open_handoff",json!({"id":"t","artifactId":"h","requestId":"e","sessionId":"reserved","rows":24,"cols":80})));
-        calls.push(("codex_resume",json!({"id":"reserved","generation":1})));
-        for (op,args) in calls {
+        for (op,args) in [
+            ("start",json!({"id":"queued","title":"Title","kind":"shell","rows":24,"cols":80})),
+            ("start_codex",json!({"id":"queued","title":"Title","kind":"codex","cwd":"/missing","rows":24,"cols":80})),
+            ("codex_resume",json!({"id":"queued","generation":1})),
+            ("resume_native",json!({"id":"queued","sourceId":"source","rows":24,"cols":80})),
+        ] {
             assert!(request(&r,op,args).unwrap_err().to_string().contains("en curso"),"{op}");
         }
         assert!(r.db.lock().unwrap().sessions()?.is_empty());Ok(())
     }
     #[test]
-    fn existing_exact_session_retries_do_not_spawn_or_consume_reservation() -> Result<()> {
+    fn existing_exact_session_retries_do_not_spawn() -> Result<()> {
         let (_tmp,r)=fixture()?;
-        {
-            let mut db=r.db.lock().unwrap();
-            db.insert(&json!({"id":"reserved","title":"Title","kind":"shell","status":"stopped","rows":24,"cols":80,"taskId":"t"}))?;
-            db.0.execute("INSERT INTO task_artifacts VALUES('effect','t','purged',?)",[json!({"originalKind":"handoff_open","sessionId":"reserved"}).to_string()])?;
-        }
-        let generic=json!({"id":"reserved","title":"Title","kind":"shell","taskId":"t"});
-        // Internal exact retry and public task retry preserve existing semantics.
-        assert_eq!(r.start("reserved",&generic)?["status"],"stopped");
-        assert_eq!(request(&r,"start_task",json!({"id":"t","sessionId":"reserved","kind":"shell","rows":24,"cols":80}))?["status"],"stopped");
-        let mut conflict=generic;conflict["title"]=json!("Changed");assert!(r.start("reserved",&conflict).is_err());
+        r.db.lock().unwrap().insert(&json!({"id":"existing","title":"Title","kind":"shell","status":"stopped","rows":24,"cols":80}))?;
+        let generic=json!({"id":"existing","title":"Title","kind":"shell"});
+        assert_eq!(r.start("existing",&generic)?["status"],"stopped");
+        let mut conflict=generic;conflict["title"]=json!("Changed");assert!(r.start("existing",&conflict).is_err());
         assert!(r.owned.lock().unwrap().is_empty());assert!(r.codex_jobs.lock().unwrap().is_empty());Ok(())
     }
     #[test]
