@@ -14,7 +14,7 @@ const src = (name: string) => JSON.stringify(new URL(`../src/${name}`, import.me
 await writeFile(entry, [
   `export { sessionPickerOptions, filterPickerOptions, movePickerIndex } from ${src('session-picker.ts')};`,
   `export { sessionTabs } from ${src('top-bar.ts')};`,
-  `export { alertRows, statusCounts, needsLabel, workingLabel, alertAnnouncement, unseenKeys } from ${src('alerts-popover.ts')};`,
+  `export { alertRows, statusCounts, needsLabel, finishedLabel, workingLabel, quietLabel, alertAnnouncement, unseenKeys } from ${src('alerts-popover.ts')};`,
   `export { providerBadge } from ${src('agent-list.ts')};`,
 ].join('\n'));
 const output = join(temporary, 'chrome.mjs');
@@ -70,7 +70,7 @@ test('alerts keep the sidebar priority and unseen first; status bar counts halo 
   const rows = m.alertRows([{ id: 'a', reason: 'El proceso terminó', unseen: true }, { id: 'b', reason: 'Permiso', unseen: false }, { id: 'c', reason: 'BEL', unseen: true }, { id: 'd', reason: 'Error', unseen: true }],
     (id: string) => `Sesión ${id}`, (id: string) => ({ kind: kinds[id], label: kinds[id] }));
   assert.deepEqual(rows.map((r: any) => r.id), ['d', 'b', 'c', 'a']);
-  assert.deepEqual(m.statusCounts(['needs', 'notice', 'working', 'working', 'idle', 'finished', 'unreported']), { needs: 2, working: 2 });
+  assert.deepEqual(m.statusCounts(['needs', 'notice', 'working', 'working', 'idle', 'finished', 'unreported']), { needs: 2, finished: 1, working: 2 });
   assert.equal(m.needsLabel(1), '1 te necesita'); assert.equal(m.needsLabel(3), '3 te necesitan'); assert.equal(m.workingLabel(2), '2 trabajando');
 });
 
@@ -82,4 +82,22 @@ test('the live region announces only alerts that were not already unseen', () =>
   assert.equal(m.alertAnnouncement(known, [row('a', false), row('b', false)]), null, 'seen alerts are quiet');
   assert.match(m.alertAnnouncement(known, [row('a'), row('b'), row('c')]), /^2 avisos nuevos/);
   assert.equal(m.alertAnnouncement(known, [row('a', true, 'Otro motivo')]), 'Nuevo aviso: Sesión a · Aviso del terminal.', 'a new reason is new');
+});
+
+test('status bar agrees with the bell: finished turns count, «Sin avisos» only at zero alerts', () => {
+  const cases: [string[], number, { needs: number; finished: number; working: number }, string | null][] = [
+    [[], 0, { needs: 0, finished: 0, working: 0 }, 'Sin avisos'],
+    [['working', 'idle'], 0, { needs: 0, finished: 0, working: 1 }, 'Sin avisos'],
+    [['finished'], 1, { needs: 0, finished: 1, working: 0 }, null],
+    [['finished', 'working'], 1, { needs: 0, finished: 1, working: 1 }, null],
+    [['needs', 'notice', 'finished', 'working'], 3, { needs: 2, finished: 1, working: 1 }, null],
+    [['notice'], 1, { needs: 1, finished: 0, working: 0 }, null],
+    // An alert that no counter shows still keeps the bar from saying «Sin avisos».
+    [['unreported'], 1, { needs: 0, finished: 0, working: 0 }, '1 aviso'],
+  ];
+  for (const [kinds, alerts, counts, quiet] of cases) {
+    assert.deepEqual(m.statusCounts(kinds), counts, kinds.join());
+    assert.equal(m.quietLabel(alerts, counts), quiet, kinds.join());
+  }
+  assert.equal(m.finishedLabel(1), '1 terminó'); assert.equal(m.finishedLabel(2), '2 terminaron');
 });

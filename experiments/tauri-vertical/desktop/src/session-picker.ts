@@ -58,6 +58,8 @@ let pickers = 0;
 export type SessionPickerOptions = {
   trigger: HTMLButtonElement;
   container: HTMLElement;
+  /** The popup is inserted before this node (DOM order = Tab order: heading, popup, terminal). */
+  before?: Node | null;
   label: string;
   options: () => PickerOption[];
   onSelect: (id: string | null) => void;
@@ -87,7 +89,12 @@ export class SessionPicker {
     this.list = document.createElement('div'); this.list.className = 'session-picker-list'; this.list.id = `${this.prefix}-list`;
     this.list.setAttribute('role', 'listbox'); this.list.setAttribute('aria-label', label);
     this.input.setAttribute('aria-controls', this.list.id);
-    this.popup.append(this.input, this.list); container.append(this.popup);
+    this.popup.append(this.input, this.list); container.insertBefore(this.popup, options.before ?? null);
+    // Tab and Shift+Tab leave in natural order (APG combobox); leaving the popup closes it.
+    this.popup.addEventListener('focusout', event => {
+      const next = event.relatedTarget as Node | null;
+      if (this.isOpen && (!next || !this.popup.contains(next))) this.close(false);
+    });
     trigger.setAttribute('aria-haspopup', 'listbox'); trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-controls', this.popup.id);
     trigger.addEventListener('click', () => { if (this.isOpen) this.close(true); else this.open(); });
     trigger.addEventListener('keydown', event => {
@@ -140,7 +147,8 @@ export class SessionPicker {
   private key(event: KeyboardEvent) {
     event.stopPropagation();
     if (event.isComposing) return;
-    if (['ArrowDown', 'ArrowUp'].includes(event.key) || (['Home', 'End'].includes(event.key) && (event.ctrlKey || event.metaKey))) {
+    // Home/End pick the first/last option while the query is empty; with text they move the caret.
+    if (['ArrowDown', 'ArrowUp'].includes(event.key) || (['Home', 'End'].includes(event.key) && (!this.input.value || event.ctrlKey || event.metaKey))) {
       event.preventDefault(); this.setActive(movePickerIndex(this.shown, this.active, event.key)); return;
     }
     if (event.key === 'Enter') {
@@ -149,8 +157,8 @@ export class SessionPicker {
       if (option && !option.disabled) this.choose(option.id);
       return;
     }
-    if (event.key === 'Escape') { event.preventDefault(); this.close(true); return; }
-    if (event.key === 'Tab') { event.preventDefault(); this.close(true); }
+    if (event.key === 'Escape') { event.preventDefault(); this.close(true); }
+    // Tab is not cancelled: focus moves on and the focusout handler closes the popup.
   }
 
   private setActive(index: number) {

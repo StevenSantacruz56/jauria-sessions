@@ -18,12 +18,21 @@ export function alertRows(alerts: readonly AlertInput[], titleOf: (id: string) =
   }).sort((a, b) => agentRank(a.row.kind) - agentRank(b.row.kind) || Number(b.row.unseen) - Number(a.row.unseen) || a.index - b.index).map(entry => entry.row);
 }
 
-/** Status-bar counters: halo shapes (needs + notices) and explicit working reports. */
+/** Status-bar counters: halo shapes (needs + notices), unseen finishes (check) and explicit working reports. */
 export function statusCounts(kinds: readonly ActivityKind[]) {
-  return { needs: kinds.filter(kind => kind === 'needs' || kind === 'notice').length, working: kinds.filter(kind => kind === 'working').length };
+  return { needs: kinds.filter(kind => kind === 'needs' || kind === 'notice').length, finished: kinds.filter(kind => kind === 'finished').length, working: kinds.filter(kind => kind === 'working').length };
 }
 export const needsLabel = (count: number) => `${count} te ${count === 1 ? 'necesita' : 'necesitan'}`;
+export const finishedLabel = (count: number) => `${count} ${count === 1 ? 'terminó' : 'terminaron'}`;
 export const workingLabel = (count: number) => `${count} trabajando`;
+/**
+ * The quiet slot agrees with the bell: «Sin avisos» only when the bell is at zero.
+ * Alerts that no counter shows (rare lifecycle causes) read «N avisos».
+ */
+export function quietLabel(alerts: number, counts: { needs: number; finished: number }): string | null {
+  if (alerts === 0) return 'Sin avisos';
+  return counts.needs + counts.finished === 0 ? `${alerts} ${alerts === 1 ? 'aviso' : 'avisos'}` : null;
+}
 
 /** Text for the polite live region when unseen alerts appear; null when nothing new arrived. */
 export function alertAnnouncement(previous: ReadonlySet<string>, rows: readonly AlertRow[]): string | null {
@@ -59,6 +68,8 @@ export class AlertsPopover {
     options.button.setAttribute('aria-haspopup', 'dialog'); options.button.setAttribute('aria-expanded', 'false');
     options.button.setAttribute('aria-controls', options.panel.id);
     options.panel.addEventListener('keydown', this.escape);
+    // Escape also closes it from the bell itself while expanded.
+    options.button.addEventListener('keydown', this.escape);
     options.list.addEventListener('click', event => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-session-id]');
       if (button) { this.close(false); options.onOpenSession(button.dataset.sessionId!); }
