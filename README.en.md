@@ -4,6 +4,8 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
+> This branch (`feat/redesign-1.4`) holds the **unreleased 1.4** redesign: it describes 1.4 features that have no release or tag yet. The published version is still 1.3.3, whose app cannot save **Configuración** against its own runner (see the [changelog](CHANGELOG.md)).
+
 **Stable version: 1.3.3.** The [GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) includes source and a verified Apple Silicon DMG. The app is unsigned for Developer ID distribution and is not notarized; read the [installation limits](docs/INSTALLATION.md) before downloading. Original code is licensed under [GPL-3.0-only](LICENSE). The app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
@@ -42,7 +44,7 @@ The board uses bounded snapshots with counts and pages per column, with no hidde
 
 The **1.3.3** DMG is verified and published with a SHA-256 checksum and JSON receipt. See [this version's validation and limits](docs/RELEASE_1.3.3.md), [the activity implementation](docs/RELEASE_1.3.1.md), and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md). Screenshots use a separate synthetic profile.
 
-See the [screenshots and full usage guide](README.md#capturas). The current board is shown below.
+See the [screenshots and full usage guide](README.md#capturas). The screenshots come from released versions (1.0.0 to 1.3.3) and do **not** show the 1.4 interface (top bar with tabs and bell, sidebar with Proyectos and Agentes, 32 px pane heading, status bar, palette); they will be replaced when 1.4 is released. The 1.3.2 board is shown below.
 
 ![Pulso board in Jauria 1.3.2](docs/screenshots/pulso-1.3.2.png)
 
@@ -97,7 +99,7 @@ python3 scripts/build-macos.py
 python3 scripts/launch-macos.py --data "$HOME/Library/Application Support/Jauria-local"
 ```
 
-The default desktop build is optimized release mode and unsigned. Use `--debug` on both scripts for development bundles. Packaging and developer details are in [DEVELOPMENT.md](docs/DEVELOPMENT.md).
+The build also runs the browser suites, which need Google Chrome and Playwright WebKit (`npx playwright install webkit` in `experiments/tauri-vertical/desktop`); `--skip-browser-tests` skips them and says so. The default desktop build is optimized release mode and unsigned. Use `--debug` on both scripts for development bundles. Packaging and developer details are in [DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Project status and security
 

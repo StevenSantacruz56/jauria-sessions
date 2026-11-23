@@ -15,6 +15,8 @@ Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Co
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
+> Esta rama (`feat/redesign-1.4`) contiene el rediseño **1.4 sin publicar**: describe funciones de 1.4 que aún no tienen release ni etiqueta. La versión publicada sigue siendo 1.3.3; su app no puede guardar **Configuración** con su propio runner (ver [CHANGELOG](CHANGELOG.md)).
+
 ## Para qué sirve
 
 Para quien ya trabaja con las CLI de Codex o Claude Code y necesita mantener a mano la carpeta, el estado y la salida de cada sesión. Puedes abrir una sesión sin registrar un proyecto, consultar una sesión terminada o ver dos sesiones lado a lado. Para dos tareas de programación sobre un mismo repositorio, usa worktrees separados.
@@ -133,7 +135,7 @@ El código propio está bajo GPL-3.0-only, con condiciones separadas para tercer
 
 ## Capturas
 
-Las dos primeras capturas muestran la aplicación en macOS con sesiones temporales de demostración. La vista de Configuración de 1.3.3 y la de pestañas de 1.0.0 usan componentes reales con datos sintéticos, sin perfiles de usuario.
+Las capturas son de versiones publicadas (1.0.0 a 1.3.3) y **no muestran la interfaz de 1.4** (barra superior con pestañas y campana, barra lateral con Proyectos y Agentes, cabecera de panel de 32 px, barra de estado, paleta). Se sustituirán al publicar 1.4. Las dos primeras muestran la aplicación en macOS con sesiones temporales de demostración. La vista de Configuración de 1.3.3 y la de pestañas de 1.0.0 usan componentes reales con datos sintéticos, sin perfiles de usuario.
 
 ![Diálogo Nueva sesión para elegir herramienta, carpeta de trabajo y nombre](docs/screenshots/nueva-sesion.jpg)
 
@@ -188,7 +190,7 @@ python3 scripts/build-macos.py
 python3 scripts/launch-macos.py --data "$HOME/Library/Application Support/Jauria-local"
 ```
 
-La compilación instala dependencias npm con `npm ci`, construye el frontend, ejecuta tests locales de frontend y runner con fixtures temporales, compila el runner release y crea una app de escritorio optimizada en modo release, sin firma de distribución ni notarización. La salida está en `experiments/tauri-vertical/desktop/src-tauri/target/release/bundle/macos/`. Para una compilación de desarrollo usa `--debug` tanto en el script de build como en el de apertura. Los nombres del bundle proceden de la configuración Tauri.
+La compilación instala dependencias npm con `npm ci`, construye el frontend, ejecuta tests locales de frontend y runner con fixtures temporales y las suites de navegador (requieren Google Chrome y Playwright WebKit: `npx playwright install webkit` en `experiments/tauri-vertical/desktop`; `--skip-browser-tests` las omite y lo indica), compila el runner release y crea una app de escritorio optimizada en modo release, sin firma de distribución ni notarización. La salida está en `experiments/tauri-vertical/desktop/src-tauri/target/release/bundle/macos/`. Para una compilación de desarrollo usa `--debug` tanto en el script de build como en el de apertura. Los nombres del bundle proceden de la configuración Tauri.
 
 La estructura `experiments/tauri-vertical/{desktop,runner}` se conserva intencionalmente: desktop comparte módulos Rust mediante rutas relativas. No muevas esas carpetas por separado.
 

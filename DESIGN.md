@@ -137,7 +137,7 @@ Display headings (welcome and dialogs) use Bricolage Grotesque at a single 20 px
 
 ## Layout
 
-Native Tauri/macOS app: minimum window 760 × 560 px, initial 1220 × 800 px. The sidebar is 264 px and becomes an overlay below 860 px.
+Native Tauri/macOS app: minimum window 760 × 560 px, initial 1220 × 800 px. The sidebar is 264 px and becomes an overlay below 860 px. While that overlay and its scrim are open they cover the terminal: the focused session counts as not attended (no automatic seen, alerts stay new), the same as behind any dialog or in Pulso.
 
 Workbench, top to bottom: the **top bar** (42 px), the stage with the pane cards, and the **status bar** (28 px). There is no message rail since delivery 1.4 B. The top bar, the pane heading (32 px), the status bar and the terminal inset have fixed heights, never wrap and are the only chrome above or below a terminal, so alerts, state changes and notices never resize a PTY. Everything that can appear on demand (alerts popover, session picker, pane menu, notice) floats with absolute positioning.
 

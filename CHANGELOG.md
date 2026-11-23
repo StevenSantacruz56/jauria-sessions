@@ -4,6 +4,8 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
+Las secciones «Sin publicar · 1.4.0» siguen el orden de las entregas; cuando una posterior retira o sustituye algo de una anterior, se indica en esa línea. Nada de esto está publicado ni etiquetado: `VERSION` sigue en 1.3.3.
+
 ### Sin publicar · 1.4.0 entrega A: sistema visual y barra lateral
 
 - Paleta neutra clara y oscura de la propuesta 1.4: superficies sin tinte azul, un borde translúcido, cuatro colores de estado unificados (`--state-working`, `--state-attention`, `--state-ready`, `--state-paused`), texto tenue `--dim` y un acento de foco frío `--focus`. El ámbar queda en la acción principal (`.primary`) y la marca; el panel enfocado, el anillo de teclado, las tarjetas, las pestañas y el interruptor de Configuración usan el foco frío.
@@ -13,8 +15,8 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Cada estado tiene su forma: anillo giratorio (trabajando), punto con halo (te necesita), marca de verificación (terminó), guion (en espera) y aro vacío (sin reporte).
 - Los agentes se agrupan **Por proyecto** (predeterminado; sesión principal y vínculos de proyecto de Pulso, el resto en «Sin proyecto») o **Por estado** (las secciones de Actividad), con un botón en la cabecera de Agentes. La elección se recuerda por perfil. La barra muestra los 20 primeros proyectos y «Más proyectos…».
 - El resumen de Pulso se relee al conectar, al recuperar el foco de la ventana, al salir o cambiar de tablero, al cambiar las sesiones y cuando un agente informa `done`/`idle`; no hay sondeo periódico. Los cambios de agentes por MCP pueden tardar hasta uno de esos eventos; la revisión de Pulso en el estado del runner queda para una entrega posterior.
-- La entrada de Repositorios y tareas Git se oculta de la barra lateral; el código de tareas, revisión, verificación y relevo no cambia.
-- Pulso: columnas sin borde con punto de estado, tarjetas de radio 8 con un solo borde, sin el título «Pulso» repetido ni el eslogan permanente. El selector «Mover» se mantiene.
+- La entrada de Repositorios y tareas Git se oculta de la barra lateral; el código de tareas, revisión, verificación y relevo no cambia. *(La entrega D retira esa función.)*
+- Pulso: columnas sin borde con punto de estado, tarjetas de radio 8 con un solo borde, sin el título «Pulso» repetido ni el eslogan permanente. El selector «Mover» se mantiene. *(La entrega B lo sustituye por el menú «…».)*
 - Sin cambios en el runner, la barra de avisos de 50 px, la cabecera de los paneles ni el inset del terminal (la entrega B los sustituye). Al ensanchar la barra lateral, el terminal pierde unas columnas en ventanas anchas; por debajo de 860 px la barra sigue superpuesta.
 
 ### Sin publicar · 1.4.0 entrega B: terminal y Pulso
@@ -28,7 +30,7 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Pulso: el selector «Mover» visible se sustituye por el menú «…» de cada tarjeta (Mover a Por hacer / En curso / En espera / Hecho, accesible con teclado), con la misma semántica, deshacer y orden de fases; el arrastre sigue igual. Barra de proyecto de una línea con título, «n de m fases hechas», Plan y sesiones y la única acción ámbar; «Nuevo proyecto» pasa al «+» de la barra superior y «Volver a terminal» desaparece.
 - Configuración con filas compactas, ayuda de una línea y «Más detalles»; indicador «Sin guardar» junto a Guardar; sin tarjeta anidada. Permisos, acceso automático y sus textos de alcance no cambian.
 - Modo oscuro: `--sidebar` pasa a `#0e1116`, la tinta del logotipo oscuro, para que no se vea su recuadro; el texto tenue y secundario siguen en AA (5,98:1 y 7,12:1).
-- Tras la revisión: el menú «…» del panel ya no queda recortado por la cabecera; el contexto de relevo flota y se abre con «Contexto» en la barra superior; en Pulso, «Terminal» al inicio de la barra vuelve a la vista de terminal y el botón de Pulso alterna; la etiqueta «Historial · solo lectura» es visible; la barra de estado cuenta «N terminaron» y solo dice «Sin avisos» con la campana a cero; Tab sale del selector y del menú Mover sin perder el foco; Escape cierra los avisos desde la campana; las cuatro columnas de Pulso caben a 1220 px.
+- Tras la revisión: el menú «…» del panel ya no queda recortado por la cabecera; el contexto de relevo flota y se abre con «Contexto» en la barra superior *(retirado en la entrega D)*; en Pulso, «Terminal» al inicio de la barra vuelve a la vista de terminal y el botón de Pulso alterna; la etiqueta «Historial · solo lectura» es visible; la barra de estado cuenta «N terminaron» y solo dice «Sin avisos» con la campana a cero; Tab sale del selector y del menú Mover sin perder el foco; Escape cierra los avisos desde la campana; las cuatro columnas de Pulso caben a 1220 px.
 - Sin cambios en el runner ni en la persistencia. El pie de tarjeta con la sesión vinculada y los checkpoints queda para la entrega E: el tablero no trae esos datos.
 
 ### Sin publicar · 1.4.0 entrega D: retirada de Repositorios
@@ -82,6 +84,15 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Primer contacto: los pendientes del runner cuentan en la campana, la barra de estado y el Dock desde el primer render. Las notificaciones de macOS solo avisan de secuencias posteriores a la conexión y no se repiten al reconectar. Con `hasMore`, los totales vienen del runner y la lista de la campana termina con «y N más sin listar».
 - Con un runner 1.3.x todo queda como antes: lector de OSC en xterm, visto en la ventana y primera instantánea silenciosa.
 - Pruebas: vectores compartidos contra `parseProgramStatus` y el xterm instalado en Node, Chromium y WebKit; reglas de visto, línea base de macOS y `hasMore`; suite de navegador `tests/browser/agent-attention.test.ts` con los dos modos. La prueba de prioridad de terminal espera la entrada antes de medir el pintado tras reconectar (antes fallaba ~1 de cada 10 en WebKit).
+
+### Sin publicar · 1.4.0: correcciones tras la revisión final
+
+- Configuración: **Guardar** fallaba siempre con un runner 1.3.3 o posterior («Argumento no permitido»), también al cambiar solo el límite de sesiones, porque el bridge solo dejaba pasar `maxConcurrentSessions` y la app envía también `pulsoAutoAccess` con `settingsVersion: 2`. El fallo existe en la app 1.3.3 publicada. El bridge admite ahora `pulsoAutoAccess` opcional y estrictamente booleano. Una tabla compartida (`desktop/tests/fixtures/rpc-contract.json`) con cada operación y forma de argumentos que envía el cliente se comprueba contra la validación del bridge, la lista del runner (`runner/src/rpc_contract.rs`) y, para Pulso, contra un almacén nuevo del runner.
+- Una sesión cuyo terminal tapa el cajón lateral (ventanas de 860 px o menos) ya no cuenta como atendida: sus avisos con frame no se marcan vistos solos y, con un runner 1.3.x, un BEL detrás del cajón es un aviso. Una sola regla de «atendida» para los dos modos: documento visible, ventana enfocada, vista de terminal, ningún diálogo ni el cajón cubriéndolo y la sesión del panel enfocado.
+- Con la lista de `agent` recortada (`hasMore`), cada `status` es la verdad: un registro que ya no se lista se descarta y vuelve a contarse entre los ocultos, en vez de seguir como pendiente (por ejemplo, tras verlo en otra ventana) y restarse del total. La línea base de macOS distingue las sesiones que existían al conectar (recortadas) de las nacidas después, cuyos avisos sí notifican.
+- Las notificaciones de macOS con un runner 1.4 usan su categoría («Necesita tu atención», «Actividad finalizada») en lugar de «Aviso de sesión» para todo; el texto sigue sin títulos, rutas ni salida del terminal.
+- El runner olvida el sellado de una sesión terminada cuando su lector de PTY cierra, y la interfaz poda los ids ausentes de su mapa de estados y lo vacía al reconectar: ninguno crece con el histórico de sesiones.
+- `scripts/build-macos.py` y el CI ejecutan todas las suites de navegador (`scripts/browser-tests.py`) en serie y con sus variables; el CI instala Playwright WebKit. `--skip-browser-tests` las omite dejándolo indicado en la salida. Se retira el arnés `tests/attention-browser.mjs` del MVP, cuyas comprobaciones vigentes pasan a `agent-attention`.
 
 ## [1.3.3] - 2026-11-18
 

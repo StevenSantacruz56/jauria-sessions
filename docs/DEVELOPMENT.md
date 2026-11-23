@@ -7,11 +7,11 @@ python3 scripts/build-macos.py --check-only
 python3 scripts/build-macos.py
 ```
 
-El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc`, `pulso_rpc`, `native_resume_rpc`, `legacy_profile_rpc` y los benchmarks opt-in `listener_latency`/`pulso_latency` (ignorados por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
+El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan `node --test tests/*.test.ts` y después **todas las suites de navegador** con `scripts/browser-tests.py` (ver [Suites de navegador](#suites-de-navegador)); `--skip-browser-tests` las omite y la salida lo indica al saltarlas y al terminar. Ambos ejecutan también los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc`, `pulso_rpc`, `native_resume_rpc`, `legacy_profile_rpc` y los benchmarks opt-in `listener_latency`/`pulso_latency` (ignorados por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
 
 El fixture `runner/tests/fixtures/protocol.synthetic.jsonl` contiene exclusivamente mensajes construidos para pruebas: dos solicitudes de aprobación, 24 fragmentos de mensaje y tres terminaciones de turno. La prueba `replay_synthetic_protocol_offline` conserva las aserciones del replay: dos denegaciones, tres terminaciones y más de veinte eventos normalizados. No es una transcripción nativa ni demuestra comportamiento real del proveedor.
 
-El workflow `.github/workflows/macos.yml` configura Node 24 para ejecutar los tests TypeScript con el soporte nativo de borrado de tipos; no implica que los tests locales se hayan ejecutado en Node 24. Usa Rust estable, macOS Apple Silicon, permisos de repositorio de solo lectura y acciones fijadas a SHA. No instala CLI de proveedores, no realiza login, no firma, no publica ni sube perfiles o evidencia. Referencia del runner: https://docs.github.com/en/actions/reference/runners/github-hosted-runners .
+El workflow `.github/workflows/macos.yml` configura Node 24 para ejecutar los tests TypeScript con el soporte nativo de borrado de tipos; no implica que los tests locales se hayan ejecutado en Node 24. Instala Playwright WebKit (`npx playwright install webkit`, versión fijada por `package-lock.json`) y usa el Google Chrome de la imagen del runner para las suites de navegador, que `build-macos.py` ejecuta en serie. Usa Rust estable, macOS Apple Silicon, permisos de repositorio de solo lectura y acciones fijadas a SHA. No instala CLI de proveedores, no realiza login, no firma, no publica ni sube perfiles o evidencia. Referencia del runner: https://docs.github.com/en/actions/reference/runners/github-hosted-runners .
 
 Los resultados deben verificarse sobre el snapshot final: una compilación anterior al freeze no valida cambios posteriores. El DMG se genera y verifica con `scripts/package-macos.py`; su publicación en GitHub es un paso explícito posterior. La release v1.3.2 adjunta un DMG sin firma Developer ID ni notarización. Esas verificaciones, Intel y otras plataformas quedan pendientes.
 
@@ -28,7 +28,7 @@ npm ci
 npm run build
 node --test tests/*.test.ts
 npx playwright install webkit
-npm run test:terminal-browser
+python3 ../../../scripts/browser-tests.py
 ```
 
 La suite de navegador usa Chrome instalado (`channel: chrome`) y Playwright WebKit con contextos efímeros. Sirve un fixture local vía Vite: xterm 5.5 real, CSS de producto y helpers de teclado/viewport; no abre proveedores, runner ni perfiles Jauria. Primero reproduce la rueda inerte: parsear salida con host desconectado, volver a adjuntar sin cambio de tamaño, `scrollTop=0` aunque `viewportY>0`. Después valida rueda arriba/abajo, movimiento de host, ancla de lectura al ajustar filas/columnas, salida mientras se lee y seguimiento al fondo. La rueda en pantalla alternativa conserva las secuencias de xterm. El marcador de ancla usa la API propuesta de xterm fijada a 5.5; se crea y elimina dentro de cada ajuste síncrono.
@@ -65,9 +65,13 @@ TERMINAL_STREAM_BROWSER=1 node --test tests/terminal-stream.test.ts
 
 El primer comando se ejecuta desde `experiments/tauri-vertical/runner` y el segundo desde `experiments/tauri-vertical/desktop`. Ambos usan fixtures temporales y no abren proveedores. Los tests unitarios del módulo de stream cubren además límites por bytes y frames, cola en vuelo, pérdida de rangos, orden, finalización y fallos de almacenamiento.
 
+## Suites de navegador
+
+`scripts/browser-tests.py` ejecuta, una tras otra y con `--test-concurrency=1`, todas las suites de navegador con sus variables: `tests/browser/*.test.ts` y `pulso-panel` con `PULSO_PANEL_BROWSER=1 PULSO_PANEL_WEBKIT=1`; `settings-panel` y `agent-permissions` con `SETTINGS_PANEL_BROWSER=1`; `attention-consistency` y `terminal-stream` una vez en Chrome y otra en WebKit (`ENGINE=webkit`, `TERMINAL_STREAM_ENGINE=webkit`). Antes lanza Chrome (`channel: chrome`) y Playwright WebKit; si falta alguno se detiene con un mensaje que dice cuál y cómo instalarlo. `--list` muestra las órdenes sin ejecutarlas. Lo llama `build-macos.py` salvo con `--skip-browser-tests`; `tests/test_browser_tests.py` comprueba que cada archivo de `tests/browser` y cada suite con `*_BROWSER` corre con su variable.
+
 ## Integración de avisos y Configuración
 
-Las siguientes suites son opt-in; el glob de Node no las ejecuta en CI sin navegador instalado. Desde `experiments/tauri-vertical/desktop`:
+Las siguientes suites también se pueden lanzar sueltas (el glob `node --test tests/*.test.ts` las salta sin su variable). Desde `experiments/tauri-vertical/desktop`:
 
 ```sh
 SETTINGS_PANEL_BROWSER=1 node --test tests/settings-panel.test.ts
@@ -82,7 +86,9 @@ Configuración usa Chrome y WebKit en una misma ejecución; las otras suites sel
 
 ## Preferencias y nombres de sesión
 
-`get_settings` consulta la capacidad del perfil y `set_settings` guarda `maxConcurrentSessions` entre 1 y 8. Las admisiones y el guardado se serializan con el mismo bloqueo de mutaciones; reducir el límite no detiene procesos. El valor predeterminado sigue siendo 2. `settingsVersion: 1` y `sessionRenameVersion: 1` anuncian estas capacidades. Una interfaz nueva conserva el límite antiguo hasta actualizar el runner.
+`get_settings` consulta la capacidad del perfil y `set_settings` guarda `maxConcurrentSessions` entre 1 y 8 y, desde 1.3.3, `pulsoAutoAccess` (booleano). Las admisiones y el guardado se serializan con el mismo bloqueo de mutaciones; reducir el límite no detiene procesos. El valor predeterminado sigue siendo 2. El runner anuncia `settingsVersion: 2` (1.3.3 y posteriores; `1` en runners anteriores, que solo aceptan el límite) y `sessionRenameVersion: 1`. Con `settingsVersion: 2` la interfaz envía siempre las dos claves; con `1`, solo el límite. Una interfaz nueva conserva el límite antiguo hasta actualizar el runner.
+
+La app 1.3.3 publicada no puede guardar Configuración con su propio runner: el bridge de esa versión solo dejaba pasar `maxConcurrentSessions` y rechazaba la petición completa («Argumento no permitido»), también al cambiar solo el límite. Corregido en la rama 1.4. Para que una lista del bridge no vuelva a quedarse atrás, `runner/src/rpc_contract.rs` contiene la lista de argumentos del runner y `desktop/tests/fixtures/rpc-contract.json` cada operación y forma de argumentos que envía el cliente: `cargo test` del bridge (`rpc_contract_tests`) comprueba cada entrada contra la validación del bridge y la lista del runner, `pulso.rs` reproduce las de Pulso en un almacén nuevo y `tests/rpc-contract.test.ts` comprueba que la tabla cubre cada `request('op', {…})` literal de `src/*.ts`.
 
 `rename_session` guarda únicamente el título local y su evento de metadatos en una transacción. Admite sesiones activas y finalizadas, incluso sin cuota para más salida. No cambia el identificador ni renombra conversaciones del proveedor. Los títulos se validan como texto y se presentan sin interpretación HTML.
 
@@ -155,6 +161,12 @@ La versión 1.2.0 añade el tablero y los estados pasivos de programa. Consulta 
 
 La interfaz decide qué usar según los campos `*Version` de `status`. La app 1.3.x compara los existentes con `=== 1` o `!== 1`, así que **nunca se sube un `*Version` existente**: una capacidad nueva o ampliada lleva un campo nuevo y la respuesta antigua solo gana claves. Un campo que falta significa runner anterior y la interfaz conserva la ruta antigua.
 
+Matriz completa del runner de esta rama (`runner.rs`, `agent_attention.rs`) frente a 1.3.3:
+
+- **Sin cambios:** `statusVersion: 2`, `settingsVersion: 2`, `sessionRenameVersion: 1`, `pulsoVersion: 1`, `pulsoBoardVersion: 1`, `nativeResumeVersion: 1`, `terminalSessionVersion: 1`, `normalTerminalVersion: 1`, `claudeNativeConfigVersion: 1`, `terminalStreamVersion: 1`, `nativePermissionsVersion: 1`, `telemetryVersion: 1`, `codexVersion: 1`, además de `pulsoAvailable` y `runnerVersion`.
+- **Nuevas en 1.4** (tabla siguiente): `pulsoRevisionVersion` (solo con Pulso disponible), `pulsoSummaryVersion`, `pulsoBoardCardsVersion` y `agentAttentionVersion`.
+- **Retiradas en 1.4** (ver [Perfiles con Repositorios retirados](#perfiles-con-repositorios-retirados)): `workspaceVersion`, `workflowVersion`, `verificationVersion`, `recoveryVersion`, `handoffVersion` y `projectLifecycleVersion`.
+
 | Campo | Desde | Qué anuncia |
 | --- | --- | --- |
 | `pulsoRevision`, `pulsoRevisionVersion: 1` | 1.4 | Revisión de Pulso confirmada, leída de memoria tras cada `COMMIT` (UI y MCP). Se inyecta después de la caché de `status`, así que sigue al día con la base de sesiones ocupada. Ausentes si Pulso no está disponible. |
@@ -176,7 +188,8 @@ El comportamiento y sus límites están en [SESSION_ALERTS.md](SESSION_ALERTS.md
 El contrato completo para la interfaz, con ejemplos, se mantiene también en `jauria-1.4-propuesta/contrato-e-atencion-runner.md` (fuera del repositorio). Resumen:
 
 - `status.sessions[i].agent` solo para sesiones vivas o con avisos pendientes (primero las pendientes; como mucho 128), y `terminal_live.agent` siempre (la sesión pedida, o `null`): `epoch`, `state` (`working|blocked|error|done|idle|null`), `changedAt`, `stateFrame`, `turnOpen`, `turnStartedAt`, `turnEndedAt`, `lastTurnMs`, `turnInterrupted`, `alertSeq`, `seenSeq`, `finishedUnseen` y `pending`, un objeto con una entrada por tipo pendiente (`needs`, `finished`, `bell`, `notify`: `{seq, frame}`; `ended`: `{seq}`; `permission`: `{seq, requestId, generation}`). Las horas son milisegundos Unix del reloj del runner; las duraciones, monotónicas. `frame` y `stateFrame` son índices de frame del `terminalStream` de la generación actual del runner, o `null`. `epoch` identifica la encarnación del registro (entero aleatorio de 53 bits, seguro en JavaScript).
-- `status.agentAttention`: `{hasMore, pendingSessions, pendingAlerts, durable, maxAgents}`. Con `hasMore` la lista de `agent` no está completa; los totales cuentan todas las sesiones.
+- `status.agentAttention`: `{hasMore, pendingSessions, pendingAlerts, durable, maxAgents}`. Con `hasMore` la lista de `agent` no está completa; los totales cuentan todas las sesiones. Orden real de `status_into`: primero las sesiones con avisos pendientes, después las vivas, cada grupo de la más reciente (`updated_at`) a la más antigua, y como mucho `maxAgents` (128).
+- Cada `status` es la verdad de ese ciclo: el cliente descarta el registro de una sesión que el `status` actual no lista, salvo que `terminal_live` lo haya refrescado desde el `status` anterior (sesión a la vista). Con `hasMore`, esa sesión vuelve a contarse dentro de `pendingSessions`/`pendingAlerts`; sin `hasMore`, no tiene nada pendiente. Solo se conserva su `alertSeq` como línea base de macOS (no se vuelve a anunciar si reaparece) y las marcas en vuelo; la respuesta de `mark_seen` no resucita un registro descartado.
 - `mark_seen {items:[{id, epoch, through}]}` (1 a 64; `epoch` entero positivo, `through` entero no negativo) responde `{items:[{id, agent|null, rejected?}], durable}`. Sube `seenSeq` a `max(seenSeq, min(through, alertSeq))` si `epoch` coincide; si no, `rejected: "epoch"`, sin efecto, con el `agent` actual. Sin cerrojo de mutaciones ni custodia; no responde permisos. Solo una llamada espera la confirmación en disco; las concurrentes responden al momento.
 - Reglas del cliente: `through` es el `alertSeq` que pintó y `epoch` el del mismo objeto `agent`, nunca valores leídos después. Un aviso con `frame` se marca visto de forma automática solo cuando la interfaz ya consumió ese frame de `terminal_live` y no está en replay; con `frame: null` (otra generación o aviso sin frame, como `permission` y `ended`) solo por una acción explícita de la persona o al abrir la sesión. `finished` sigue pendiente aunque el agente vuelva a trabajar: hay que verlo.
 
