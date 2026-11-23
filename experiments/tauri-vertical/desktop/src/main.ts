@@ -30,7 +30,7 @@ import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, 
 import { renderSessionTabs, sessionTabs } from './top-bar';
 import { mountPulsoPanel } from './pulso-panel';
 import { parseProgramStatus, ProgramStatusTracker, programStateLabel, type ProgramState } from './program-status';
-import { sessionActivity } from './session-activity';
+import { sessionActivity, type ActivityKind } from './session-activity';
 import { paintAgentIndicator, providerBadge, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
 import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
@@ -39,7 +39,7 @@ import { appCommands, newSessionUnavailable, paletteEntries, type AppCommandCont
 import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcutAria, shortcutHint } from './shortcuts';
 
 type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
-type RunnerStatus = { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
+type RunnerStatus = { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
 type Event = { seq: number; sessionId: string; kind: string; data: string };
 type View = { catchup?: boolean; catchupThrough?: number; archivedOnly?: boolean; stream?: TerminalStreamCursor; streamReplay?: boolean; liveReplayThrough?: number; liveReady?: boolean; session: Session; term: Terminal; fit: FitAddon; host: HTMLDivElement; sentSize: string; lastAttemptSize: string; resizeBusy: boolean; resizeAgain: boolean; input: OrderedInput; disposal: () => void; chat?:ReturnType<typeof mountCodexConversation> };
 type Pane = { root: HTMLElement; host: HTMLElement; trigger: HTMLButtonElement; picker: SessionPicker; id: string | null };
@@ -104,13 +104,37 @@ let sidebarKey = '';
 let projectListKey = '';
 let sessionSetKey = '';
 const programSeen = new Map<string, string>();
-// Pulso summary for the sidebar. Event-driven, never a timer: see sidebar-projects.ts.
-const sidebarProjects = new SidebarProjects((op, args) => requestPulso(op, args));
+// Pulso summary for the sidebar. Never a timer: see sidebar-projects.ts.
+const sidebarProjects = new SidebarProjects((op, args) => requestPulso(op, args), () => runner?.pulsoSummaryVersion === 1);
 function pulsoReadable() { return connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable; }
+/** Runner 1.4 (pulsoRevisionVersion): the confirmed Pulso revision from status; null with older runners. */
+function statusPulsoRevision(): number | null {
+  return runner?.pulsoRevisionVersion === 1 && typeof runner.pulsoRevision === 'number' ? runner.pulsoRevision : null;
+}
+// Revision a sidebar read was started for, and the earliest retry after a failed one.
+let sidebarAsked: number | null = null;
+let sidebarRetryAt = 0;
+/**
+ * With the status revision every trigger (each status, focus, visibility,
+ * session set, board changes) reads only when the summary is not at that
+ * revision yet, and only while the window is visible: a hidden window keeps
+ * the change pending and visibilitychange reads it. Older runners: every
+ * trigger reads, as in 1.3.x.
+ */
 function loadSidebarProjects() {
   if (disposed || !pulsoReadable()) return;
-  void sidebarProjects.load().then(changed => { if (changed && !disposed) refresh(); }).catch(() => { /* Keep the last summary; the next trigger retries. */ });
+  const revision = statusPulsoRevision();
+  if (revision !== null) {
+    if (revision === sidebarProjects.snapshot.revision || revision === sidebarAsked) return;
+    if (document.visibilityState !== 'visible' || Date.now() < sidebarRetryAt) return;
+    sidebarAsked = revision;
+  }
+  void sidebarProjects.load().then(changed => { if (changed && !disposed) refresh(); }).catch(() => {
+    // Keep the last summary; the next trigger (or status, after 5 s) retries.
+    if (revision !== null && sidebarAsked === revision) { sidebarAsked = null; sidebarRetryAt = Date.now() + 5000; }
+  });
 }
+let currentActivity = new Map<string, { kind: ActivityKind; label: string }>();
 let announcedAlerts = new Set<string>();
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
@@ -344,6 +368,7 @@ function refresh() {
   dockBadge.setCount(connected && !replaying ? dockUnreadCount(unread) : 0);
   const alertById = new Map(alerts.map(item => [item.id, item]));
   const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
+  currentActivity = activityById;
   const unseen = unread.length;
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
     ? alertById.has(s.id) && matchesSession(s, 'all', q)
@@ -408,7 +433,8 @@ function refresh() {
   // Sidebar Pulso summary: reread when Pulso becomes readable or the session set changes.
   const nextSessionSet = `${pulsoReadable()}|${runner?.generation ?? ''}|${sessions.map(s => s.id).join(',')}`;
   if (nextSessionSet !== sessionSetKey) { sessionSetKey = nextSessionSet; loadSidebarProjects(); }
-  // An agent that reports done/idle has often just written to Pulso through MCP.
+  // Older runners: an agent that reports done/idle has often just written to
+  // Pulso through MCP. With pulsoRevisionVersion the status revision says so.
   let turnEnded = false;
   for (const s of sessions) {
     const state = programStatuses.display(s.id) ?? '';
@@ -416,7 +442,7 @@ function refresh() {
     if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) turnEnded = true;
     programSeen.set(s.id, state);
   }
-  if (turnEnded) loadSidebarProjects();
+  if (turnEnded && statusPulsoRevision() === null) loadSidebarProjects();
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
   const newSessionBlocked = newSessionUnavailable({ connected, busy: busyAction, replaying, occupied, limit: sessionLimit() }) !== null;
@@ -506,7 +532,7 @@ function refresh() {
   $('#session-list').setAttribute('aria-label', filter === 'attention' ? 'Sesiones con avisos' : filter === 'activity' ? 'Agentes por estado' : filter === 'closed' ? (grouping === 'state' ? 'Historial por estado' : 'Historial por proyecto') : 'Agentes por proyecto');
   // Keep the button itself mounted while status, output metadata or attention
   // changes. Replacing it between pointer down and up loses the user's click.
-  const key = JSON.stringify([filter, query, groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
+  const key = JSON.stringify([filter, query, summary.linksTruncated, groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
   if (sidebarKey !== key) {
     sidebarKey = key;
     const list = $('#session-list');
@@ -517,7 +543,8 @@ function refresh() {
       if (group.kind) section.dataset.activity = group.kind; else section.dataset.project = group.projectId ?? 'none';
       const heading = document.createElement('div'); heading.className = 'group-heading';
       if (group.kind) { const marker = document.createElement('span'); marker.className = 'activity-group-marker'; marker.dataset.activity = group.kind; marker.setAttribute('aria-hidden', 'true'); heading.append(marker); }
-      const name = document.createElement('span'); name.textContent = group.name; heading.append(name); heading.title = group.name;
+      const name = document.createElement('span'); name.textContent = group.name; heading.append(name);
+      heading.title = group.projectId === null && !group.kind && summary.linksTruncated ? `${group.name} · Pulso devolvió los vínculos incompletos: puede haber sesiones vinculadas aquí.` : group.name;
       const count = document.createElement('span'); count.className = 'activity-group-count'; count.textContent = String(group.sessions.length); heading.append(count);
       section.setAttribute('aria-label', `${group.name}: ${group.sessions.length}`);
       section.append(heading);
@@ -563,6 +590,7 @@ function refresh() {
     const tooltip = `${s.title} · ${activity.label} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
     if (button.title !== tooltip) button.title = tooltip;
   }
+  if (planning) pulsoPanel?.syncLive();
   palette?.refresh();
 }
 function assign(pane: Pane, id: string | null) {
@@ -641,6 +669,9 @@ function updateStatus(status: RunnerStatus) {
   runner = status;
   for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') attention.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);programStatuses.clear(session.id);attention.clearProgram(session.id);}}
   refresh();
+  // Runner 1.4: Pulso changes arrive as a revision in status (sidebar and board).
+  if (statusPulsoRevision() !== null) loadSidebarProjects();
+  pulsoPanel?.statusChanged(statusPulsoRevision());
 }
 function scheduleResize(view: View) {
   if (!view || view.session.transport==='app-server' || resizeTimers.has(view.session.id)) return;
@@ -1012,7 +1043,7 @@ async function connect() {
     replaying = replayThrough > 0;
     profileDataDir = config.dataDir;
     if (groupingProfile !== profileDataDir) {
-      groupingProfile = profileDataDir; sidebarProjects.reset(); projectListKey = '';
+      groupingProfile = profileDataDir; sidebarProjects.reset(); sidebarAsked = null; sidebarRetryAt = 0; projectListKey = '';
       try { grouping = readAgentGrouping(localStorage, profileDataDir); } catch { grouping = 'project'; }
       if (filter === 'open' || filter === 'activity') filter = openFilter();
     }
@@ -1372,7 +1403,7 @@ function paletteItems(): PaletteItem[] {
   return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => activityById.get(id)!,
     projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(),
     commands: commands(), mac, openSession: id => commandContext().actions.openSession(id), openBoard: openBoardFromNavigation,
-    openPulso: () => { if (stageView !== 'pulso') showPulso(); } });
+    openPulso: () => { if (stageView !== 'pulso') showPulso(); }, phases: pulsoPanel?.loadedPhases() ?? null, openPhase: openPhaseFromNavigation });
 }
 palette = new CommandPalette({
   items: paletteItems,
@@ -1430,6 +1461,9 @@ pulsoPanel = mountPulsoPanel({
   notice: text => notice(text),
   binding: async id => runner?.nativeResumeVersion === 1 ? request('native_binding', {id}) : {binding:null},
   onChange: () => { loadSidebarProjects(); if (!disposed) refresh(); },
+  revisionFromStatus: () => statusPulsoRevision() !== null,
+  cardFooters: () => runner?.pulsoBoardCardsVersion === 1,
+  activityOf: id => currentActivity.get(id) ?? null,
   resumeSession: async sourceId => {
     if (runner?.nativeResumeVersion !== 1 || !connected) throw new Error('Este runner no permite reanudar conversaciones nativas.');
     const check=workspaceContext();
@@ -1471,6 +1505,12 @@ function openBoardFromNavigation(board: string | null) {
   if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed()) return;
   showPulso();
   void pulsoPanel.openBoard(board).finally(() => { if (!disposed) refresh(); });
+}
+/** Palette «Fases»: a phase of the loaded board opens its drawer; Pulso's draft guards apply. */
+function openPhaseFromNavigation(id: string) {
+  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed()) return;
+  showPulso();
+  void pulsoPanel.openPhase(id).finally(() => { if (!disposed) refresh(); });
 }
 window.addEventListener('beforeunload', () => { disposed = true; loopVersion++; pulsoPanel?.dispose(); });
 refresh();
