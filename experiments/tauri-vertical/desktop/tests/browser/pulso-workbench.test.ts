@@ -323,7 +323,7 @@ try{
       await page.keyboard.type('Validación');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===1);
       await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===2);
       assert.equal(await page.locator('#session-search').isVisible(),false);
-      await page.locator('#toggle-search').click();await page.waitForFunction(()=>document.activeElement?.id==='session-search');await page.keyboard.press('Escape');
+      await page.locator('#toggle-search').click();await page.waitForFunction(()=>document.activeElement?.id==='session-search');await page.locator('#toggle-search').click();await page.waitForFunction(()=>(document.querySelector('#session-search-field') as HTMLElement).hidden);assert.equal(await page.locator('#toggle-search').getAttribute('aria-expanded'),'false','the search button also closes an empty field');
       assert.equal(await page.locator('#new-session').getAttribute('aria-label'),'Nueva sesión');
       const shots=process.env.PULSO_SCREENSHOT_DIR;
       if(shots){await mkdir(shots,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-project-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}

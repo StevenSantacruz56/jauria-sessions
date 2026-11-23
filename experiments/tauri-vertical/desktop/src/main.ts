@@ -1350,6 +1350,8 @@ function setSearchOpen(open: boolean) {
   $('#session-search-field').hidden = !searchOpen;
   $('#toggle-search').setAttribute('aria-expanded', String(searchOpen));
 }
+// Keep focus in the field on press so its blur handler does not reopen it on click.
+$('#toggle-search').addEventListener('mousedown', event => event.preventDefault());
 $('#toggle-search').addEventListener('click', () => {
   if (!searchOpen) { setSearchOpen(true); $<HTMLInputElement>('#session-search').focus(); return; }
   if (query) { $<HTMLInputElement>('#session-search').focus(); return; }
@@ -1617,7 +1619,7 @@ $('#open-pulso').addEventListener('click', showPulso);
 $('#sidebar-project-list').addEventListener('click', event => {
   const row = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-board]');
   if (!row || row.disabled || !pulsoPanel) return;
-  if (taskScreen === 'pulso' && !pulsoPanel.prepareNavigation()) return;
+  // openBoard keeps Pulso's draft guards: a dirty or failed draft keeps the current board.
   showPulso();
   void pulsoPanel.openBoard(row.dataset.board === '' ? null : row.dataset.board!).finally(() => { if (!disposed) refresh(); });
 });

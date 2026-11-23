@@ -40,7 +40,6 @@ export class SidebarProjects {
     if (generation !== this.#generation) return false;
     const revision = typeof page?.revision === 'number' ? page.revision : null;
     if (revision !== null && revision === this.#snapshot.revision) return false;
-    if (revision !== null && this.#snapshot.revision !== null && revision < this.#snapshot.revision) return false;
     const rows: { id: string; title: string; mainSessionId?: string | null }[] = Array.isArray(page?.projects) ? page.projects : [];
     const snapshotArgs = revision === null ? {} : { expectedSnapshotRevision: revision };
     const count = async (projectId: string | null, status?: string) => {
