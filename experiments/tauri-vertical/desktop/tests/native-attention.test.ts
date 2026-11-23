@@ -34,3 +34,25 @@ test('native notices describe the category without including session details', a
   n.update([item('s:signal:bell')]); await tick();
   assert.deepEqual(kinds, ['needs', 'finished', 'notice']);
 });
+test('runner agent keys map to the same three categories as window keys', async () => {
+  const { noticeKind } = await import('../src/native-attention.ts');
+  const kind = (k: string) => noticeKind([{ keys: [`session-1:agent:${k}:4503599627370495:3`] }]);
+  assert.deepEqual(['needs', 'permission', 'finished', 'ended', 'bell', 'notify'].map(kind), ['needs', 'needs', 'finished', 'finished', 'notice', 'notice']);
+  // The strongest category of a batch wins, as with window keys.
+  assert.equal(noticeKind([{ keys: ['a:agent:bell:1:1'] }, { keys: ['b:agent:finished:1:2'] }]), 'finished');
+  assert.equal(noticeKind([{ keys: ['a:agent:ended:1:1', 'a:agent:needs:1:2'] }]), 'needs');
+  // A session id that merely contains a kind word does not change the category.
+  assert.equal(noticeKind([{ keys: ['agent-needs-1:agent:bell:1:1'] }]), 'notice');
+});
+test('the notice copy is fixed per category: no title, path or terminal text can reach it', async () => {
+  const { nativeNoticeContent } = await import('../src/native-attention.ts');
+  const sent: unknown[] = [];
+  const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: kind => { sent.push(nativeNoticeContent(kind)); } }, () => true, () => {}, 1);
+  await n.enableFromClick([]);
+  n.update([item('s:agent:finished:7:1', { id: 's', reason: 'El agente terminó · /Users/private/secret-project · rm -rf' })]); await tick();
+  assert.deepEqual(sent, [{ title: 'Jauría · Actividad finalizada', body: 'Abre Jauría y consulta Actividad.' }]);
+  for (const k of ['needs', 'finished', 'notice'] as const) {
+    const content = JSON.stringify(nativeNoticeContent(k));
+    assert.doesNotMatch(content, /secret|\/Users|session|Claude|Codex/);
+  }
+});

@@ -2,11 +2,23 @@ import type { Attention } from './attention';
 export type NativeNoticeKind = 'needs' | 'finished' | 'notice';
 type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(kind: NativeNoticeKind): void };
 
-function noticeKind(items: readonly Attention[]): NativeNoticeKind {
+/**
+ * Category of a batch, from attention keys only. Window mode: program:needs,
+ * permissions:, state:, unconfirmed → needs; program:done, signal:ended →
+ * finished. Runner mode (agentKey `<id>:agent:<kind>:<epoch>:<seq>`):
+ * agent:needs and agent:permission (a request nobody saw) → needs;
+ * agent:finished and agent:ended → finished; agent:bell/notify → notice.
+ */
+export function noticeKind(items: readonly Pick<Attention, 'keys'>[]): NativeNoticeKind {
   const keys = items.flatMap(item => item.keys);
-  if (keys.some(key => /:(?:program:needs|permissions:|state:|unconfirmed)/.test(key))) return 'needs';
-  if (keys.some(key => /:(?:program:done|signal:ended)/.test(key))) return 'finished';
+  if (keys.some(key => /:(?:program:needs|permissions:|state:|unconfirmed|agent:(?:needs|permission):)/.test(key))) return 'needs';
+  if (keys.some(key => /:(?:program:done|signal:ended|agent:(?:finished|ended):)/.test(key))) return 'finished';
   return 'notice';
+}
+/** Fixed copy per category: never a session title, path, terminal text or permission detail. */
+export function nativeNoticeContent(kind: NativeNoticeKind): { title: string; body: string } {
+  const title = kind === 'needs' ? 'Jauría · Necesita tu atención' : kind === 'finished' ? 'Jauría · Actividad finalizada' : 'Jauría · Aviso de sesión';
+  return { title, body: 'Abre Jauría y consulta Actividad.' };
 }
 /** No permission checks or prompts until the user clicks Enable. No delivery receipt. */
 export class NativeAttention {

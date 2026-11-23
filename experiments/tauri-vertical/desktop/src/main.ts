@@ -2,7 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { appVersion } from './app-version';
 import { mountSettings, settingsArgs, type AppSettings } from './settings-panel';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { NativeAttention } from './native-attention';
+import { NativeAttention, nativeNoticeContent } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
 import { SessionAttention } from './attention';
 import { RunnerAttentionSource, WindowAttentionSource, turnEnded, type AttentionSource } from './attention-source';
@@ -160,7 +160,7 @@ let dialogReturn: HTMLElement | null = null;
 let newDialogVersion = 0;
 const nativeAttention = new NativeAttention({
   granted: isPermissionGranted, request: requestPermission,
-  send: kind => sendNotification({ title: kind === 'needs' ? 'Jauría · Necesita tu atención' : kind === 'finished' ? 'Jauría · Actividad finalizada' : 'Jauría · Aviso de sesión', body: 'Abre Jauría y consulta Actividad.' }),
+  send: kind => sendNotification(nativeNoticeContent(kind)),
 }, id => connected && !replaying && !isAttended(id), value => {
   text('#native-notification-status', value);
   text('#enable-native-notifications', nativeAttention.enabled ? 'Desactivar avisos de macOS' : 'Activar avisos de macOS…');
