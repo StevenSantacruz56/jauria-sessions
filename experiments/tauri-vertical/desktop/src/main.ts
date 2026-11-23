@@ -34,6 +34,9 @@ import { sessionActivity } from './session-activity';
 import { paintAgentIndicator, providerBadge, compactDuration, groupAgents, projectSessionIndex, readAgentGrouping, saveAgentGrouping, type AgentGrouping } from './agent-list';
 import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
+import { CommandPalette, type PaletteItem } from './command-palette';
+import { appCommands, newSessionUnavailable, paletteEntries, type AppCommandContext, type Theme } from './app-commands';
+import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcutAria, shortcutHint } from './shortcuts';
 
 type Session = { programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = { settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -82,6 +85,7 @@ let disposed = false;
 let selectedDirectory: string | null = null;
 let stageView: 'terminal' | 'pulso' = 'terminal';
 let pulsoPanel: ReturnType<typeof mountPulsoPanel> | null = null;
+let palette: CommandPalette | null = null;
 let pulsoShown = false;
 const resumeAttempts = new Map<string,string>();
 // Historical terminal queries (DSR/DA/colors) must not become fresh input.
@@ -214,11 +218,7 @@ for (let i = 0; i < 2; i++) {
       const view = pane.id ? views.get(pane.id) : null;
       if (!view) throw new Error('Selecciona una sesión primero.');
       const label = button.dataset.label ?? button.textContent?.trim() ?? op;
-      if (op === 'stop') {
-        stopTarget = view.session.id;stopGeneration=view.session.transport==='app-server'?view.session.codex?.generation??null:null;
-        text('#stop-session-description', `${view.session.title} · ${providerLabel(view.session.kind)} · ${view.session.cwd ?? 'Sin carpeta'}`);
-        stopDialog.showModal(); $<HTMLButtonElement>('#cancel-stop').focus(); return;
-      }
+      if (op === 'stop') { openStopConfirmation(view); return; }
       if (op === 'release') {
         const released = await invoke<boolean>('release_session', { id: view.session.id });
         updateStatus(await request<RunnerStatus>('status', {}));
@@ -242,6 +242,12 @@ for (let i = 0; i < 2; i++) {
     }));
   });
   new ResizeObserver(() => { if (pane.id) scheduleResize(views.get(pane.id)!); }).observe(pane.host);
+}
+/** Terminar sesión always asks first (pane menu and command palette). */
+function openStopConfirmation(view: View) {
+  stopTarget = view.session.id;stopGeneration=view.session.transport==='app-server'?view.session.codex?.generation??null:null;
+  text('#stop-session-description', `${view.session.title} · ${providerLabel(view.session.kind)} · ${view.session.cwd ?? 'Sin carpeta'}`);
+  stopDialog.showModal(); $<HTMLButtonElement>('#cancel-stop').focus();
 }
 function streamMetadata(session: Session) { return session.terminalStream ?? session.detail?.terminalStream; }
 function streamReplaying(view?: View) { return !!view && (!!view.streamReplay || !!view.catchup || (runner?.terminalStreamVersion === 1 && view.session.terminalStream?.generation === runner.generation && !view.liveReady)); }
@@ -413,7 +419,8 @@ function refresh() {
   if (turnEnded) loadSidebarProjects();
   for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
   $('#fixtures').hidden = !smoke;
-  for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying || occupied >= sessionLimit();
+  const newSessionBlocked = newSessionUnavailable({ connected, busy: busyAction, replaying, occupied, limit: sessionLimit() }) !== null;
+  for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = newSessionBlocked;
   for (const id of ['choose-directory', 'use-home-directory']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction || connecting;
   const terminalSupported = runner?.normalTerminalVersion === 1;
   $<HTMLInputElement>('input[name=provider][value=terminal]').disabled = !terminalSupported || busyAction;
@@ -556,6 +563,7 @@ function refresh() {
     const tooltip = `${s.title} · ${activity.label} · ${s.cwd ?? providerLabel(s.kind)}${alert ? ` · ${alert.reason}` : ''}`;
     if (button.title !== tooltip) button.title = tooltip;
   }
+  palette?.refresh();
 }
 function assign(pane: Pane, id: string | null) {
   if (pane.id === id) return;
@@ -1148,22 +1156,26 @@ $('#session-alerts').addEventListener('click', () => {
 $('#attention-show-list').addEventListener('click', () => { alertsPopover.close(false); showAttention(); });
 $('#status-needs').addEventListener('click', () => { const id = $('#status-needs').dataset.sessionId; if (id && views.has(id)) selectSession(id); });
 $('#open-attention-session').addEventListener('click', () => { const id = $('#open-attention-session').dataset.sessionId; alertsPopover.close(false); if (id && views.has(id)) selectSession(id); });
+/** Marking seen is presentation only; persistent causes stay. */
+function markAlertsSeen() { attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh(); }
 $('#see-attention').addEventListener('click', () => {
-  attention.see(attention.list(attentionSessions())); for(const id of views.keys())programStatuses.markSeen(id); refresh();
-  // Marking seen is presentation only; persistent causes keep the popover open on its next action.
+  markAlertsSeen();
+  // Persistent causes keep the popover open on its next action.
   (!$('#attention-banner').hidden ? $('#open-attention-session') : $('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
 });
+function showFilter(value: 'open' | 'closed') { filter = value === 'open' ? openFilter() : value; $('.workspace-navigation').scrollTop = 0; refresh(); }
 document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => {
   if (button.dataset.filter === 'attention') showAttention();
-  else { filter = button.dataset.filter === 'open' ? openFilter() : button.dataset.filter as SessionFilter; $('.workspace-navigation').scrollTop = 0; refresh(); }
+  else showFilter(button.dataset.filter as 'open' | 'closed');
 }));
 // Por proyecto / Por estado: a remembered per-profile view preference.
-$('#agent-grouping').addEventListener('click', () => {
+function toggleGrouping() {
   grouping = grouping === 'state' ? 'project' : 'state';
   try { saveAgentGrouping(localStorage, profileDataDir, grouping); } catch { /* Optional view preference. */ }
   if (filter === 'open' || filter === 'activity') filter = openFilter();
   $('.workspace-navigation').scrollTop = 0; refresh();
-});
+}
+$('#agent-grouping').addEventListener('click', toggleGrouping);
 $('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
 const theme = $<HTMLSelectElement>('#theme-select');
 try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }
@@ -1282,39 +1294,104 @@ $('#rename-session-form').addEventListener('submit', event => {
     }
   })();
 });
-function handleAppShortcut(event: KeyboardEvent): boolean {
-  if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || document.querySelector('dialog[open]')) return false;
-  const key = event.key.toLowerCase();
-  if (!['n', 'k', 'i', ','].includes(key)) return false;
-  if (event.type !== 'keydown') return true;
-  event.preventDefault(); event.stopPropagation();
-  if (key === ',') openSettings();
-  if (key === 'n' && !$<HTMLButtonElement>('#new-session').disabled) openNew();
-  if (key === 'k') {
-    if (window.innerWidth <= 860) {
-      $('.workspace-shell').classList.add('sidebar-open'); $('#sidebar-scrim').hidden = false;
-      $('#toggle-sidebar').setAttribute('aria-expanded', 'true');
-    }
-    // WebKit ignores focus while CSS visibility is still transitioning.
-    // Blur immediately; a guarded retry after the drawer settles never sends
-    // intervening keystrokes to the CLI or steals a later deliberate focus.
-    const search = $<HTMLInputElement>('#session-search');
-    setSearchOpen(true);
-    (document.activeElement as HTMLElement | null)?.blur();
-    void getComputedStyle($('#sidebar')).visibility;
-    search.focus();
-    setTimeout(() => {
-      if (!document.querySelector('dialog[open]') && stageView === 'terminal' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
-    }, 200);
+/** ⌘K: reveal and focus the agent list's search field. */
+function focusSessionSearch() {
+  if (window.innerWidth <= 860) {
+    $('.workspace-shell').classList.add('sidebar-open'); $('#sidebar-scrim').hidden = false;
+    $('#toggle-sidebar').setAttribute('aria-expanded', 'true');
   }
-  if (key === 'i') setInspector($('#inspector').hidden);
-  return true;
+  // WebKit ignores focus while CSS visibility is still transitioning.
+  // Blur immediately; a guarded retry after the drawer settles never sends
+  // intervening keystrokes to the CLI or steals a later deliberate focus.
+  const search = $<HTMLInputElement>('#session-search');
+  setSearchOpen(true);
+  (document.activeElement as HTMLElement | null)?.blur();
+  void getComputedStyle($('#sidebar')).visibility;
+  search.focus();
+  setTimeout(() => {
+    if (!document.querySelector('dialog[open]') && stageView === 'terminal' && document.activeElement === document.body && (window.innerWidth > 860 || $('.workspace-shell').classList.contains('sidebar-open'))) search.focus();
+  }, 200);
 }
-window.addEventListener('keydown', event => {
-  if (event.key === ',' && handleAppShortcut(event)) return;
-  if ((event.target as HTMLElement).closest('.terminal-view, input, textarea, select, [contenteditable]')) return;
-  handleAppShortcut(event);
+function focusOtherPane() {
+  if (!split || stageView !== 'terminal') return;
+  focusedPane = focusedPane === 0 ? 1 : 0; refresh();
+  const pane = panes[focusedPane]; const view = pane.id ? views.get(pane.id) : undefined;
+  if (view) focusView(view); else pane.trigger.focus();
+}
+/** Interrumpir sends Ctrl-C at once from its button; the palette only focuses that button. */
+function focusInterruptControl(id: string) {
+  const pane = panes.find((p, index) => p.id === id && (index === 0 || split)); if (!pane) return;
+  const button = pane.root.querySelector<HTMLButtonElement>('[data-action="interrupt"]');
+  if (!button || button.hidden || button.disabled) return;
+  button.focus();
+  notice(`${views.get(id)?.session.title ?? 'Sesión'}: pulsa Intro o Espacio en Interrumpir para enviar Ctrl-C.`);
+}
+/** In Pulso, a draft or a failed save keeps the board (same guard as «Terminal»). */
+function pulsoNavigationAllowed() {
+  if (stageView !== 'pulso' || !pulsoPanel || pulsoPanel.prepareNavigation()) return true;
+  notice('Guarda o descarta el borrador de Pulso antes de salir del tablero.'); return false;
+}
+function pulsoUnavailable(): string | null {
+  if (!connected) return 'Pulso sin conexión';
+  if (runner?.pulsoBoardVersion !== 1) return 'Pulso necesita el runner actualizado';
+  return runner.pulsoAvailable ? null : 'Pulso no disponible; sus datos se conservan';
+}
+const mac = isMacPlatform();
+function commandContext(): AppCommandContext {
+  const view = activeView();
+  const needsId = $('#status-needs').dataset.sessionId;
+  return {
+    connected, connecting, busy: busyAction, replaying, occupied: occupiedSessions(), limit: sessionLimit(), sessionCount: views.size, split,
+    planning: stageView === 'pulso', pulsoUnavailable: pulsoUnavailable(), inspectorOpen: !$('#inspector').hidden,
+    unseenAlerts: Number($('#session-alerts').dataset.unread ?? 0),
+    needsTarget: needsId && views.has(needsId) ? { id: needsId, title: views.get(needsId)!.session.title } : null,
+    grouping, filter: filter === 'closed' ? 'closed' : filter === 'open' || filter === 'activity' ? 'open' : 'other', theme: theme.value as Theme,
+    renameSupported: runner?.sessionRenameVersion === 1,
+    focused: view ? { id: view.session.id, title: view.session.title, live: isLive(view.session), stopping: stopping.has(view.session.id), structured: view.session.transport === 'app-server' } : null,
+    actions: {
+      togglePalette: () => palette?.toggle(), newSession: () => openNew(), searchSessions: focusSessionSearch, toggleSplit: () => setSplit(!split), focusOtherPane,
+      showPulso, leavePulso, newProject: () => { if (!pulsoNavigationAllowed()) return; showPulso(); pulsoPanel?.newProject(); },
+      openSettings, toggleInspector: () => setInspector($('#inspector').hidden), markAlertsSeen,
+      openSession: id => { if (views.has(id) && pulsoNavigationAllowed()) selectSession(id); },
+      toggleGrouping, showFilter, setTheme: applyTheme, rename: openRename, interrupt: focusInterruptControl,
+      stop: id => { const target = views.get(id); if (target) openStopConfirmation(target); },
+    },
+  };
+}
+const commands = () => appCommands(commandContext());
+const handleShortcut = createShortcutHandler({ commands, mac,
+  blocked: id => palette?.isOpen ? id !== 'command-palette' : !!document.querySelector('dialog[open]') });
+function handleAppShortcut(event: KeyboardEvent): boolean { return handleShortcut(event); }
+installShortcutListeners(window, handleAppShortcut, mac);
+/** Palette entries from data the client already holds (no Pulso read per key). */
+function paletteItems(): PaletteItem[] {
+  const sessions = attentionSessions();
+  const alertById = new Map(attention.list(sessions).map(item => [item.id, item]));
+  const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
+  const summary = sidebarProjects.snapshot;
+  return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => activityById.get(id)!,
+    projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(),
+    commands: commands(), mac, openSession: id => commandContext().actions.openSession(id), openBoard: openBoardFromNavigation,
+    openPulso: () => { if (stageView !== 'pulso') showPulso(); } });
+}
+palette = new CommandPalette({
+  items: paletteItems,
+  canOpen: () => !disposed && !document.querySelector('dialog[open]'),
+  // Popovers, pickers and menus close first; none of them keeps focus under the palette.
+  beforeOpen: () => {
+    alertsPopover.close(false);
+    for (const pane of panes) { pane.picker.close(false); pane.root.querySelectorAll('details').forEach(d => d.open = false); }
+    pulsoPanel?.closeMenus();
+    if (window.innerWidth <= 860) closeSidebar();
+  },
+  onToggle: open => $('#open-command-palette').setAttribute('aria-expanded', String(open)),
 });
+$('#open-command-palette').setAttribute('aria-keyshortcuts', shortcutAria('command-palette', mac));
+$('#open-command-palette').title = `Paleta de comandos (${shortcutHint('command-palette', mac)})`;
+text('#open-command-palette-hint', shortcutHint('command-palette', mac));
+// Keep the previous focus (normally the terminal) so closing returns to it.
+$('#open-command-palette').addEventListener('mousedown', event => event.preventDefault());
+$('#open-command-palette').addEventListener('click', () => palette?.open());
 $('#connect').addEventListener('click', () => void connect());
 $('#quit').addEventListener('click', () => void invoke('quit_ui').catch(e => notice(message(e), true)));
 $('#create-1').addEventListener('click', () => action(() => start('fixture1', 'fixture', 'Fixture 1', panes[0])));
@@ -1389,6 +1466,12 @@ $('#sidebar-project-list').addEventListener('click', event => {
   showPulso();
   void pulsoPanel.openBoard(row.dataset.board === '' ? null : row.dataset.board!).finally(() => { if (!disposed) refresh(); });
 });
+/** Palette: openBoard keeps Pulso's draft guards; prepareNavigation also reports why the board stays. */
+function openBoardFromNavigation(board: string | null) {
+  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed()) return;
+  showPulso();
+  void pulsoPanel.openBoard(board).finally(() => { if (!disposed) refresh(); });
+}
 window.addEventListener('beforeunload', () => { disposed = true; loopVersion++; pulsoPanel?.dispose(); });
 refresh();
 // Connect is safe at launch: replay only. All start operations require visible controls.

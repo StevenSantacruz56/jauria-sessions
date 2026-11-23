@@ -45,7 +45,7 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; dispose(): void } {
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
   }
@@ -686,6 +686,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(projectId===null)await choosePending();else await chooseProject(projectId);
     },
     currentBoard(){return selectedProject?.id??null;},
+    /** Command palette: the same form as the "+" in the top bar (its own draft guards apply). */
+    newProject(){if(!disposed&&visible)newProject();},
+    /** Command palette: close the card "…" menu before opening over the board. */
+    closeMenus(){closeMoveMenu(false);},
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
     dispose() { if (disposed) return; disposed = true; visible = false;closeMoveMenu(false);outline.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
