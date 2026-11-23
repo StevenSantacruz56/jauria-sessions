@@ -12,6 +12,9 @@ const output = join(temporary, 'attention-source.mjs');
 await build({ entryPoints: ['src/attention-source.ts'], bundle: true, platform: 'node', format: 'esm', outfile: output });
 const { RunnerAttentionSource, WindowAttentionSource, SessionAttention, parseAgent, turnEnded } = await import(pathToFileURL(output).href);
 after(() => rm(temporary, { recursive: true, force: true }));
+const nativeOutput = join(temporary, 'native-attention.mjs');
+await build({ entryPoints: ['src/native-attention.ts'], bundle: true, platform: 'node', format: 'esm', outfile: nativeOutput });
+const { NativeAttention } = await import(pathToFileURL(nativeOutput).href);
 
 type Any = any;
 const session = (id = 's1', status = 'running', extra: Any = {}) => ({ id, title: id, kind: 'claude', status, transport: 'pty', cwd: null, rows: 24, cols: 80, ...extra });
@@ -257,6 +260,57 @@ function harness(options: Any = {}) {
     source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 3, pending: { finished: { seq: 1, frame: 1 }, bell: { seq: 2, frame: 2 }, needs: { seq: 3, frame: 3 } } }) }], { hasMore: true, pendingSessions: 1 }));
     source.paint([]);
     assert.equal(source.nativeItems(source.list([session()]))[0].unseen, true);
+  });
+
+  test('hasMore: a new alert omitted before the native grouping fires still reaches macOS, once', async () => {
+    let clock = 1_000_000;
+    const { source } = harness({ now: () => clock });
+    const sends: string[] = [];
+    const native = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: (kind: string) => { sends.push(kind); } }, () => true, () => {}, 20);
+    await native.enableFromClick([]);
+    const step = (rows: Any[]) => {
+      source.ingestStatus(status(rows, { hasMore: true, pendingSessions: 1, pendingAlerts: 1 }));
+      source.paint([]); native.update(source.nativeItems(source.list([session('s1')])));
+    };
+    const wait = () => new Promise(resolve => setTimeout(resolve, 80));
+    const atConnect = { ended: { seq: 1 } };
+    step([{ id: 's1', agent: agent({ alertSeq: 1, pending: atConnect }) }]);
+    await wait();
+    assert.deepEqual(sends, [], 'pending at connect is never announced');
+    // A new alert is listed, queued for the grouping, and the capped list omits it before the delay ends.
+    const newer = { ...atConnect, finished: { seq: 2, frame: 3 } };
+    step([{ id: 's1', agent: agent({ alertSeq: 2, pending: newer }) }]);
+    step([{ id: 's1' }]);
+    await wait();
+    assert.deepEqual(sends, ['finished'], 'the omitted new alert is still delivered');
+    // It reappears unchanged: not announced again. A later alert is.
+    step([{ id: 's1', agent: agent({ alertSeq: 2, pending: newer }) }]); await wait();
+    assert.deepEqual(sends, ['finished']);
+    step([{ id: 's1' }]); clock += 10_000; step([{ id: 's1' }]); await wait();
+    step([{ id: 's1', agent: agent({ alertSeq: 2, pending: newer }) }]); await wait();
+    assert.deepEqual(sends, ['finished'], 'nor after the retained notice expired');
+    step([{ id: 's1', agent: agent({ alertSeq: 3, pending: { ...newer, bell: { seq: 3, frame: 4 } } }) }]); await wait();
+    assert.deepEqual(sends, ['finished', 'notice']);
+    // Omitted with nothing new: nothing is retained or sent.
+    step([{ id: 's1' }]); await wait();
+    assert.deepEqual(sends, ['finished', 'notice']);
+  });
+
+  test('a retained notice is dropped when the person marks seen before the grouping fires', async () => {
+    const { source } = harness();
+    const sends: string[] = [];
+    const native = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: (kind: string) => { sends.push(kind); } }, () => true, () => {}, 20);
+    await native.enableFromClick([]);
+    const step = (rows: Any[]) => {
+      source.ingestStatus(status(rows, { hasMore: true, pendingSessions: 1, pendingAlerts: 1 }));
+      source.paint([]); native.update(source.nativeItems(source.list([session('s1')])));
+    };
+    step([{ id: 's1', agent: agent({ alertSeq: 0 }) }]);
+    step([{ id: 's1', agent: agent({ alertSeq: 1, pending: { bell: { seq: 1, frame: 2 } } }) }]);
+    step([{ id: 's1' }]);
+    source.markAll([session('s1')]); native.update(source.nativeItems(source.list([session('s1')])));
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.deepEqual(sends, []);
   });
 
   test('first status with hasMore: an existing session omitted then seen takes its baseline; a session born later notifies', () => {

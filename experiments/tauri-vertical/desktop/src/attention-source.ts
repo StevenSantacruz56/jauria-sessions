@@ -151,7 +151,16 @@ export type RunnerHooks = {
   changed(): void;
   /** Retry scheduling; tests inject a fake. */
   later?(run: () => void, ms: number): unknown;
+  /** Clock for retained native notices; tests inject a fake. */
+  now?(): number;
 };
+
+/**
+ * How long a dropped record keeps offering its new alerts to macOS. Longer
+ * than the 1.5 s grouping in NativeAttention plus a status cycle, so a notice
+ * queued before the record left the capped list is still found at delivery.
+ */
+const RETAIN_NATIVE_MS = 5000;
 
 const reasons: Record<AgentAlertKind, (a: AgentRecord) => string> = {
   needs: a => a.state === 'error' ? 'El agente informó un error' : 'El agente solicita atención',
@@ -179,6 +188,8 @@ export class RunnerAttentionSource implements AttentionSource {
   private unlistedAtConnect = new Set<string>();
   /** Records terminal_live refreshed since the last status (the session is in view). */
   private liveSince = new Set<string>();
+  /** New alerts (above the native baseline) of records dropped by omission, offered to macOS for RETAIN_NATIVE_MS. */
+  private retained = new Map<string, { keys: string[]; at: number }>();
   private generation: string | null = null;
   private token = 0;
   private flying = false;
@@ -212,6 +223,11 @@ export class RunnerAttentionSource implements AttentionSource {
       if (listed.has(id) || this.liveSince.has(id)) continue;
       this.agents.delete(id); changed = true;
       const base = this.baseline.get(id);
+      // Its new alerts may be queued for the macOS grouping right now: keep
+      // offering them for a while, so dropping never swallows a notice. The
+      // advanced baseline below still keeps a reappearance from repeating it.
+      const fresh = this.pending(id, a).filter(([, p]) => !base || base.epoch !== a.epoch || p.seq > base.seq).map(([kind, p]) => agentKey(id, kind, a.epoch, p.seq));
+      if (fresh.length) this.retained.set(id, { keys: fresh, at: this.now() });
       if (!base || base.epoch !== a.epoch || base.seq < a.alertSeq) this.baseline.set(id, { epoch: a.epoch, seq: a.alertSeq });
     }
     this.liveSince.clear();
@@ -292,18 +308,23 @@ export class RunnerAttentionSource implements AttentionSource {
       const base = this.baseline.get(parts.id);
       return !base || base.epoch !== parts.epoch || parts.seq > base.seq;
     };
-    return items.map(item => {
+    const now = this.now();
+    for (const [id, r] of [...this.retained]) if (now - r.at > RETAIN_NATIVE_MS) this.retained.delete(id);
+    return [...items.map(item => {
       const unseenKeys = (item.unseenKeys ?? []).filter(fresh);
       return { ...item, keys: item.keys.filter(fresh), unseenKeys, unseen: unseenKeys.length > 0 };
-    });
+    }), ...[...this.retained].map(([id, r]) => ({ id, reason: '', unseen: true, stale: false, keys: r.keys, unseenKeys: r.keys }))];
   }
+  private now() { return (this.hooks.now ?? Date.now)(); }
   select(id: string, sessions: readonly AttentionSession[]) {
     this.base.see(this.list(sessions).filter(item => item.id === id));
-    this.explicit(id); void this.flush();
+    this.explicit(id); this.retained.delete(id); void this.flush();
   }
   markAll(sessions: readonly AttentionSession[]) {
     this.base.see(this.list(sessions));
     for (const id of this.painted.keys()) this.explicit(id);
+    // What the person just marked seen is no longer news for macOS either.
+    this.retained.clear();
     void this.flush();
   }
   /** Explicit action: everything painted for the session, through the painted alertSeq and epoch. */
@@ -397,7 +418,7 @@ export class RunnerAttentionSource implements AttentionSource {
     this.token++; this.flying = false;
     this.agents.clear(); this.painted.clear(); this.optimistic.clear(); this.wanted.clear(); this.sent.clear();
     this.baseline.clear(); this.baselined = false; this.baselineFirstSight = false; this.generation = null; this.volatileSeen = false;
-    this.unlistedAtConnect.clear(); this.liveSince.clear();
+    this.unlistedAtConnect.clear(); this.liveSince.clear(); this.retained.clear();
   }
 }
 
