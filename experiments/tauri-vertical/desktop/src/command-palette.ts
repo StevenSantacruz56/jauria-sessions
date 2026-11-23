@@ -12,11 +12,11 @@ import type { ActivityKind } from './session-activity';
  * before (normally the terminal). Disabled entries stay listed with their
  * reason and do nothing.
  */
-export type PaletteGroup = 'needs' | 'sessions' | 'projects' | 'actions';
-export const paletteGroups: readonly PaletteGroup[] = ['needs', 'sessions', 'projects', 'actions'];
-export const paletteGroupLabels: Record<PaletteGroup, string> = { needs: 'Te necesitan', sessions: 'Sesiones', projects: 'Proyectos', actions: 'Acciones' };
+export type PaletteGroup = 'needs' | 'sessions' | 'projects' | 'phases' | 'actions';
+export const paletteGroups: readonly PaletteGroup[] = ['needs', 'sessions', 'projects', 'phases', 'actions'];
+export const paletteGroupLabels: Record<PaletteGroup, string> = { needs: 'Te necesitan', sessions: 'Sesiones', projects: 'Proyectos', phases: 'Fases', actions: 'Acciones' };
 /** Rows shown per group; the list scrolls inside the dialog. Actions are few and all listed. */
-export const paletteGroupLimit: Record<PaletteGroup, number> = { needs: 8, sessions: 12, projects: 12, actions: Infinity };
+export const paletteGroupLimit: Record<PaletteGroup, number> = { needs: 8, sessions: 12, projects: 12, phases: 12, actions: Infinity };
 
 export type PaletteItem = {
   id: string;

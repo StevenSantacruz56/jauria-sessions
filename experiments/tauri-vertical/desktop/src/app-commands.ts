@@ -140,13 +140,17 @@ export type PaletteSources = {
   openSession: (id: string) => void;
   openBoard: (projectId: string | null) => void;
   openPulso: () => void;
+  /** Phases of the Pulso board already loaded (none until one is open): no read happens here. */
+  phases?: { board: string; phases: readonly { id: string; title: string; statusLabel: string }[] } | null;
+  openPhase?: (id: string) => void;
 };
 
 /**
  * Palette entries. Te necesitan: sessions whose activity is «needs» or «notice»
  * (open or not), in the sidebar's priority. Sesiones: the other open sessions
  * with their state and Pulso project (else their folder). Proyectos: the
- * boards of the sidebar summary, Pendientes and «Más proyectos…». Acciones:
+ * boards of the sidebar summary, Pendientes and «Más proyectos…». Fases: the
+ * phases of the project board already loaded in Pulso. Acciones:
  * the registry, with the shortcut hint and the unavailability reason.
  */
 export function paletteEntries(src: PaletteSources): PaletteItem[] {
@@ -170,6 +174,11 @@ export function paletteEntries(src: PaletteSources): PaletteItem[] {
   items.push({ id: 'board:', group: 'projects', label: 'Pendientes', detail: src.pendingOpen === null ? 'Tablero de Pulso' : `${src.pendingOpen} sin terminar`,
     initial: '·', keywords: 'pulso tablero tareas sueltas', disabledReason: src.pulsoBlocked, run: () => src.openBoard(null) });
   if (src.hasMoreProjects) items.push({ id: 'board-more', group: 'projects', label: 'Más proyectos…', detail: 'Abrir Pulso', keywords: 'pulso', disabledReason: src.pulsoBlocked, run: src.openPulso });
+  if (src.phases && src.openPhase) for (const phase of src.phases.phases) {
+    const open = src.openPhase;
+    items.push({ id: `phase:${phase.id}`, group: 'phases', label: phase.title, detail: `${phase.statusLabel} · ${src.phases.board}`,
+      keywords: 'pulso fase tarjeta', disabledReason: src.pulsoBlocked, run: () => open(phase.id) });
+  }
   for (const command of src.commands) {
     if (command.palette === false) continue;
     items.push({ id: `action:${command.id}`, group: 'actions', label: command.label, keywords: command.keywords, disabledReason: command.unavailable(),
