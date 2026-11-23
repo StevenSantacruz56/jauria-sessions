@@ -23,11 +23,12 @@ Cada sesión usa un permiso privado revocable; no publiques su archivo, ruta de 
 | --- | --- |
 | Interfaz de Configuración y acceso manual | `experiments/tauri-vertical/desktop/src/settings-panel.ts`, `src/agent-permissions.ts`, `src/main.ts` |
 | Ajustes y ciclo de sesiones del runner | `experiments/tauri-vertical/runner/src/app_settings.rs`, `src/runner.rs` |
+| Admisión de sesiones (límite de plazas, un escritor por worktree) y esquema del perfil | `experiments/tauri-vertical/runner/src/runner.rs`, `src/runner_codex.rs`, `src/storage.rs`, `src/legacy_tasks.rs` |
 | Pulso, almacenamiento y MCP | `experiments/tauri-vertical/runner/src/pulso.rs`, `src/pulso_store.rs`, `src/pulso_mcp.rs`, `src/pulso_mcp_config.rs` |
 | Integración Codex | `experiments/tauri-vertical/runner/src/runner_codex.rs`, `src/codex_runtime.rs`, `src/codex_transport.rs` |
 | Pruebas de Configuración | `experiments/tauri-vertical/desktop/tests/settings-panel.test.ts`, `tests/agent-permissions.test.ts` |
 
-Las rutas abreviadas `src/...` y `tests/...` en la tabla se resuelven dentro del directorio de su fila. Para entender el comportamiento antes de cambiarlo, consulta también [docs/PULSO.md](docs/PULSO.md), [docs/NATIVE_PERMISSIONS.md](docs/NATIVE_PERMISSIONS.md) y las notas de release.
+Las rutas abreviadas `src/...` y `tests/...` en la tabla se resuelven dentro del directorio de su fila. Repositorios y tareas Git (registro, worktree por tarea, revisión, verificación y relevo) se retiraron en la entrega D de 1.4: `legacy_tasks.rs` solo conserva sus tablas para que un perfil antiguo abra igual en 1.4 y en 1.3.x; no vuelvas a leerlas ni a escribirlas. Para entender el comportamiento antes de cambiarlo, consulta también [docs/PULSO.md](docs/PULSO.md), [docs/NATIVE_PERMISSIONS.md](docs/NATIVE_PERMISSIONS.md) y las notas de release.
 
 ## Verificación y publicación
 

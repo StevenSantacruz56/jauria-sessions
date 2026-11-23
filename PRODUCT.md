@@ -18,7 +18,7 @@ One app to capture lightweight work, organize a complete plan as a project with 
 
 ## Operating Context
 
-A project is a Trello-style board with four fixed workflow columns (to do, in progress, waiting, done), one explicitly chosen main session and optional sessions related to phases. Cards open a focused side drawer; creating and moving cards are board actions, not session launches. Business projects do not require a Git repository and do not create worktrees. The existing Git project/task workflow remains separate.
+A project is a Trello-style board with four fixed workflow columns (to do, in progress, waiting, done), one explicitly chosen main session and optional sessions related to phases. Cards open a focused side drawer; creating and moving cards are board actions, not session launches. Business projects do not require a Git repository and do not create worktrees. Jauria has no Git repository/task workflow since 1.4; data a profile kept from earlier versions is preserved and ignored.
 
 ## Capabilities and Constraints
 

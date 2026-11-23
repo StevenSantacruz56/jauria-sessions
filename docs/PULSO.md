@@ -13,7 +13,7 @@ Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto repr
 
 La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
 
-**Repositorios** organiza carpetas Git y tareas técnicas. Crear un proyecto de Pulso no crea ramas ni worktrees; **Registrar repositorio… / Nueva tarea Git** conserva el flujo Git anterior.
+Crear un proyecto de Pulso no crea ramas ni worktrees. Jauria ya no tiene Repositorios ni tareas Git desde 1.4; los datos de esa función en un perfil anterior se conservan y se ignoran.
 
 ## Lectura del tablero
 

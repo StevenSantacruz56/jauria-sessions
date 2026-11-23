@@ -11,15 +11,17 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 - Start a session in any directory, including your home directory, without creating a project.
 - Run Claude Code, Codex or a normal zsh terminal. Configure a combined limit of 1–8 concurrent sessions; the default is 2. Two visible panes do not limit the number of open sessions.
 - Rename active or historical sessions through the pane actions menu.
-- Register Git repositories and create a separate worktree for each parallel editing task. Jauria enforces one managed writer per worktree. Shell and provider settings determine filesystem and command permissions.
+- Edit the same repository in parallel from separate Git worktrees. Jauria enforces one managed writer per worktree. Shell and provider settings determine filesystem and command permissions.
 - Inspect session state, optional attention notifications, provider usage when available, and observed CPU/RAM consumption.
 
-**Pulso 1.3.0** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones. Git repositories remain separate.
+Since 1.4, Jauria no longer includes **Repositorios** or Git tasks (repository registration, a worktree per task, review, verification and handoff). Data from that feature in a profile created by an earlier version is kept on disk and ignored; Jauria never deletes worktrees or branches, and you can open an ordinary session in any of those folders.
 
-1. Choose **Nuevo proyecto**, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked. Creating the project opens its board tab.
+**Pulso 1.3.0** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones.
+
+1. In Pulso, choose the **+** (Nuevo proyecto) next to the board tabs in the top bar, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked. Creating the project opens its board tab.
 2. Add phases inline with **Añadir fase** in the first three columns (**Añadir pendiente** for standalone cards).
-3. Drag a card by its grip to another column, or use the keyboard-accessible **Mover** select. Moves change status while preserving phase order. Reordering within a column, custom columns and moves across projects are deferred.
-4. A card's **Abrir** action opens the right drawer; it does not start a PTY. Edit title, notes and status, read the latest checkpoint and next step, or expand **Guardar avance** to append an immutable checkpoint. History loads 10 at a time.
+3. Drag a card by its grip to another column, or open its **…** menu (Mover a Por hacer, En curso, En espera or Hecho), which also works from the keyboard. Moves change status while preserving phase order. Reordering within a column, custom columns and moves across projects are deferred.
+4. A card's title opens the right drawer; it does not start a PTY. Edit title, notes and status, read the latest checkpoint and next step, or expand **Guardar avance** to append an immutable checkpoint. History loads 10 at a time.
 5. **Plan y sesiones** in the project board toolbar opens the optional plan, main session, links and grants, keeping those controls off the board.
 
 Permissions, saved policies, revocation and macOS notices live in **Configuración**. Pulso remembers the last board per profile and offers a direct action to continue the project or focus its existing Claude continuation.

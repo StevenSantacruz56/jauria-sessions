@@ -31,6 +31,14 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - Tras la revisión: el menú «…» del panel ya no queda recortado por la cabecera; el contexto de relevo flota y se abre con «Contexto» en la barra superior; en Pulso, «Terminal» al inicio de la barra vuelve a la vista de terminal y el botón de Pulso alterna; la etiqueta «Historial · solo lectura» es visible; la barra de estado cuenta «N terminaron» y solo dice «Sin avisos» con la campana a cero; Tab sale del selector y del menú Mover sin perder el foco; Escape cierra los avisos desde la campana; las cuatro columnas de Pulso caben a 1220 px.
 - Sin cambios en el runner ni en la persistencia. El pie de tarjeta con la sesión vinculada y los checkpoints queda para la entrega E: el tablero no trae esos datos.
 
+### Sin publicar · 1.4.0 entrega D: retirada de Repositorios
+
+- Retirado: Repositorios y tareas Git (registrar repositorio, nueva tarea, worktree propio por tarea, panel de tarea, revisión con veredicto humano, verificación de comandos con confirmación nativa, relevo y su botón «Contexto», archivar y cerrar/reabrir repositorios); los datos antiguos del perfil se conservan y se ignoran. No se borran worktrees ni ramas; sus carpetas se abren como sesión normal.
+- Runner: sin las operaciones `register_project`, `close_project`, `reopen_project`, `create_task`, `prepare_task`, `revalidate_task`, `start_task`, `start_codex_task`, `workflow*`, `snapshot_task`, `review_task`, `handoff_task`, `open_handoff`, `archive_task`, `reopen_task`, `purge_workflow` ni las de verificación. `status` deja de anunciar sus capacidades y de enviar `projects`/`tasks`; acepta e ignora `workspaceAfter` para que una interfaz 1.3.x siga conectando.
+- El esquema del perfil no cambia: las tablas antiguas se mantienen con la misma definición, sin recuperación ni limpieza, y un runner 1.3.x puede volver a abrir el perfil. Las reservas de relevo y las verificaciones sin liberar de versiones anteriores ya no bloquean sesiones nuevas.
+- Se mantienen el límite de plazas, la regla de un escritor por worktree Git, «Liberar carpeta» para sesiones inciertas, la eliminación y compactación del historial (ahora con su propia confirmación nativa), Pulso, MCP, permisos, avisos y Configuración. Los fixtures de prueba siguen visibles solo en modo smoke.
+- Pruebas: se eliminan las de la función retirada y se añade `legacy_profile_rpc`, que abre un perfil sintético con datos antiguos.
+
 ## [1.3.3] - 2026-11-18
 
 ### Pulso para agentes

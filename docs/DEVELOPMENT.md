@@ -7,7 +7,7 @@ python3 scripts/build-macos.py --check-only
 python3 scripts/build-macos.py
 ```
 
-El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc`, `pulso_rpc`, `native_resume_rpc` y los benchmarks opt-in `listener_latency`/`pulso_latency` (ignorados por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
+El primer comando realiza frontend y tests del runner y del bridge nativo sin generar el bundle Tauri. Ambos ejecutan los tests Rust del runner y las suites `rpc`, `storage_retention`, `terminal_stream_rpc`, `app_settings`, `session_preferences_rpc`, `pulso_rpc`, `native_resume_rpc`, `legacy_profile_rpc` y los benchmarks opt-in `listener_latency`/`pulso_latency` (ignorados por defecto), además de `cargo test --locked` en `desktop/src-tauri` para el bridge nativo. Los tests existentes crean fixtures temporales y procesos de prueba; no necesitan login de proveedores. No se incluyen los harnesses locales de pruebas con proveedores ni los registros originales.
 
 El fixture `runner/tests/fixtures/protocol.synthetic.jsonl` contiene exclusivamente mensajes construidos para pruebas: dos solicitudes de aprobación, 24 fragmentos de mensaje y tres terminaciones de turno. La prueba `replay_synthetic_protocol_offline` conserva las aserciones del replay: dos denegaciones, tres terminaciones y más de veinte eventos normalizados. No es una transcripción nativa ni demuestra comportamiento real del proveedor.
 
@@ -83,6 +83,22 @@ Configuración usa Chrome y WebKit en una misma ejecución; las otras suites sel
 `get_settings` consulta la capacidad del perfil y `set_settings` guarda `maxConcurrentSessions` entre 1 y 8. Las admisiones y el guardado se serializan con el mismo bloqueo de mutaciones; reducir el límite no detiene procesos. El valor predeterminado sigue siendo 2. `settingsVersion: 1` y `sessionRenameVersion: 1` anuncian estas capacidades. Una interfaz nueva conserva el límite antiguo hasta actualizar el runner.
 
 `rename_session` guarda únicamente el título local y su evento de metadatos en una transacción. Admite sesiones activas y finalizadas, incluso sin cuota para más salida. No cambia el identificador ni renombra conversaciones del proveedor. Los títulos se validan como texto y se presentan sin interpretación HTML.
+
+## Perfiles con Repositorios retirados
+
+Desde 1.4 no existen Repositorios ni tareas Git. El runner ya no expone `register_project`, `create_task`, `prepare_task`, `start_task`, `start_codex_task`, revisión, verificación ni relevo (responde `unknown operation`), y `status` deja de anunciar `workspaceVersion`, `workflowVersion`, `verificationVersion`, `handoffVersion`, `recoveryVersion` y `projectLifecycleVersion` y de enviar `projects`/`tasks`. `status` sigue aceptando, e ignorando, `workspaceAfter` de una interfaz 1.3.x.
+
+El esquema SQLite no cambia (`user_version` 5). `runner/src/legacy_tasks.rs` crea y valida las tablas antiguas con el mismo texto SQL que 1.3.x, sin recuperación ni limpieza: los datos de un perfil anterior se conservan tal cual y nada los lee. Un perfil creado o migrado por 1.4 sigue abriéndose con un runner 1.3.x. Los worktrees y ramas del usuario no se tocan; sus carpetas se pueden abrir como sesión normal con la regla de un escritor por worktree. Las reservas antiguas de relevo y las verificaciones sin liberar ya no bloquean nuevas sesiones. La migración v4→v5 mantiene la anotación `legacy_pre_handoff` de los registros purgados para que un 1.3.x posterior siga distinguiéndolos.
+
+Combinaciones durante una actualización:
+
+| Interfaz | Runner | Resultado |
+| --- | --- | --- |
+| 1.4 | 1.3.x vivo | Sesiones, Pulso, MCP, permisos e historial funcionan. La interfaz ignora `projects`/`tasks`; no ofrece Repositorios. No aparece el aviso de runner anterior por las capacidades retiradas. |
+| 1.3.x | 1.4 | Conecta (`workspaceAfter` aceptado). Oculta Repositorios porque falta `workspaceVersion`, y Diagnóstico muestra «runner anterior» porque faltan las capacidades retiradas; es un aviso de más, no un fallo. Una operación de tareas devuelve `unknown operation`. |
+| 1.4 | 1.4 | Sin Repositorios; perfil antiguo legible. |
+
+`cargo test --locked --test legacy_profile_rpc` reproduce un perfil sintético con proyectos, tareas, revisión, relevo, una verificación sin liberar y una sesión de tarea; comprueba arranque, sesiones, Pulso, las operaciones retiradas y que las filas antiguas no cambian.
 
 ## Latencia de entrada
 

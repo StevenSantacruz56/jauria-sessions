@@ -9,7 +9,7 @@
 
 **Jauria is a macOS desktop session manager for Claude Code, OpenAI Codex and terminals, built with Tauri and Rust.**
 
-Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para tareas Git en paralelo, prepara un worktree separado por tarea.
+Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para editar un mismo repositorio en paralelo, usa un worktree Git distinto por sesión.
 
 **Versión estable: 1.3.3 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md), las [notas de 1.3.3](docs/RELEASE_1.3.3.md) y la [release de GitHub](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3). El DMG se publica sin firma Developer ID ni notarización; consulta sus límites antes de instalarlo.
 
@@ -50,12 +50,12 @@ Actualizar el código o reemplazar la app no actualiza un runner que ya está ej
 
 ## Pulso: un tablero por proyecto
 
-Pulso presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Cada proyecto tiene su pestaña; **Pendientes** es una pestaña fija para tarjetas sin proyecto, incluidas las terminadas. **Repositorios** conserva aparte el trabajo Git.
+Pulso presenta el trabajo en cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Cada proyecto tiene su pestaña; **Pendientes** es una pestaña fija para tarjetas sin proyecto, incluidas las terminadas.
 
-1. Pulsa **Nuevo proyecto**, escribe el nombre y confirma **Crear proyecto**. Si hay sesión actual, la casilla para usarla como principal aparece marcada; puedes desmarcarla. El proyecto se abre como pestaña de tablero.
+1. En Pulso, pulsa el **+** (Nuevo proyecto) de la barra superior, junto a las pestañas de tableros. Escribe el nombre y confirma **Crear proyecto**. Si hay sesión actual, la casilla para usarla como principal aparece marcada; puedes desmarcarla. El proyecto se abre como pestaña de tablero.
 2. Usa **Añadir fase** dentro de cualquiera de las tres primeras columnas. En Pendientes, la acción es **Añadir pendiente**.
-3. Arrastra el agarre de una tarjeta a otra columna o usa el selector **Mover** con el teclado. Cambia el estado conservando el orden de fases; no hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
-4. **Abrir** en una tarjeta muestra el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
+3. Arrastra el agarre de una tarjeta a otra columna o abre su menú **…** (Mover a Por hacer, En curso, En espera o Hecho), también con el teclado. Cambia el estado conservando el orden de fases; no hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
+4. El título de una tarjeta abre el drawer derecho; no inicia un PTY. Allí puedes editar título, notas y estado, consultar el último avance y siguiente paso, y desplegar **Guardar avance** para añadir un checkpoint inmutable. El historial carga 10 por página.
 5. **Plan y sesiones**, en la barra del proyecto, abre el plan opcional, la sesión principal y los vínculos. El acceso automático a Pulso y los avisos de macOS se administran en **Configuración**. El tablero recuerda el último proyecto y ofrece **Abrir sesión principal**, **Reanudar sesión principal** o **Abrir conversación activa**, según su estado.
 
 Puedes volver directamente a una sesión viva, consultar su historial o editar y copiar contexto para abrir una sesión nueva vacía. Jauria no envía ese contexto al PTY. La reanudación Claude por ID reservado sigue siendo un intento sujeto al historial del proveedor y a los bloqueos existentes; Codex conserva terminal, historial y contexto, sin reanudación nativa. La CLI local mantiene permisos manuales acotados por proyecto y políticas revocables. La importación del Site y la sincronización en la nube siguen pendientes.
@@ -76,14 +76,15 @@ La entrega **1.3.3** incluye un DMG verificado para Apple Silicon en GitHub Rele
 
 Tablero de ejemplo en Jauria 1.3.2. Captura sintética: no contiene sesiones ni tareas reales.
 
-## Sesiones, repositorios e historial
+## Sesiones e historial
 
 - **Sesión:** una ejecución en una carpeta. **Interrumpir (Ctrl-C)** interrumpe el trabajo actual, sin garantizar que termine la sesión. **Terminar** detiene la sesión administrada y conserva archivos e historial; no revierte cambios.
 - **Ventana:** cerrarla o salir de la interfaz deja las sesiones en ejecución en el runner local. Si el runner termina, las sesiones no se reanudan automáticamente. Vuelve a abrir con el mismo perfil de datos para consultar su estado e historial.
 - **Historial:** la salida guardada de sesiones terminadas se consulta en solo lectura; seleccionarla no reinicia el proceso. En Información puedes eliminar salida o compactar eventos de sesiones finalizadas.
-- **Repositorio Git:** registra una carpeta Git para organizar tareas técnicas, independiente de los proyectos de plan de Pulso. Usa **Registrar repositorio…**, **Nueva tarea Git** y **Preparar worktree** antes de iniciar el proveedor desde la tarea. Cerrar una sesión no completa la tarea. **Cerrar proyecto** lo oculta conservando tareas, archivos e historial; puede bloquearse mientras haya trabajo pendiente. Puedes volver desde **Repositorios cerrados → Reabrir**.
 
-Jauria admite un solo escritor administrado por worktree Git: no abras dos sesiones que editen la misma copia. Usa un worktree por tarea paralela. Terminal comparte estas restricciones y los bloqueos de recuperación y verificación. Estas protecciones no controlan procesos que abras por fuera de Jauria ni los cambios de carpeta que hagas dentro de una shell.
+Jauria admite un solo escritor administrado por worktree Git: no abras dos sesiones que editen la misma copia. Usa un worktree por cada trabajo en paralelo. Terminal comparte estas restricciones y los bloqueos de recuperación. Estas protecciones no controlan procesos que abras por fuera de Jauria ni los cambios de carpeta que hagas dentro de una shell.
+
+Desde 1.4 Jauria ya no incluye **Repositorios** ni tareas Git (registro de repositorios, worktree por tarea, revisión, verificación y relevo). Si tu perfil tiene datos de esa función de una versión anterior, se conservan en disco y se ignoran; Jauria no borra worktrees ni ramas. Puedes abrir una sesión normal en cualquiera de esas carpetas.
 
 **Historial local parcial** indica que Jauria dejó de guardar salida al alcanzar su límite local. La sesión sigue funcionando y puedes escribir, interrumpirla o terminarla. La salida nueva puede faltar al reconectar. Este estado no indica que hayas agotado la cuota de Claude o Codex.
 
@@ -106,7 +107,7 @@ Abre una sesión por herramienta y carpeta desde Nueva sesión. Configuración p
 
 ### ¿Necesito crear un proyecto para cada sesión?
 
-Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los repositorios y tareas Git sirven para trabajo con carpetas aisladas; los proyectos de Pulso organizan planes y fases sin exigir Git.
+Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los proyectos de Pulso organizan planes y fases sin exigir Git ni crear worktrees.
 
 ### ¿Jauria incluye el acceso a los modelos o aumenta sus cuotas?
 
