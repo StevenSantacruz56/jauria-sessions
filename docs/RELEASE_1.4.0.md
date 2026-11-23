@@ -64,7 +64,7 @@ Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesi
 
 Las 6 pruebas salteadas del runner son mediciones (`listener_latency`, `pulso_latency`, ráfaga del PTY y escalas de Pulso) y la comprobación de vuelta atrás, que necesita el binario de la versión anterior; se activan a mano con `--ignored`.
 
-<!-- RESULTADOS DEL BUILD: completar tras scripts/build-macos.py -->
+**Build de la entrega (23 de noviembre de 2026, commit `ad87506`).** `python3 scripts/build-macos.py` terminó sin fallos en un Mac Apple Silicon y produjo el bundle `Jauria.app` 1.4.0 sin firma. Ejecutó, sobre ese commit: Python 24 pasadas; escritorio, unidad 168 pasadas, 0 fallidas, 5 salteadas; navegador 131 pasadas, 0 fallidas; `pulso-panel` 131 pasadas; Configuración y permisos 56 pasadas; `attention-consistency` 9 + 9 pasadas; `terminal-stream` 15 + 15 pasadas; runner 356 pasadas, 0 fallidas, 6 salteadas; puente nativo 43 pasadas. No se generó DMG ni checksum: esta entrega no está empaquetada para distribución.
 
 La versión de frontend, runner, puente y bundle es 1.4.0 (`python3 scripts/version.py --check`).
 
