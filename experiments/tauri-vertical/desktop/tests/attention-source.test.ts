@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'jauria-attention-source-'));
 const output = join(temporary, 'attention-source.mjs');
 await build({ entryPoints: ['src/attention-source.ts'], bundle: true, platform: 'node', format: 'esm', outfile: output });
-const { RunnerAttentionSource, WindowAttentionSource, SessionAttention, parseAgent } = await import(pathToFileURL(output).href);
+const { RunnerAttentionSource, WindowAttentionSource, SessionAttention, parseAgent, turnEnded } = await import(pathToFileURL(output).href);
 after(() => rm(temporary, { recursive: true, force: true }));
 
 type Any = any;
@@ -81,11 +81,28 @@ function harness(options: Any = {}) {
     env.canMark = true; env.attended = 'other'; source.paint(['s1']); await settle();
     assert.deepEqual(calls, [], 'not attended');
     env.attended = 's1';
-    // A newer record arrives after painting: the mark must use the painted one.
     source.paint(['s1']); await settle();
     assert.deepEqual(calls, [{ items: [{ id: 's1', epoch: 77, through: 3 }] }]);
     source.paint(['s1']); await settle();
     assert.equal(calls.length, 1, 'nothing new to mark: no second call');
+  });
+
+  test('a newer agent that arrives between painting and marking: through/epoch stay the painted ones, the new alert stays pending', async () => {
+    let inject = false;
+    const { source, calls, env, settle } = harness({ isAttended: (id: string) => {
+      // terminal_live lands while paint() decides what to mark.
+      if (inject) { inject = false; source.ingest('s1', agent({ epoch: 77, alertSeq: 4, seenSeq: 1, changedAt: 2000, pending: { bell: { seq: 3, frame: 12 }, needs: { seq: 4, frame: 13 } } })); }
+      return id === env.attended;
+    } });
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 3, seenSeq: 1, pending: { bell: { seq: 3, frame: 12 } } }) }]));
+    env.consumed = 13; inject = true; source.paint(['s1']); await settle();
+    assert.deepEqual(calls, [{ items: [{ id: 's1', epoch: 77, through: 3 }] }], 'the painted record, never the newer alertSeq 4');
+    assert.equal(source.agent('s1').alertSeq, 3, 'the UI still shows the painted record');
+    // Next render paints the newer record; its alert is pending, not swallowed by the earlier mark.
+    env.attended = 'other'; source.paint([]); await settle();
+    const [item] = source.list([session()]);
+    assert.ok(item.unseenKeys.some((k: string) => k.endsWith(':needs:77:4')), JSON.stringify(item));
+    assert.equal(calls.length, 1);
   });
 
   test('an unconsumed frame caps through below that alert', async () => {
@@ -190,6 +207,83 @@ function harness(options: Any = {}) {
     source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }], { hasMore: false, pendingSessions: 1 }));
     source.paint([]);
     assert.equal(source.hiddenUnseen(), 0);
+  });
+
+  test('hasMore: a record the next status omits is dropped, not kept as pending; the hidden count stays exact', () => {
+    const { source } = harness();
+    const pendingRecord = agent({ alertSeq: 1, pending: { finished: { seq: 1, frame: 2 } } });
+    source.ingestStatus(status([{ id: 's1', agent: pendingRecord }, { id: 's2', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 's3' }],
+      { hasMore: true, pendingSessions: 3, pendingAlerts: 3 }));
+    source.paint([]);
+    assert.equal(source.list([session('s1'), session('s2'), session('s3')]).length, 2);
+    assert.equal(source.hiddenUnseen(), 1);
+    // Another window marked s1 seen; the runner now lists s3 instead (still hasMore).
+    source.ingestStatus(status([{ id: 's1' }, { id: 's2', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 's3', agent: agent({ alertSeq: 1, pending: { bell: { seq: 1, frame: 4 } } }) }],
+      { hasMore: true, pendingSessions: 3, pendingAlerts: 3 }));
+    source.paint([]);
+    const ids = source.list([session('s1'), session('s2'), session('s3')]).map((i: Any) => i.id).sort();
+    assert.deepEqual(ids, ['s2', 's3'], 's1 is no longer shown as pending');
+    assert.equal(source.agent('s1'), undefined);
+    assert.equal(source.hiddenUnseen(), 1, 'the omitted s1 slot is counted as hidden, not subtracted by a stale record');
+  });
+
+  test('hasMore: a record terminal_live keeps fresh survives a status that omits it; a mark answer never resurrects a dropped one', async () => {
+    const { source, env, settle } = harness();
+    source.ingestStatus(status([{ id: 's1', agent: agent({ state: 'working', changedAt: 1000 }) }, { id: 's2', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }], { hasMore: true, pendingSessions: 200 }));
+    source.paint([]);
+    source.live('s1', { agent: agent({ state: 'working', changedAt: 1000 }) }, false, 0);
+    // s2 is selected (mark in flight) and then the capped list omits both.
+    env.respond = items => ({ items: items.map((i: Any) => ({ id: i.id, agent: agent({ alertSeq: 1, seenSeq: 0, pending: { ended: { seq: 1 } } }) })), durable: true });
+    source.select('s2', [session('s2', 'exited')]);
+    source.ingestStatus(status([{ id: 's1' }, { id: 's2' }], { hasMore: true, pendingSessions: 200 }));
+    await settle(); source.paint([]);
+    assert.equal(source.display('s1'), 'working', 'in view: kept');
+    assert.equal(source.agent('s2'), undefined, 'not listed and not in view: dropped, even after the mark answered');
+    // Without a fresh terminal_live the next status drops s1 too.
+    source.ingestStatus(status([{ id: 's1' }, { id: 's2' }], { hasMore: true, pendingSessions: 200 })); source.paint([]);
+    assert.equal(source.agent('s1'), undefined);
+  });
+
+  test('hasMore: a dropped record that reappears is not announced again; a newer alert is', () => {
+    const { source } = harness();
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { finished: { seq: 1, frame: 1 } } }) }], { hasMore: true, pendingSessions: 1 }));
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 2, pending: { finished: { seq: 1, frame: 1 }, bell: { seq: 2, frame: 2 } } }) }], { hasMore: true, pendingSessions: 1 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session()]))[0].unseen, true, 'seq 2 is new');
+    source.ingestStatus(status([{ id: 's1' }], { hasMore: true, pendingSessions: 1 }));
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 2, pending: { finished: { seq: 1, frame: 1 }, bell: { seq: 2, frame: 2 } } }) }], { hasMore: true, pendingSessions: 1 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session()]))[0].unseen, false, 'reappearing is not new');
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 3, pending: { finished: { seq: 1, frame: 1 }, bell: { seq: 2, frame: 2 }, needs: { seq: 3, frame: 3 } } }) }], { hasMore: true, pendingSessions: 1 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session()]))[0].unseen, true);
+  });
+
+  test('first status with hasMore: an existing session omitted then seen takes its baseline; a session born later notifies', () => {
+    const { source } = harness();
+    source.ingestStatus(status([{ id: 'listed', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 'old' }], { hasMore: true, pendingSessions: 2 }));
+    // `old` existed at connect but the capped list omitted it: what it shows on first sight predates us.
+    source.ingestStatus(status([{ id: 'listed' }, { id: 'old', agent: agent({ alertSeq: 2, pending: { finished: { seq: 2, frame: 1 } } }) }], { hasMore: true, pendingSessions: 2 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session('old')]))[0].unseen, false, 'already pending before connecting');
+    // `new` did not exist in the first status: its first alert is new.
+    source.ingestStatus(status([{ id: 'listed' }, { id: 'old', agent: agent({ alertSeq: 2, pending: { finished: { seq: 2, frame: 1 } } }) },
+      { id: 'new', agent: agent({ epoch: 5, alertSeq: 1, pending: { needs: { seq: 1, frame: 2 } } }) }], { hasMore: true, pendingSessions: 3 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session('new')]))[0].unseen, true, 'a session born after connecting notifies');
+    // And `old` keeps notifying for later alerts.
+    source.ingestStatus(status([{ id: 'listed' }, { id: 'old', agent: agent({ alertSeq: 3, pending: { finished: { seq: 2, frame: 1 }, bell: { seq: 3, frame: 4 } } }) }], { hasMore: true, pendingSessions: 2 }));
+    source.paint([]);
+    assert.equal(source.nativeItems(source.list([session('old')]))[0].unseen, true);
+  });
+
+  test('turnEnded keeps only listed sessions', () => {
+    const seen = new Map<string, string>([['gone', 'working']]);
+    const display = (id: string) => id === 'a' ? 'done' as const : null;
+    turnEnded(seen, [{ id: 'a' }, { id: 'b' }], { display });
+    assert.deepEqual([...seen.keys()].sort(), ['a', 'b']);
+    turnEnded(seen, [{ id: 'b' }], { display });
+    assert.deepEqual([...seen.keys()], ['b']);
   });
 
   test('pending.permission is "arrived and not seen", not a pending permission', () => {

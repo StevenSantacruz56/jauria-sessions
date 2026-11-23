@@ -171,9 +171,14 @@ export class RunnerAttentionSource implements AttentionSource {
   private optimistic = new Set<string>();
   private wanted = new Map<string, MarkItem>();
   private sent = new Map<string, MarkItem>();
+  /** Native notices: per session, alerts at or below this were never new (connection baseline, or what a dropped record already showed). */
   private baseline = new Map<string, { epoch: number; seq: number }>();
   private baselined = false;
   private baselineFirstSight = false;
+  /** First status with hasMore: sessions it listed without `agent`; their baseline is fixed when first seen. */
+  private unlistedAtConnect = new Set<string>();
+  /** Records terminal_live refreshed since the last status (the session is in view). */
+  private liveSince = new Set<string>();
   private generation: string | null = null;
   private token = 0;
   private flying = false;
@@ -191,15 +196,36 @@ export class RunnerAttentionSource implements AttentionSource {
     this.summary = { hasMore: s.hasMore === true, pendingSessions: count(s.pendingSessions) ? s.pendingSessions : 0,
       pendingAlerts: count(s.pendingAlerts) ? s.pendingAlerts : 0, durable: s.durable !== false };
     let changed = false;
+    const listed = new Set<string>(), present = new Set<string>();
     for (const session of status.sessions) {
-      if ('agent' in session) changed = this.ingest(session.id, session.agent) || changed;
-      // Without hasMore an absent agent means no record worth showing.
-      else if (!this.summary.hasMore && this.agents.delete(session.id)) changed = true;
+      present.add(session.id);
+      if ('agent' in session) { listed.add(session.id); changed = this.ingest(session.id, session.agent) || changed; }
     }
+    // Status is the truth each cycle. A record it did not list is dropped:
+    // without hasMore the session has nothing pending and is not live; with
+    // hasMore it is counted again inside pendingSessions/pendingAlerts
+    // (hiddenUnseen). Only a record terminal_live refreshed since the previous
+    // status survives (its session is in view, and terminal_live always
+    // carries the agent). The dropped record's alertSeq becomes its native
+    // baseline, so it is not announced again if it reappears.
+    for (const [id, a] of [...this.agents]) {
+      if (listed.has(id) || this.liveSince.has(id)) continue;
+      this.agents.delete(id); changed = true;
+      const base = this.baseline.get(id);
+      if (!base || base.epoch !== a.epoch || base.seq < a.alertSeq) this.baseline.set(id, { epoch: a.epoch, seq: a.alertSeq });
+    }
+    this.liveSince.clear();
+    // Bounded by the sessions status still lists.
+    for (const id of [...this.baseline.keys()]) if (!present.has(id)) this.baseline.delete(id);
     if (!this.baselined) {
       this.baselined = true; this.baselineFirstSight = this.summary.hasMore;
       for (const [id, a] of this.agents) this.baseline.set(id, { epoch: a.epoch, seq: a.alertSeq });
+      // Existing sessions the capped list omitted: their baseline is unknown
+      // until seen. A session id first seen later was born after connecting
+      // and keeps no baseline: its alerts are new.
+      if (this.summary.hasMore) for (const id of present) if (!listed.has(id)) this.unlistedAtConnect.add(id);
     }
+    for (const id of [...this.unlistedAtConnect]) if (!present.has(id)) this.unlistedAtConnect.delete(id);
     return changed;
   }
 
@@ -211,7 +237,7 @@ export class RunnerAttentionSource implements AttentionSource {
     if (next === null) return this.agents.delete(id);
     if (!force && !fresher(old, next)) return false;
     this.agents.set(id, next);
-    if (this.baselined && this.baselineFirstSight && !this.baseline.has(id)) this.baseline.set(id, { epoch: next.epoch, seq: next.alertSeq });
+    if (this.baselineFirstSight && this.unlistedAtConnect.delete(id) && !this.baseline.has(id)) this.baseline.set(id, { epoch: next.epoch, seq: next.alertSeq });
     return !old || JSON.stringify(old) !== JSON.stringify(next);
   }
 
@@ -310,6 +336,7 @@ export class RunnerAttentionSource implements AttentionSource {
   }
   /** terminal_live page: its `agent` (if any) plus whether an attended frame alert became consumable. */
   live(id: string, page: { agent?: unknown }, attended: boolean, consumed: number): boolean {
+    if ('agent' in page && page.agent !== null) this.liveSince.add(id); else if ('agent' in page) this.liveSince.delete(id);
     const changed = 'agent' in page && this.ingest(id, page.agent);
     return changed || (attended && this.wantsFrame(id, consumed));
   }
@@ -353,9 +380,10 @@ export class RunnerAttentionSource implements AttentionSource {
         // Another incarnation: resynchronise, never retry with the old through.
         this.wanted.delete(id); this.sent.delete(id);
         for (const key of this.optimistic) if (key.startsWith(`${id}:agent:`)) this.optimistic.delete(key);
-        if (result.agent === null) this.agents.delete(id); else this.ingest(id, result.agent, true);
+        // Only a record still shown: status decides which sessions carry one.
+        if (result.agent === null) this.agents.delete(id); else if (this.agents.has(id)) this.ingest(id, result.agent, true);
       } else if (result.agent === null) { this.sent.delete(id); this.agents.delete(id); }
-      else this.ingest(id, result.agent);
+      else if (this.agents.has(id)) this.ingest(id, result.agent);
     }
     this.hooks.changed();
     if (this.wanted.size) void this.flush();
@@ -369,16 +397,21 @@ export class RunnerAttentionSource implements AttentionSource {
     this.token++; this.flying = false;
     this.agents.clear(); this.painted.clear(); this.optimistic.clear(); this.wanted.clear(); this.sent.clear();
     this.baseline.clear(); this.baselined = false; this.baselineFirstSight = false; this.generation = null; this.volatileSeen = false;
+    this.unlistedAtConnect.clear(); this.liveSince.clear();
   }
 }
 
 /** Older runners (no pulsoRevision): a session whose word just became done/idle probably wrote to Pulso. */
 export function turnEnded(seen: Map<string, string>, sessions: readonly { id: string }[], source: Pick<AttentionSource, 'display'>): boolean {
   let ended = false;
+  const present = new Set<string>();
   for (const s of sessions) {
+    present.add(s.id);
     const state = source.display(s.id) ?? '', previous = seen.get(s.id);
     if (previous !== undefined && previous !== state && (state === 'done' || state === 'idle')) ended = true;
     seen.set(s.id, state);
   }
+  // Only the sessions still listed: the map never outgrows the session list.
+  for (const id of [...seen.keys()]) if (!present.has(id)) seen.delete(id);
   return ended;
 }
