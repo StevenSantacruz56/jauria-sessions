@@ -42,14 +42,19 @@ async function installMock(page: Page) {
     const inputs: any[] = [];
     const badges: any[] = [];
     const unexpected: string[] = [];
-    let focused = true, holdReplay = false, interruptError = '', evidence: any;
+    let focused = true, holdReplay = false, interruptError = '', evidence: any, agent: any = null;
+    const marks: any[] = [];
+    // agent !== null: a 1.4 E runner (agentAttentionVersion) delivering state and alerts through status.
     const status = () => structuredClone({ pid: 123, generation: 'synthetic-geometry',
-      normalTerminalVersion: 1, sessions: [session, other, closed], lastSeq: events.length });
+      normalTerminalVersion: 1, sessions: [agent ? { ...session, agent } : session, other, closed], lastSeq: events.length,
+      ...(agent ? { agentAttentionVersion: 1, agentAttention: { hasMore: false, pendingSessions: Object.keys(agent.pending).length ? 1 : 0,
+        pendingAlerts: Object.keys(agent.pending).length, durable: true, maxAgents: 128 } } : {}) });
     Object.defineProperty(document, 'hasFocus', { value: () => focused });
     const output = (data: string, sessionId = session.id) => events.push({ seq: events.length + 1,
       sessionId, kind: 'output', data: btoa(data) });
     w.geometryFixture = {
-      resizes, badges, unexpected, output, inputs,
+      resizes, badges, unexpected, output, inputs, marks,
+      agent(value: any) { agent = value; },
       focus(value: boolean) { focused = value; },
       failInterrupt(value: string) { interruptError = value; },
       holdReplay(value: boolean) { holdReplay = value; },
@@ -77,6 +82,11 @@ async function installMock(page: Page) {
             return { ok: true, result: { cols: target.cols, rows: target.rows } };
           }
           if (args.op === 'input') { inputs.push(structuredClone(args.args)); return { ok: true, result: {} }; }
+          if (args.op === 'mark_seen' && agent) {
+            marks.push(structuredClone(args.args.items));
+            agent = { ...agent, seenSeq: agent.alertSeq, pending: {} };
+            return { ok: true, result: { items: [{ id: session.id, agent: structuredClone(agent) }], durable: true } };
+          }
           if (args.op === 'interrupt') return interruptError ? { ok: false, error: interruptError } : { ok: true, result: {} };
         }
         unexpected.push(`${cmd}:${args?.op ?? ''}`);
@@ -259,6 +269,29 @@ try {
               await page.evaluate(() => (window as any).geometryFixture.output('\x1b]7501;state=clear\x07'));
               await page.waitForFunction(() => (document.querySelector('#status-needs') as HTMLElement).hidden);
               await check('status bar counter cleared');
+              // Runner 1.4 E: the same states and alerts through status.agent, and marking them seen.
+              const agentBase = { epoch: 9, state: null, changedAt: Date.now(), stateFrame: null, turnOpen: false, turnStartedAt: null, turnEndedAt: null,
+                lastTurnMs: null, turnInterrupted: false, alertSeq: 0, seenSeq: 0, finishedUnseen: false, pending: {} };
+              for (const [label, patch, ready] of [
+                ['working', { state: 'working', turnOpen: true, turnStartedAt: Date.now() - 120000 }, '#status-working'],
+                ['blocked + needs', { state: 'blocked', alertSeq: 1, pending: { needs: { seq: 1, frame: null } } }, '#status-needs'],
+                ['done + finished', { state: 'done', alertSeq: 2, pending: { finished: { seq: 2, frame: null } } }, '#status-finished'],
+                ['finished while working again', { state: 'working', turnOpen: true, turnStartedAt: Date.now(), alertSeq: 2, pending: { finished: { seq: 2, frame: null } } }, '#status-finished'],
+                ['bell and notify', { state: 'idle', alertSeq: 4, pending: { finished: { seq: 2, frame: null }, bell: { seq: 3, frame: null }, notify: { seq: 4, frame: null } } }, '#status-needs'],
+                ['process ended', { state: null, alertSeq: 5, pending: { ended: { seq: 5 } } }, '#status-finished'],
+              ] as const) {
+                await page.evaluate(value => (window as any).geometryFixture.agent(value), { ...agentBase, ...patch });
+                await page.waitForFunction(selector => !(document.querySelector(selector) as HTMLElement).hidden, ready);
+                await check(`status.agent ${label}`);
+              }
+              await page.locator('#session-alerts').click();
+              await page.locator('#see-attention').click();
+              await page.waitForFunction(() => (window as any).geometryFixture.marks.length > 0);
+              await page.keyboard.press('Escape');
+              await check('status.agent marked seen through mark_seen');
+              await page.evaluate(() => (window as any).geometryFixture.agent(null));
+              await page.waitForTimeout(1200);
+              await check('back to a runner without agent attention');
               // The session picker floats over the pane; typing in its search never reaches the PTY.
               const inputsBefore = await page.evaluate(() => (window as any).geometryFixture.inputs.length);
               await page.locator('#session-0').click();

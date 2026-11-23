@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Page } from 'playwright';
 
-async function installMock(page: Page, structured: boolean, preferences = false) {
-  await page.addInitScript(({ structured, preferences }) => {
+async function installMock(page: Page, structured: boolean, preferences = false, runner = false) {
+  await page.addInitScript(({ structured, preferences, runner }) => {
     const w = window as any;
     const sessions: any[] = [
       { id: 'foreground', title: 'Claude foreground', kind: 'claude', transport: 'pty', status: 'running' },
@@ -25,8 +25,15 @@ async function installMock(page: Page, structured: boolean, preferences = false)
     // Deliberately omit terminalStreamVersion: exercise main's supported legacy PTY path.
     let maxConcurrentSessions = 2;
     const settings = () => ({schemaVersion: 1, maxConcurrentSessions, maxSupportedSessions: 8, warning: null});
+    // runner: a 1.4 E runner (agentAttentionVersion) that records a confirmed process end as `ended`.
+    const agents = new Map<string, any>(), marks: any[] = [];
+    const record = (id: string) => agents.get(id) ?? { epoch: 5, state: null, changedAt: null, stateFrame: null, turnOpen: false, turnStartedAt: null,
+      turnEndedAt: null, lastTurnMs: null, turnInterrupted: false, alertSeq: 0, seenSeq: 0, finishedUnseen: false, pending: {} };
+    const rows = () => sessions.map(s => runner && (['running', 'starting'].includes(s.status) || Object.keys(record(s.id).pending).length) ? { ...s, agent: record(s.id) } : s);
     const status = () => structuredClone({ pid: 123, generation: 'synthetic-attention',
-      normalTerminalVersion: 1, ...(preferences ? {settingsVersion: 1, sessionRenameVersion: 1, settings: settings()} : {}), sessions, lastSeq: 0 });
+      normalTerminalVersion: 1, ...(preferences ? {settingsVersion: 1, sessionRenameVersion: 1, settings: settings()} : {}), sessions: rows(), lastSeq: 0,
+      ...(runner ? { agentAttentionVersion: 1, agentAttention: { hasMore: false, pendingSessions: [...agents.values()].filter(a => Object.keys(a.pending).length).length,
+        pendingAlerts: [...agents.values()].reduce((n, a) => n + Object.keys(a.pending).length, 0), durable: true, maxAgents: 128 } } : {}) });
     Object.defineProperty(document, 'hasFocus', { value: () => focused });
     Object.defineProperty(document, 'visibilityState', { get: () => visibility });
     const forbidden = (name: string): never => {
@@ -43,7 +50,14 @@ async function installMock(page: Page, structured: boolean, preferences = false)
       focus(value: boolean) { focused = value; },
       focusEvent(value: boolean) { focused = value; window.dispatchEvent(new Event(value ? 'focus' : 'blur')); },
       visibilityEvent(value: string) { visibility = value; document.dispatchEvent(new Event('visibilitychange')); },
-      state(id: string, value: string) { sessions.find(s => s.id === id).status = value; },
+      marks,
+      state(id: string, value: string) {
+        const session = sessions.find(s => s.id === id);
+        if (runner && ['running', 'starting'].includes(session.status) && ['exited', 'stopped', 'failed'].includes(value)) {
+          const a = record(id); agents.set(id, { ...a, alertSeq: a.alertSeq + 1, pending: { ...a.pending, ended: { seq: a.alertSeq + 1 } } });
+        }
+        session.status = value;
+      },
       history(id: string, state: string, reason: string) { sessions.find(s => s.id === id).detail = {terminalStream: {history: {state, reason, durableFrame: 1, lastFrame: 2}}}; },
       pending(value: number) { pending = value; },
       snapshot() { return structuredClone({ sessions, evidence, permissionReads, statusReads, focused, pending }); },
@@ -63,6 +77,15 @@ async function installMock(page: Page, structured: boolean, preferences = false)
           if (preferences && args.op === 'set_settings') { maxConcurrentSessions = args.args.maxConcurrentSessions; return {ok: true, result: settings()}; }
           if (preferences && args.op === 'rename_session') { const session = sessions.find(s => s.id === args.args.id); session.title = args.args.title; return {ok: true, result: structuredClone(session)}; }
           if (args.op === 'status') { statusReads++; return { ok: true, result: status() }; }
+          if (runner && args.op === 'mark_seen') {
+            marks.push(structuredClone(args.args.items));
+            const items = args.args.items.map((item: any) => {
+              const a = record(item.id); const seen = Math.max(a.seenSeq, Math.min(item.through, a.alertSeq));
+              const next = { ...a, seenSeq: seen, pending: Object.fromEntries(Object.entries(a.pending).filter(([, p]: any) => p.seq > seen)) };
+              agents.set(item.id, next); return { id: item.id, agent: next };
+            });
+            return { ok: true, result: { items, durable: true } };
+          }
           if (args.op === 'events') return { ok: true, result: { events: [], lastSeq: 0, hasMore: false } };
           if (args.op === 'telemetry') return { ok: true, result: {} };
           if (args.op === 'resize') {
@@ -82,7 +105,7 @@ async function installMock(page: Page, structured: boolean, preferences = false)
       },
       transformCallback() { return 1; }, unregisterCallback() {},
     };
-  }, { structured, preferences });
+  }, { structured, preferences, runner });
 }
 
 async function counts(page: Page, total: number, unseen: number) {
@@ -131,7 +154,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
     const browser = await (engine === 'webkit' ? webkit.launch({ headless: true })
       : chromium.launch({ headless: true, channel: 'chrome' }));
     try {
-      async function fixture(run: (page: Page) => Promise<void>, structured = false, preferences = false) {
+      async function fixture(run: (page: Page) => Promise<void>, structured = false, preferences = false, runner = false) {
         const context = await browser.newContext({ viewport: { width: 1220, height: 800 } });
         try {
           const page = await context.newPage();
@@ -141,7 +164,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           // Everything beyond the local dev server is forbidden, including network providers.
           await context.route('**/*', route => new URL(route.request().url()).origin === new URL(server.resolvedUrls!.local[0]).origin
             ? route.continue() : route.abort());
-          await installMock(page, structured, preferences);
+          await installMock(page, structured, preferences, runner);
           await page.goto(server.resolvedUrls!.local[0]);
           await page.waitForFunction(() => document.querySelector('#connection-state')?.textContent === 'Conectado'
             && (window as any).attentionFixture.snapshot().evidence?.sessions.some((s: any) => s.id === 'foreground' && s.rows > 2));
@@ -177,6 +200,22 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           assert.equal(states.find((s: any) => s.id === 'old-failed').status, 'failed');
           assert.equal(states.find((s: any) => s.id === 'background').status, 'stopped');
         });
+      });
+
+      await t.test('runner mode: the same totals and Dock; the end comes from the runner and opening it sends mark_seen', async () => {
+        await fixture(async page => {
+          await transition(page, 'background', 'stopped');
+          await counts(page, 2, 1);
+          await page.locator('#attention-filter').click();
+          const ended = page.locator('#session-list .session-item').filter({ hasText: 'Claude background' });
+          assert.equal(await ended.getAttribute('data-unseen'), 'true');
+          assert.match(await ended.textContent() ?? '', /El proceso terminó/);
+          await ended.click();
+          await counts(page, 1, 0);
+          assert.deepEqual(await page.evaluate(() => (window as any).attentionFixture.marks), [[{ id: 'background', epoch: 5, through: 1 }]]);
+          await page.waitForTimeout(1300);
+          await counts(page, 1, 0); // The runner confirmed it: a later status never resurrects the end.
+        }, false, false, true);
       });
 
       await t.test('already focused foreground end has no Dock badge, transient row, or phantom alert after leaving', async () => {
