@@ -48,6 +48,13 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 - En Pulso, navegar desde la paleta (otro tablero, una sesión, volver a la terminal o nuevo proyecto) respeta las guardas del borrador.
 - `⌘K` no cambia: sigue abriendo y enfocando la búsqueda de la lista de agentes (sus pruebas y su flujo dependen de ese campo). Los atajos `⌘N`, `⌘K`, `⌘I` y `⌘,` salen de `main.ts` a un registro único (`shortcuts.ts`, `app-commands.ts`) que usan el manejador de atajos y la paleta.
 
+### Sin publicar · 1.4.0 entrega E: Pulso en el runner
+
+- `status` añade `pulsoRevision` (revisión de Pulso confirmada, leída de memoria sin SQLite y actualizada tras cada escritura de la UI o del MCP) y `pulsoRevisionVersion: 1`; no aparecen si Pulso no está disponible. También anuncia `pulsoSummaryVersion: 1` y `pulsoBoardCardsVersion: 1`. Ningún `*Version` existente cambia.
+- Operación de Pulso `sidebar_summary {ifRevision?}`, solo para la UI: proyectos no archivados (hasta 50) con fases hechas/totales, Pendientes abiertos y pares sesión → proyecto por vínculo de proyecto o de fase (hasta 2.048, con `linksTruncated`). Se acaba el tope de 100 vínculos por proyecto. Un permiso de agente recibe `unauthorized`. El bridge la admite solo con `ifRevision` entero sin signo.
+- Las tarjetas de `board` añaden `session` (`{id, source: "link"|"checkpoint"}` o `null`) y `checkpointCount` (total real). Una consulta por página; en release, unos 0,1-0,3 ms y 5-8 KB más con 80 tarjetas.
+- Sin cambios de esquema en `pulso.sqlite` ni en `runner.sqlite`; todas las consultas usan índices existentes. La app 1.3.x ignora los campos nuevos. La interfaz que los usa llega en otra entrega.
+
 ## [1.3.3] - 2026-11-18
 
 ### Pulso para agentes

@@ -21,6 +21,19 @@ El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el
 
 **Ver más tarjetas** usa `items` con `status`, `expectedSnapshotRevision` y páginas de hasta 50. El servicio comprueba revisión, cuenta y consulta bajo el mismo mutex. Rechaza una revisión obsoleta antes de usar el offset; consulta el tablero actual ante un conflicto para no mezclar páginas de revisiones diferentes. Los contadores incluyen las tarjetas aún no cargadas.
 
+Desde el runner 1.4 cada tarjeta de `board` añade dos claves (capacidad `pulsoBoardCardsVersion: 1` en `status`; `pulsoBoardVersion` sigue en 1 y no hay argumentos nuevos):
+
+- `session`: `{"id","source"}` o `null`. `source` es `"link"` si sale del vínculo de fase más reciente y `"checkpoint"` si no hay vínculo y sale del checkpoint más reciente que nombra una sesión. Un vínculo al proyecto no cuenta para la tarjeta.
+- `checkpointCount`: número total de checkpoints de la fase, no solo los 10 del detalle.
+
+Se calculan con una sola consulta para toda la página (como mucho 80 tarjetas) sobre el índice de fases existente. Solo cambian las tarjetas de `board`: `item`, `items` y lo que ve un agente siguen igual.
+
+### Resumen de la barra lateral y revisión en `status`
+
+`sidebar_summary {ifRevision?}` es también exclusivo de la UI: un permiso de agente recibe `unauthorized` aunque llame a la operación directamente. Devuelve en una lectura los primeros 50 proyectos no archivados, en el mismo orden que `projects`, con fases hechas y totales (sin archivadas), el número de Pendientes abiertos y los pares sesión → proyecto. Un par sale de un vínculo al proyecto o de un vínculo a una de sus fases, incluidas las archivadas; si una sesión tiene los dos, aparece una vez con `via: "project"`. Los pares se ordenan por proyecto y sesión y se cortan en 2.048 (o 256 KiB) con `linksTruncated`; ya no hay tope de 100 vínculos por proyecto. Con `ifRevision` igual a la revisión actual responde `{"revision","unchanged":true}` sin consultar documentos. Capacidad: `pulsoSummaryVersion: 1`.
+
+`status` del runner incluye `pulsoRevision`, la revisión global de Pulso confirmada más reciente, y `pulsoRevisionVersion: 1`. Se lee de memoria, sin SQLite, y se actualiza tras cada `COMMIT`, venga de la UI o del MCP de un agente (ambos escriben a través del socket del runner). Un reintento con el mismo `requestId`, una escritura rechazada o un rollback no la mueven. Si Pulso no está disponible, los dos campos no aparecen.
+
 Mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos. No consulta por tarjeta; la vista oculta o el documento oculto detienen ese polling. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
 
 ## Recuperar el trabajo

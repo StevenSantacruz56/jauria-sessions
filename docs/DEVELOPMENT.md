@@ -147,3 +147,20 @@ cargo test --release --locked --test pulso_latency -- --ignored --nocapture
 El segundo comando mide 2/8 PTY, 500 fases y clientes lentos de Pulso en perfiles temporales. No contacta proveedores ni mide pintura de pantalla. La CLI `--pulso-client` acepta `-` para leer JSON por stdin y evitar poner el texto del plan en argumentos del shell. Consulta [el contrato de uso](PULSO.md) y [los resultados locales de 1.1.0](PULSO_VALIDATION_1.1.0.md).
 
 La versión 1.2.0 añade el tablero y los estados pasivos de programa. Consulta [la revisión de Herdr](HERDR_REVIEW.md) y [la validación de 1.2.0](PULSO_VALIDATION_1.2.0.md).
+
+## Capacidades de `status`
+
+La interfaz decide qué usar según los campos `*Version` de `status`. La app 1.3.x compara los existentes con `=== 1` o `!== 1`, así que **nunca se sube un `*Version` existente**: una capacidad nueva o ampliada lleva un campo nuevo y la respuesta antigua solo gana claves. Un campo que falta significa runner anterior y la interfaz conserva la ruta antigua.
+
+| Campo | Desde | Qué anuncia |
+| --- | --- | --- |
+| `pulsoRevision`, `pulsoRevisionVersion: 1` | 1.4 | Revisión de Pulso confirmada, leída de memoria tras cada `COMMIT` (UI y MCP). Se inyecta después de la caché de `status`, así que sigue al día con la base de sesiones ocupada. Ausentes si Pulso no está disponible. |
+| `pulsoSummaryVersion: 1` | 1.4 | Operación de Pulso `sidebar_summary {ifRevision?}`, solo UI. |
+| `pulsoBoardCardsVersion: 1` | 1.4 | Tarjetas de `board` con `session` y `checkpointCount`. `pulsoBoardVersion` sigue en 1. |
+
+Las pruebas de `pulso_store.rs` comprueban con `EXPLAIN QUERY PLAN` que `sidebar_summary` y el pie de tarjeta usan los índices existentes. Dos mediciones son opt-in, sobre bases en memoria sintéticas, desde `experiments/tauri-vertical/runner`:
+
+```sh
+cargo test --release --locked --bin aw-runner pulso_summary_scale -- --ignored --nocapture
+cargo test --release --locked --bin aw-runner pulso_board_cards_scale -- --ignored --nocapture
+```
