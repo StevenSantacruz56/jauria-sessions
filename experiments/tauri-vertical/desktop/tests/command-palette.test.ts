@@ -91,7 +91,7 @@ test('shortcuts: existing Command-only chords and the platform palette chord', (
 function context(overrides: Record<string, unknown> = {}, log: string[] = []) {
   const actions = new Proxy({}, { get: (_t, name) => (...args: unknown[]) => log.push([String(name), ...args].join(':')) });
   return { connected: true, connecting: false, busy: false, replaying: false, occupied: 1, limit: 2, sessionCount: 2, split: false, planning: false,
-    pulsoUnavailable: null, inspectorOpen: false, unseenAlerts: 0, needsTarget: null, grouping: 'project', filter: 'open', theme: 'system', renameSupported: true,
+    pulsoUnavailable: null, pulsoDraft: null, inspectorOpen: false, unseenAlerts: 0, needsTarget: null, grouping: 'project', filter: 'open', theme: 'system', renameSupported: true,
     focused: { id: 'live', title: 'Sesión viva', live: true, stopping: false, structured: false }, actions, ...overrides };
 }
 const command = (ctx: any, id: string) => m.appCommands(ctx).find((c: any) => c.id === id);
@@ -111,6 +111,11 @@ test('registry: availability carries the reason and mirrors the existing control
   assert.equal(command(context({ planning: true }), 'split').unavailable(), 'Disponible en la vista de terminal');
   assert.equal(command(context({ pulsoUnavailable: 'Pulso sin conexión' }), 'pulso').unavailable(), 'Pulso sin conexión');
   assert.equal(command(context({ planning: true, pulsoUnavailable: 'Pulso sin conexión' }), 'pulso').unavailable(), null, 'leaving Pulso is always possible');
+  const draft = 'Guarda o descarta el borrador de Pulso';
+  assert.equal(command(context({ pulsoDraft: draft }), 'new-project').unavailable(), draft, 'same state as the disabled "+"');
+  assert.equal(command(context({ pulsoDraft: draft, pulsoUnavailable: 'Pulso sin conexión' }), 'new-project').unavailable(), 'Pulso sin conexión');
+  assert.equal(command(context({ planning: true, pulsoDraft: draft }), 'pulso').unavailable(), draft, 'leaving keeps the draft guard');
+  assert.equal(command(context({ pulsoDraft: draft }), 'pulso').unavailable(), null, 'going to Pulso shows the draft');
   assert.equal(command(context(), 'mark-seen').unavailable(), 'No hay avisos sin ver');
   assert.equal(command(context(), 'open-needs').unavailable(), 'Ninguna sesión te necesita');
   assert.equal(command(context(), 'theme-system').unavailable(), 'Es la apariencia actual');
@@ -143,6 +148,11 @@ test('shortcut handler: runs only on keydown, skips unavailable commands and blo
   assert.equal(handle(down), true); assert.deepEqual(runs, ['new']); assert.equal(down.prevented, 1);
   assert.equal(handle(event('keyup')), true, 'keyup of the chord is swallowed'); assert.deepEqual(runs, ['new']);
   unavailable = 'Sin plazas libres'; assert.equal(handle(event('keydown')), true); assert.deepEqual(runs, ['new'], 'a disabled command does nothing');
+  const repeated = event('keydown'); repeated.repeat = true;
+  unavailable = null; assert.equal(handle(repeated), true, 'a held chord is consumed'); assert.equal(repeated.prevented, 1); assert.deepEqual(runs, ['new'], 'but auto-repeat never runs it again');
+  const composing = event('keydown'); composing.isComposing = true;
+  assert.equal(handle(composing), false, 'nothing acts during IME composition'); assert.equal(composing.prevented, 0);
+  const ime = event('keydown'); ime.keyCode = 229; assert.equal(handle(ime), false); assert.deepEqual(runs, ['new']);
   blocked = true; assert.equal(handle(event('keydown')), false, 'blocked shortcuts reach their target');
   assert.equal(handle(event('keydown', 'x')), false);
 });
@@ -180,4 +190,9 @@ test('entries: sessions that need you first, open sessions with project or folde
   const blocked = m.paletteEntries({ sessions: [], activityOf: () => ({ kind: 'unreported', label: '' }), projects: [], links: [], pendingOpen: null, hasMoreProjects: false,
     pulsoBlocked: 'Pulso sin conexión', commands: [], mac: false, openSession() {}, openBoard() {}, openPulso() {} });
   assert.deepEqual(blocked.map((e: any) => [e.id, e.disabledReason]), [['board:', 'Pulso sin conexión']], 'boards stay listed, disabled with the reason');
+  const drafted = m.paletteEntries({ sessions: [], activityOf: () => ({ kind: 'unreported', label: '' }), projects: [{ id: 'p', title: 'Plan', mainSessionId: null, done: null, total: null }], links: [], pendingOpen: null, hasMoreProjects: true,
+    pulsoBlocked: null, pulsoDraft: 'Guarda o descarta el borrador de Pulso', commands: [], mac: true, openSession() {}, openBoard() {}, openPulso() {},
+    phases: { board: 'Plan', phases: [{ id: 'f', title: 'Fase', statusLabel: 'En curso' }] }, openPhase() {} });
+  assert.deepEqual(drafted.map((e: any) => [e.id, e.disabledReason]), [['board:p', 'Guarda o descarta el borrador de Pulso'], ['board:', 'Guarda o descarta el borrador de Pulso'], ['board-more', null], ['phase:f', 'Guarda o descarta el borrador de Pulso']],
+    'a draft disables board changes and phases; «Más proyectos…» only shows Pulso');
 });

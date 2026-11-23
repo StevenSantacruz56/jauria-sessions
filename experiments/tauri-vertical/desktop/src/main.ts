@@ -196,6 +196,8 @@ function selectSession(id: string) {
   closeSidebar(); refresh(); focusView(activeView());
 }
 function setSplit(value: boolean) {
+  // Unifying detaches or moves the second pane's terminal: keep the keyboard on the remaining one.
+  const hadPaneFocus = !value && $('#panes').contains(document.activeElement);
   split = value;
   if (!split && focusedPane === 1) {
     const id = panes[1].id; assign(panes[1], null); if (id) assign(panes[0], id); focusedPane = 0;
@@ -207,6 +209,7 @@ function setSplit(value: boolean) {
   }
   refresh();
   for (const p of panes) if (p.id) scheduleResize(views.get(p.id)!);
+  if (hadPaneFocus && !panes[0].root.contains(document.activeElement)) { if (activeView()) focusView(activeView()); else panes[0].trigger.focus(); }
 }
 
 for (let i = 0; i < 2; i++) {
@@ -1373,7 +1376,7 @@ function commandContext(): AppCommandContext {
   const needsId = $('#status-needs').dataset.sessionId;
   return {
     connected, connecting, busy: busyAction, replaying, occupied: occupiedSessions(), limit: sessionLimit(), sessionCount: views.size, split,
-    planning: stageView === 'pulso', pulsoUnavailable: pulsoUnavailable(), inspectorOpen: !$('#inspector').hidden,
+    planning: stageView === 'pulso', pulsoUnavailable: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null, inspectorOpen: !$('#inspector').hidden,
     unseenAlerts: Number($('#session-alerts').dataset.unread ?? 0),
     needsTarget: needsId && views.has(needsId) ? { id: needsId, title: views.get(needsId)!.session.title } : null,
     grouping, filter: filter === 'closed' ? 'closed' : filter === 'open' || filter === 'activity' ? 'open' : 'other', theme: theme.value as Theme,
@@ -1401,7 +1404,7 @@ function paletteItems(): PaletteItem[] {
   const activityById = new Map(sessions.map(s => [s.id, sessionActivity(s, alertById.get(s.id), programStatuses.display(s.id), programStatuses.changedAt(s.id))]));
   const summary = sidebarProjects.snapshot;
   return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => activityById.get(id)!,
-    projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(),
+    projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null,
     commands: commands(), mac, openSession: id => commandContext().actions.openSession(id), openBoard: openBoardFromNavigation,
     openPulso: () => { if (stageView !== 'pulso') showPulso(); }, phases: pulsoPanel?.loadedPhases() ?? null, openPhase: openPhaseFromNavigation });
 }
@@ -1415,8 +1418,34 @@ palette = new CommandPalette({
     pulsoPanel?.closeMenus();
     if (window.innerWidth <= 860) closeSidebar();
   },
+  returnTarget: paletteReturnTarget,
+  fallbackFocus: paletteFallbackFocus,
   onToggle: open => $('#open-command-palette').setAttribute('aria-expanded', String(open)),
 });
+/** A floating control that beforeOpen closes returns focus to its trigger; the overlay sidebar to the terminal. */
+function paletteReturnTarget(active: Element | null): HTMLElement | null {
+  if (!(active instanceof HTMLElement) || active === document.body) return null;
+  for (const pane of panes) {
+    if (pane.picker.popup.contains(active)) return pane.trigger;
+    const menu = active.closest('.pane-menu');
+    if (menu && pane.root.contains(menu)) return menu.querySelector<HTMLElement>('summary');
+  }
+  if ($('#attention-banner').contains(active)) return $('#session-alerts');
+  const anchor = pulsoPanel?.menuAnchor(active); if (anchor) return anchor;
+  if (window.innerWidth <= 860 && $('#sidebar').contains(active)) return null;
+  return active;
+}
+/** Never leave focus on body: the focused pane's terminal, else the view's own entry point. */
+function paletteFallbackFocus() {
+  const view = activeView();
+  if (stageView === 'terminal' && view) { focusView(view); if (document.activeElement !== document.body) return; }
+  const candidates = stageView === 'pulso' ? ['#pulso-back-terminal', '#open-pulso'] : [`#session-${focusedPane}`, '#welcome-create', '#open-command-palette'];
+  for (const selector of candidates) {
+    const node = document.querySelector<HTMLElement>(selector);
+    if (!node || (node as HTMLButtonElement).disabled || !node.getClientRects().length) continue;
+    node.focus({ preventScroll: true }); if (document.activeElement === node) return;
+  }
+}
 $('#open-command-palette').setAttribute('aria-keyshortcuts', shortcutAria('command-palette', mac));
 $('#open-command-palette').title = `Paleta de comandos (${shortcutHint('command-palette', mac)})`;
 text('#open-command-palette-hint', shortcutHint('command-palette', mac));

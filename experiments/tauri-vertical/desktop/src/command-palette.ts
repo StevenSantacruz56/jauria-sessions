@@ -101,6 +101,17 @@ export function bestIndex(items: readonly PaletteItem[], query: string): number 
   return best >= 0 ? best : items.length ? 0 : -1;
 }
 
+/**
+ * Focus the return target. A re-rendered control is found again by its
+ * data-focus-key; if it is gone or does not take focus, the fallback runs.
+ */
+export function restoreFocus(target: HTMLElement | null, fallback?: () => void) {
+  let node = target;
+  if (node && !node.isConnected && node.dataset.focusKey) node = document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(node.dataset.focusKey)}"]`);
+  if (node?.isConnected) node.focus({ preventScroll: true });
+  if (!node || document.activeElement !== node) fallback?.();
+}
+
 let palettes = 0;
 export type CommandPaletteOptions = {
   items: () => PaletteItem[];
@@ -108,6 +119,14 @@ export type CommandPaletteOptions = {
   canOpen: () => boolean;
   /** Close popovers, menus and pickers before opening. */
   beforeOpen?: () => void;
+  /**
+   * Where focus returns on close, decided from the focused element BEFORE
+   * beforeOpen closes anything: the trigger of a menu or picker that is about
+   * to close, the element itself otherwise, or null when it cannot hold focus.
+   */
+  returnTarget?: (active: Element | null) => HTMLElement | null;
+  /** Used when the return target is gone or refuses focus (never leave focus on body). */
+  fallbackFocus?: () => void;
   onToggle?: (open: boolean) => void;
 };
 
@@ -121,6 +140,7 @@ export class CommandPalette {
   private active = -1;
   private returnFocus: HTMLElement | null = null;
   private renderedKey = '';
+  private reasonShown = false;
 
   constructor(private readonly options: CommandPaletteOptions, host: HTMLElement = document.body) {
     this.dialog = document.createElement('dialog'); this.dialog.className = 'command-palette'; this.dialog.setAttribute('aria-label', 'Paleta de comandos');
@@ -163,9 +183,10 @@ export class CommandPalette {
 
   open() {
     if (this.isOpen || !this.options.canOpen()) return false;
-    this.options.beforeOpen?.();
     const previous = document.activeElement;
-    this.returnFocus = previous instanceof HTMLElement && previous !== document.body ? previous : null;
+    this.returnFocus = this.options.returnTarget ? this.options.returnTarget(previous)
+      : previous instanceof HTMLElement && previous !== document.body ? previous : null;
+    this.options.beforeOpen?.();
     this.input.value = ''; this.renderedKey = '';
     this.dialog.showModal();
     this.render(true);
@@ -184,7 +205,7 @@ export class CommandPalette {
     void document.body.offsetHeight;
     this.input.removeAttribute('aria-activedescendant');
     const target = this.returnFocus; this.returnFocus = null;
-    if (restore && target?.isConnected) target.focus({ preventScroll: true });
+    if (restore) restoreFocus(target, this.options.fallbackFocus);
     this.options.onToggle?.(false);
   }
 
@@ -196,7 +217,7 @@ export class CommandPalette {
   private execute(index: number) {
     const item = this.shown[index];
     if (!item) return;
-    if (item.disabledReason) { this.setActive(index); this.status.textContent = `${item.label}: no disponible. ${item.disabledReason}.`; return; }
+    if (item.disabledReason) { this.setActive(index); this.reasonShown = true; this.announce(`${item.label}: no disponible. ${item.disabledReason}.`); return; }
     // Close first so focus is back where it was (the terminal) before the
     // command opens a dialog that remembers and restores that focus.
     this.close(true);
@@ -219,6 +240,7 @@ export class CommandPalette {
   /** Disabled entries are reachable (their reason is read) but never run. Wraps around. */
   private move(key: string) {
     const count = this.shown.length; if (!count) return;
+    this.reasonShown = false;
     const next = key === 'Home' ? 0 : key === 'End' ? count - 1 : key === 'ArrowDown' ? (this.active + 1 + count) % count : (this.active - 1 + count) % count;
     this.setActive(this.active < 0 && key === 'ArrowUp' ? count - 1 : next);
   }
@@ -245,13 +267,20 @@ export class CommandPalette {
     const previous = this.shown[this.active]?.id;
     const sections = paletteSections(this.options.items(), this.input.value);
     this.shown = sections.flatMap(section => section.items);
-    // Periodic refreshes keep the rows mounted unless something visible changed.
+    // Periodic refreshes (each runner status) change nothing unless something
+    // visible changed: rows stay mounted, nothing is measured or announced.
     const key = JSON.stringify(sections.map(section => [section.group, section.items.map(item => [item.id, item.label, item.detail, item.disabledReason, item.hint, item.activity?.kind, item.activity?.label])]));
-    if (key !== this.renderedKey || resetActive) this.paint(sections, key);
-    this.status.textContent = resultsAnnouncement(sections);
+    if (!resetActive && key === this.renderedKey) return;
+    this.paint(sections, key);
+    // The reason of a disabled entry stays announced until the query or the active entry changes.
+    if (resetActive) this.reasonShown = false;
+    if (!this.reasonShown) this.announce(resultsAnnouncement(sections));
     const kept = previous === undefined || resetActive ? -1 : this.shown.findIndex(item => item.id === previous);
     this.setActive(kept >= 0 ? kept : bestIndex(this.shown, this.input.value));
   }
+
+  /** Writes the live region only when its text changes. */
+  private announce(text: string) { if (this.status.textContent !== text) this.status.textContent = text; }
 
   private paint(sections: readonly PaletteSection[], key: string) {
     this.renderedKey = key;

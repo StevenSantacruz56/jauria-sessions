@@ -192,8 +192,12 @@ try {
       const page = await browser.newPage({ viewport: { width: 1280, height: 820 } }); const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
       await boot(page, true); await openBoard(page);
       assert.equal(await foot(page, 'scope').count(), 0, 'no session and no checkpoints: no footer');
-      assert.equal(await foot(page, 'phase').locator('.pulso-card-checkpoints').textContent(), '2 checkpoints');
-      assert.equal(await foot(page, 'model').locator('.pulso-card-checkpoints').textContent(), '1 checkpoint');
+      for (const [id, count, label] of [['phase', '2', '2 checkpoints'], ['model', '1', '1 checkpoint']]) {
+        const tally = foot(page, id).locator('.pulso-card-checkpoints');
+        assert.equal(await tally.textContent(), count, 'compact count: flag icon and number');
+        assert.equal(await tally.getAttribute('aria-label'), label); assert.equal(await tally.getAttribute('title'), label);
+        assert.equal(await tally.getAttribute('role'), 'img'); assert.equal(await tally.locator('svg').count(), 1);
+      }
       assert.equal(await foot(page, 'ghost').locator('.pulso-card-checkpoints').count(), 0, 'zero checkpoints are not shown');
       const linked = foot(page, 'phase').locator('button.pulso-card-session');
       assert.match(await linked.getAttribute('aria-label') ?? '', /^Abrir sesión vinculada Fase sintética/);
@@ -317,7 +321,7 @@ try {
       await page.waitForFunction(() => document.querySelector('#session-list .session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape') === 'spinner');
       for (const theme of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme); await page.waitForTimeout(200);
-        await page.locator('.workspace-navigation').screenshot({ path: `${shots}/sidebar-fase-agrupada-${theme}.png` });
+        await page.locator('#sidebar').screenshot({ path: `${shots}/sidebar-fase-agrupada-${theme}.png` });
       }
       await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
       await openBoard(page);

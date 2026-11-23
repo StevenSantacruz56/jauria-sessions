@@ -56,7 +56,7 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void;
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; menuAnchor(node: Node | null): HTMLElement | null; draftBlocked(): string | null;
   statusChanged(revision: number | null): void; syncLive(): void; loadedPhases(): PulsoLoadedPhases | null; openPhase(id: string): Promise<void>; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
@@ -306,7 +306,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     if(!session&&!count)return null;
     const foot=el('div','','pulso-card-foot');
     if(session){const slot=el('span','','pulso-card-session-slot');slot.dataset.sessionId=session.id;slot.dataset.source=session.source==='checkpoint'?'checkpoint':'link';slot.dataset.itemId=item.id;paintCardSession(slot);foot.append(slot);}
-    if(count)foot.append(el('span',`${count} ${count===1?'checkpoint':'checkpoints'}`,'pulso-card-checkpoints'));
+    // Compact count (flag + number) so the session name keeps the width; the words stay in the label and title.
+    if(count){const label=`${count} ${count===1?'checkpoint':'checkpoints'}`;const tally=el('span','','pulso-card-checkpoints');tally.setAttribute('role','img');tally.setAttribute('aria-label',label);tally.title=label;
+      tally.innerHTML='<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5V1.8M3 2h6l-1.4 2.2L9 6.4H3"/></svg>';tally.append(String(count));foot.append(tally);}
     return foot;
   }
   function fallbackActivity(s:Session):{kind:ActivityKind;label:string}{
@@ -807,6 +809,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     newProject(){if(!disposed&&visible)newProject();},
     /** Command palette: close the card "…" menu before opening over the board. */
     closeMenus(){closeMoveMenu(false);},
+    /** Command palette: why the tabs, phases and "+" are not usable now (null = usable). Same state as freeze(). */
+    draftBlocked(){if(disposed)return null;if(dirty||failed)return'Guarda o descarta el borrador de Pulso';if(busy)return'Pulso está guardando un cambio';return null;},
+    /** Command palette: the "…" button that owns the open move menu holding `node`, if any. */
+    menuAnchor(node){return moveMenu&&node&&moveMenu.node.contains(node)?moveMenu.anchor:null;},
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
     dispose() { if (disposed) return; disposed = true; visible = false;closeMoveMenu(false);outline.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };

@@ -68,18 +68,25 @@ export type ShortcutHandlerOptions = {
   blocked: (id: ShortcutId) => boolean;
 };
 
+/** IME composition in progress (WebKit also reports keyCode 229): shortcuts never act on it. */
+export const composingKey = (event: Pick<KeyboardEvent, 'isComposing' | 'keyCode'>) => !!event.isComposing || event.keyCode === 229;
+
 /**
  * Returns true when the event belongs to an app shortcut (so xterm must not
- * process it). Only keydown runs the command; keypress/keyup of the same chord
- * are swallowed. An unavailable command does nothing, exactly like a disabled
- * button.
+ * process it). Only a first keydown runs the command: keypress/keyup and
+ * auto-repeated keydowns (a held chord) of the same shortcut are swallowed
+ * without acting, so holding ⌘⇧P cannot open and then close the palette and
+ * hand the following keys back to the PTY. During IME composition nothing
+ * matches and nothing runs.
  */
 export function createShortcutHandler(options: ShortcutHandlerOptions): (event: KeyboardEvent) => boolean {
   return event => {
+    if (composingKey(event)) return false;
     const id = matchShortcut(event, options.mac);
     if (!id || options.blocked(id)) return false;
     if (event.type !== 'keydown') return true;
     event.preventDefault(); event.stopPropagation();
+    if (event.repeat) return true;
     const command = options.commands().find(entry => entry.shortcut === id);
     if (command && command.unavailable() === null) command.run();
     return true;

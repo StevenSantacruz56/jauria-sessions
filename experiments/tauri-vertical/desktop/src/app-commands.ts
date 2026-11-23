@@ -27,6 +27,8 @@ export type AppCommandContext = {
   planning: boolean;
   /** null when Pulso can be opened; otherwise why not. */
   pulsoUnavailable: string | null;
+  /** Why Pulso cannot change board, open a phase or create a project now (a draft, a failed save or a save in flight), as its own controls show. */
+  pulsoDraft: string | null;
   inspectorOpen: boolean;
   unseenAlerts: number;
   needsTarget: { id: string; title: string } | null;
@@ -99,9 +101,9 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
     { id: 'focus-other-pane', label: 'Enfocar el otro panel', keywords: 'cambiar panel',
       unavailable: () => c.planning ? 'Disponible en la vista de terminal' : !c.split ? 'Solo con el panel dividido' : null, run: a.focusOtherPane },
     { id: 'pulso', label: c.planning ? 'Volver a la terminal' : 'Ir a Pulso', keywords: 'tablero planificación terminal',
-      unavailable: () => c.planning ? null : c.pulsoUnavailable, run: () => c.planning ? a.leavePulso() : a.showPulso() },
+      unavailable: () => c.planning ? c.pulsoDraft : c.pulsoUnavailable, run: () => c.planning ? a.leavePulso() : a.showPulso() },
     { id: 'new-project', label: 'Nuevo proyecto de Pulso…', keywords: 'crear tablero', confirmation: 'dialog',
-      unavailable: () => c.pulsoUnavailable, run: a.newProject },
+      unavailable: () => c.pulsoUnavailable ?? c.pulsoDraft, run: a.newProject },
     { id: 'search-sessions', label: 'Buscar en la lista de agentes', keywords: 'filtrar barra lateral', shortcut: 'search-sessions',
       unavailable: () => null, run: a.searchSessions },
     { id: 'grouping', label: c.grouping === 'state' ? 'Agrupar agentes por proyecto' : 'Agrupar agentes por estado', keywords: 'agentes lista orden',
@@ -135,6 +137,8 @@ export type PaletteSources = {
   hasMoreProjects: boolean;
   /** null when Pulso can be opened; otherwise why boards are disabled. */
   pulsoBlocked: string | null;
+  /** Draft guard of the board (see AppCommandContext.pulsoDraft); boards and phases show it. */
+  pulsoDraft?: string | null;
   commands: readonly AppCommand[];
   mac: boolean;
   openSession: (id: string) => void;
@@ -154,6 +158,7 @@ export type PaletteSources = {
  * the registry, with the shortcut hint and the unavailability reason.
  */
 export function paletteEntries(src: PaletteSources): PaletteItem[] {
+  const navigation = src.pulsoBlocked ?? src.pulsoDraft ?? null;
   const projectOf = projectSessionIndex(src.projects, src.links);
   const projectTitle = new Map(src.projects.map(project => [project.id, project.title]));
   const items: PaletteItem[] = [];
@@ -169,15 +174,15 @@ export function paletteEntries(src: PaletteSources): PaletteItem[] {
   for (const project of src.projects) {
     const progress = projectProgressLabel(project);
     items.push({ id: `board:${project.id}`, group: 'projects', label: project.title, detail: progress ? `${progress} hechas` : 'Tablero de Pulso',
-      initial: Array.from(project.title.trim())[0]?.toLocaleUpperCase() ?? '·', keywords: 'pulso tablero proyecto', disabledReason: src.pulsoBlocked, run: () => src.openBoard(project.id) });
+      initial: Array.from(project.title.trim())[0]?.toLocaleUpperCase() ?? '·', keywords: 'pulso tablero proyecto', disabledReason: navigation, run: () => src.openBoard(project.id) });
   }
   items.push({ id: 'board:', group: 'projects', label: 'Pendientes', detail: src.pendingOpen === null ? 'Tablero de Pulso' : `${src.pendingOpen} sin terminar`,
-    initial: '·', keywords: 'pulso tablero tareas sueltas', disabledReason: src.pulsoBlocked, run: () => src.openBoard(null) });
+    initial: '·', keywords: 'pulso tablero tareas sueltas', disabledReason: navigation, run: () => src.openBoard(null) });
   if (src.hasMoreProjects) items.push({ id: 'board-more', group: 'projects', label: 'Más proyectos…', detail: 'Abrir Pulso', keywords: 'pulso', disabledReason: src.pulsoBlocked, run: src.openPulso });
   if (src.phases && src.openPhase) for (const phase of src.phases.phases) {
     const open = src.openPhase;
     items.push({ id: `phase:${phase.id}`, group: 'phases', label: phase.title, detail: `${phase.statusLabel} · ${src.phases.board}`,
-      keywords: 'pulso fase tarjeta', disabledReason: src.pulsoBlocked, run: () => open(phase.id) });
+      keywords: 'pulso fase tarjeta', disabledReason: navigation, run: () => open(phase.id) });
   }
   for (const command of src.commands) {
     if (command.palette === false) continue;
