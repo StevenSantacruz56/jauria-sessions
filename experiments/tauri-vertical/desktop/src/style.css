@@ -44,7 +44,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --sidebar: #0c0e11;
+    --sidebar: #0e1116;
     --canvas: #111316;
     --surface: #16191d;
     --raised: #262a30;
@@ -73,7 +73,7 @@
 /* Identical to the block above (tests/design-tokens.test.ts checks it). */
 :root[data-theme="dark"] {
     color-scheme: dark;
-    --sidebar: #0c0e11;
+    --sidebar: #0e1116;
     --canvas: #111316;
     --surface: #16191d;
     --raised: #262a30;
