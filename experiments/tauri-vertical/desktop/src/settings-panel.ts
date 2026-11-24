@@ -209,6 +209,8 @@ export function mountSettings(options: Options): {
   let current: AppSettings | null = null;
   // Values the person chose and that are not confirmed yet (sent once the in-flight save ends).
   let wantedLimit: number | null = null, wantedPulso: boolean | null = null;
+  // One sequence number per choice: the queue follows the latest intention, never a value comparison.
+  let limitSeq = 0, pulsoSeq = 0;
   let opener: HTMLElement | null = null;
   let underlyingDialog: HTMLDialogElement | null = null;
   let generation = 0, intentionalCloses = 0;
@@ -279,7 +281,7 @@ export function mountSettings(options: Options): {
     const limitValue = wantedLimit ?? base.maxConcurrentSessions;
     const pulsoValue = base.schemaVersion === 2 ? (wantedPulso ?? base.pulsoAutoAccess) : undefined;
     if (limitValue === base.maxConcurrentSessions && (pulsoValue === undefined || pulsoValue === base.pulsoAutoAccess)) { wantedLimit = null; wantedPulso = null; sync(); return; }
-    const sentLimit = wantedLimit, sentPulso = wantedPulso;
+    const sentLimit = limitSeq, sentPulso = pulsoSeq;
     const token = ++generation;
     saving = true; showError(''); status.textContent = 'Guardando…'; sync();
     let saved: AppSettings | null = null;
@@ -288,8 +290,8 @@ export function mountSettings(options: Options): {
       if (disposed || token !== generation) return;
       // The response is authoritative (including a changed server cap).
       accept(saved);
-      if (wantedLimit === sentLimit) wantedLimit = null;
-      if (wantedPulso === sentPulso) wantedPulso = null;
+      if (limitSeq === sentLimit) wantedLimit = null;
+      if (pulsoSeq === sentPulso) wantedPulso = null;
       options.onSaved(saved);
       if (disposed || token !== generation) return;
       status.textContent = `Guardado: ${sessionsLabel(saved.maxConcurrentSessions)} a la vez${saved.schemaVersion === 2 ? `; acceso automático a Pulso ${saved.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}.`;
@@ -297,8 +299,8 @@ export function mountSettings(options: Options): {
       if (disposed || token !== generation) return;
       // Only what this call sent goes back to the runner value; a change chosen
       // meanwhile stays wanted and is sent by the call that follows.
-      if (wantedLimit === sentLimit) wantedLimit = null;
-      if (wantedPulso === sentPulso) wantedPulso = null;
+      if (limitSeq === sentLimit) wantedLimit = null;
+      if (pulsoSeq === sentPulso) wantedPulso = null;
       showError(`No se pudo guardar. Sigue el valor anterior: ${sessionsLabel(base.maxConcurrentSessions)} a la vez${base.schemaVersion === 2 ? `, acceso automático ${base.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}. Vuelve a elegir para reintentar.`);
       status.textContent = '';
     } finally {
@@ -340,11 +342,11 @@ export function mountSettings(options: Options): {
   limit.addEventListener('change', () => {
     const value = Number(limit.value);
     if (!current || !Number.isInteger(value) || value < 1 || value > Math.min(8, current.maxSupportedSessions)) { paintRunner(); return; }
-    wantedLimit = value; void flush(); sync();
+    wantedLimit = value; limitSeq++; void flush(); sync();
   });
   pulsoToggle.addEventListener('change', () => {
     if (current?.schemaVersion !== 2) { paintRunner(); return; }
-    wantedPulso = pulsoToggle.checked; void flush(); sync();
+    wantedPulso = pulsoToggle.checked; pulsoSeq++; void flush(); sync();
   });
   form.addEventListener('submit', event => event.preventDefault());
   retry.addEventListener('click', () => { void read(); });

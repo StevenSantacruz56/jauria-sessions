@@ -222,6 +222,20 @@ for (const engine of [chromium, webkit]) {
       assert.equal(await page.getByRole('checkbox', { name: 'Acceso automático a Pulso' }).isChecked(), false);
     });
 
+    await t.test('the queue follows the latest choice, not values: 2 → 5 (pending) → 6 → 5 with the first save failing sends 5 (Codex ronda 2, 7)', async () => {
+      const page = await mounted('f.holdSave = true;');
+      await page.locator('#opener').click(); await ready(page);
+      const limit = page.getByLabel('Máximo de sesiones simultáneas');
+      await limit.selectOption('5');
+      await limit.selectOption('6'); await limit.selectOption('5');
+      assert.deepEqual(await action(page, 'return f.saves'), [5]);
+      await action(page, 'const r = f.resolveSave; f.holdSave = false; f.resolveSave = null; r(Promise.reject(Error("Synthetic save error")));');
+      await page.waitForFunction(() => (window as any).fixture.saves.length === 2);
+      await page.waitForFunction(() => /5 sesiones/.test(document.querySelector('.settings-dialog-status')?.textContent ?? ''));
+      assert.deepEqual(await action(page, 'return f.saves'), [5, 5], 'the last choice (5) is sent again after the failure');
+      assert.equal(await limit.inputValue(), '5');
+    });
+
     await t.test('forced native close during a save reopens; an intentional close event cannot undo a rapid reopen', async () => {
       const page = await mounted('f.holdSave = true;');
       await page.locator('#opener').click(); await ready(page);
