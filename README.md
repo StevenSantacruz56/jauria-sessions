@@ -163,7 +163,7 @@ Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles,
 
 *Configuración: apariencia, límite de sesiones, acceso automático a Pulso activado por defecto y permisos manuales en una sección desplegable.*
 
-![Diálogo Nueva sesión para elegir herramienta, carpeta de trabajo y nombre](docs/screenshots/nueva-sesion.jpg)
+![Ventana Nueva sesión de Jauria 1.4.0: herramienta, carpeta de trabajo, proyecto de Pulso opcional, nombre y plazas libres](docs/screenshots/nueva-sesion-1.4.0.png)
 
 *Nueva sesión (captura de una versión anterior): selección de herramienta, carpeta y nombre opcional.*
 
