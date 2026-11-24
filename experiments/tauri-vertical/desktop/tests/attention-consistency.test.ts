@@ -243,6 +243,9 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
       await t.test('active failure remains persistent while attended; leaving makes it new; mark-seen retires seen failures (1.4.0) and preserves custody', async () => {
         await fixture(async page => {
           await transition(page, 'foreground', 'failed');
+          await counts(page, 2, 1); // Under its recovery card the failure is not attended: it is new.
+          // 1.4.0: the recovery card covers the terminal (not attended); «Ver salida» folds it and the terminal is attended again.
+          await page.locator('.pane:nth-child(1) [data-recovery="output"]').click();
           await counts(page, 2, 0);
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           const failed = page.locator('#session-list .session-item').filter({ hasText: 'Claude foreground' });
@@ -351,6 +354,8 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
       await t.test('focus, blur and visibility immediately refresh persistent unread state without acknowledgement', async () => {
         await fixture(async page => {
           await transition(page, 'foreground', 'failed');
+          // 1.4.0: the recovery card covers the terminal (not attended); «Ver salida» folds it and the terminal is attended again.
+          await page.locator('.pane:nth-child(1) [data-recovery="output"]').click();
           await counts(page, 2, 0);
           for (const [event, value, unseen] of [
             ['focusEvent', false, 1], ['focusEvent', true, 0],
