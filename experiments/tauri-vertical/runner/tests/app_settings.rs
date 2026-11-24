@@ -55,7 +55,7 @@ fn first_launch_default_without_any_writes() -> Result<()> {
     let settings = AppSettings::open(p.path())?;
     assert_eq!(settings.limit(), 2);
     assert_eq!(settings.snapshot(), json!({"schemaVersion":2,"maxConcurrentSessions":2,
-        "maxSupportedSessions":8,"pulsoAutoAccess":true,"warning":null}));
+        "maxSupportedSessions":8,"pulsoAutoAccess":true,"providerSignals":true,"warning":null}));
     assert_eq!(fs::read_dir(p.path())?.count(), 0);
     assert_eq!(fs::metadata(p.path())?.modified()?, before.modified()?);
     Ok(())
@@ -302,5 +302,39 @@ fn migrates_old_settings_and_persists_pulso_preference() -> Result<()> {
     assert_eq!(reopened.limit(), 4);
     assert_eq!(reopened.update(Some(5), Some(true))?["pulsoAutoAccess"], true);
     assert_eq!(AppSettings::open(p.path())?.limit(), 5);
+    Ok(())
+}
+
+#[test]
+fn provider_signals_default_on_stored_only_when_off_and_respect_the_old_file() -> Result<()> {
+    let p = Profile::new()?;
+    p.seed(br#"{"schemaVersion":2,"maxConcurrentSessions":3,"pulsoAutoAccess":false}"#)?;
+    let settings = AppSettings::open(p.path())?;
+    assert!(settings.provider_signals(), "schema 2 (1.3.x and early 1.4) means on");
+    // Off: schema 3 with the key; the other values are kept.
+    let saved = settings.set_provider_signals(false)?;
+    assert_eq!(saved["providerSignals"], false);
+    let stored: Value = serde_json::from_slice(&fs::read(p.file())?)?;
+    assert_eq!(stored, json!({"schemaVersion":3,"maxConcurrentSessions":3,"pulsoAutoAccess":false,"providerSignals":false}));
+    let reopened = AppSettings::open(p.path())?;
+    assert!(!reopened.provider_signals());
+    // A later limit change keeps it off.
+    reopened.update(Some(4), None)?;
+    assert!(!AppSettings::open(p.path())?.provider_signals());
+    // On: back to the schema 2 file a 1.3.x runner reads.
+    reopened.set_provider_signals(true)?;
+    let stored: Value = serde_json::from_slice(&fs::read(p.file())?)?;
+    assert_eq!(stored, json!({"schemaVersion":2,"maxConcurrentSessions":4,"pulsoAutoAccess":false}));
+    // The earlier off file means off, and turning it on removes that file.
+    fs::write(p.0.join("provider-signals-off"), "")?;
+    let with_file = AppSettings::open(p.path())?;
+    assert!(!with_file.provider_signals());
+    assert_eq!(with_file.snapshot()["providerSignals"], false);
+    with_file.set_provider_signals(true)?;
+    assert!(!p.0.join("provider-signals-off").exists());
+    assert!(AppSettings::open(p.path())?.provider_signals());
+    // A schema 3 file with a non-boolean value is invalid (defaults and a warning).
+    fs::write(p.file(), br#"{"schemaVersion":3,"maxConcurrentSessions":3,"pulsoAutoAccess":true,"providerSignals":"no"}"#)?;
+    assert!(AppSettings::open(p.path())?.snapshot()["warning"].is_string());
     Ok(())
 }

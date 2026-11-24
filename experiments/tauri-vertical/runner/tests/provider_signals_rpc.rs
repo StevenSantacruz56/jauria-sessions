@@ -133,7 +133,23 @@ fn claude_hooks_declare_turn_and_permission_through_the_pty() {
 }
 
 #[test]
-fn the_profile_off_switch_launches_claude_without_hooks() {
+fn the_setting_turns_hooks_off_for_new_sessions_and_on_again() {
+    let f = Fixture::new();
+    assert_eq!(f.rpc("get_settings", json!({}))["providerSignals"], true, "on by default");
+    assert_eq!(f.rpc("set_provider_signals", json!({"enabled":false}))["providerSignals"], false);
+    assert_eq!(f.try_rpc("set_provider_signals", json!({"enabled":"no"})).unwrap()["ok"], false);
+    assert_eq!(f.rpc("status", json!({}))["settings"]["providerSignals"], false);
+    f.rpc("start", json!({"id":"quiet","title":"quiet","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));
+    f.wait_output("quiet", "NOHOOKS");
+    let settings: Value = serde_json::from_slice(&fs::read(f.path("home/settings.json")).unwrap()).unwrap();
+    assert!(settings.get("hooks").is_none() && settings["statusLine"].is_object());
+    f.rpc("set_provider_signals", json!({"enabled":true}));
+    f.rpc("start", json!({"id":"loud","title":"loud","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));
+    f.wait_output("loud", "FAKE_DONE");
+}
+
+#[test]
+fn the_earlier_off_file_still_launches_claude_without_hooks() {
     let f = Fixture::new();
     fs::write(f.path("data/provider-signals-off"), "").unwrap();
     f.rpc("start", json!({"id":"off","title":"off","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));

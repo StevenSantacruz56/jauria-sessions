@@ -61,6 +61,14 @@ async function fixture(browser: Browser, config = '') {
         grouping: { get: () => f.grouping, set: (value: string) => { f.grouping = value; f.groupings.push(value); } },
         resetSidebar: () => { f.resets++; },
       } : {}),
+      ...(f.provider ? {
+        saveProviderSignals: async (enabled: boolean) => {
+          f.providerSaves = [...(f.providerSaves ?? []), enabled];
+          if (f.saveError) throw Error('Synthetic save error');
+          f.settings = { ...f.settings, providerSignals: enabled }; return structuredClone(f.settings);
+        },
+        openNotificationSettings: async () => { f.opened = (f.opened ?? 0) + 1; if (f.openError) throw Error('Synthetic open error'); },
+      } : {}),
       version: '1.0.0', canEdit: () => f.editable,
       onSaved: (settings: any) => f.saved.push(settings),
     });
@@ -78,6 +86,31 @@ for (const engine of [chromium, webkit]) {
     async function mounted(config = '') {
       const page = await fixture(browser, config); t.after(() => page.close()); return page;
     }
+
+    await t.test('Avisos: Claude Code y Codex toggle saves at once for new sessions; Abrir Ajustes de notificaciones; old runner disables it', async () => {
+      const page = await mounted('f.provider = true; f.settings.providerSignals = true;');
+      await page.locator('#opener').click(); await ready(page);
+      const toggle = page.getByLabel('Avisos de Claude Code y Codex');
+      assert.equal(await toggle.isChecked(), true, 'on by default');
+      assert.match(await page.locator('.settings-notices').innerText(), /No cambia tu configuración de Claude ni de Codex/);
+      assert.match(await page.locator('.settings-notices').innerText(), /sesiones que abras después/);
+      await toggle.uncheck(); await saved(page, 'Avisos de Claude Code y Codex desactivados');
+      assert.deepEqual(await action(page, 'return [f.providerSaves, f.saves]'), [[false], []], 'only its own call; the limit is not sent');
+      assert.equal(await toggle.isChecked(), false);
+      await page.getByRole('button', { name: 'Abrir Ajustes de notificaciones' }).click();
+      await page.waitForFunction(() => (window as any).fixture.opened === 1);
+      assert.match(await status(page), /Notificaciones/);
+      // A failed save puts the control back on the runner's value and says so.
+      await action(page, 'f.saveError = true');
+      await toggle.click();
+      await page.waitForFunction(() => !document.querySelector<HTMLElement>('.form-error')!.hidden);
+      assert.equal(await toggle.isChecked(), false);
+      // A runner without the setting: the toggle is disabled and the reason is shown.
+      const old = await mounted('f.provider = true;');
+      await old.locator('#opener').click(); await ready(old);
+      assert.equal(await old.getByLabel('Avisos de Claude Code y Codex').isDisabled(), true);
+      assert.match(await old.locator('.settings-notices').innerText(), /Este runner no ofrece estos avisos/);
+    });
 
     await t.test('native focus and Escape; every change applies at once, nothing on open; no Guardar; terminal geometry stable', async () => {
       const page = await mounted();

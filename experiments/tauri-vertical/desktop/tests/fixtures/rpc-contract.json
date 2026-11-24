@@ -17,6 +17,8 @@
     {"op": "set_settings", "args": {"maxConcurrentSessions": 3}, "from": "settingsArgs, settingsVersion 1"},
     {"op": "set_settings", "args": {"maxConcurrentSessions": 3, "pulsoAutoAccess": true}, "from": "settingsArgs, settingsVersion 2"},
     {"op": "set_settings", "args": {"maxConcurrentSessions": 8, "pulsoAutoAccess": false}, "from": "settingsArgs, settingsVersion 2"},
+    {"op": "set_provider_signals", "args": {"enabled": false}, "from": "main.ts settings (Avisos de Claude Code y Codex)"},
+    {"op": "set_provider_signals", "args": {"enabled": true}, "from": "main.ts settings (Avisos de Claude Code y Codex)"},
     {"op": "rename_session", "args": {"id": "session-1", "title": "Nuevo nombre"}, "from": "main.ts rename"},
     {"op": "native_binding", "args": {"id": "session-1"}, "from": "main.ts resume"},
     {"op": "resume_native", "args": {"id": "claude-2", "sourceId": "session-1", "rows": 24, "cols": 80}, "from": "main.ts resume"},

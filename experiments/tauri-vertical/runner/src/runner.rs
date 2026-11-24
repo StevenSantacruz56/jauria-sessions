@@ -382,6 +382,13 @@ impl Runner {
             if let (Some(pulso),Some(enabled))=(&self.pulso,auto) {pulso.set_auto_enabled(enabled);}
             return Ok(result);
         }
+        if op == "set_provider_signals" {
+            // «Avisos de Claude Code y Codex»: read when a session starts; open sessions keep theirs.
+            let enabled=crate::rpc_contract::provider_signals_args(args).map_err(anyhow::Error::msg)?;
+            let _guard=self.mutations.lock().unwrap();
+            ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
+            return self.settings.set_provider_signals(enabled);
+        }
         if op == "native_binding" {
             let id=args["id"].as_str().context("Falta sesión")?; validate_id(id)?;
             let binding=crate::native_sessions::load(&self.data_dir,id)?;
@@ -727,7 +734,7 @@ impl Runner {
                 else {for override_value in mcp.codex_overrides()? {cmd.arg("-c");cmd.arg(override_value);}}
             }
         }
-        let signals=crate::provider_signals::enabled(&self.data_dir);
+        let signals=crate::provider_signals::enabled(self.settings.provider_signals(),&self.data_dir);
         if kind=="claude" {
             // One --settings for the invocation: the quota statusLine and, unless switched off,
             // the turn/permission hooks (merged by Claude with the user's own settings and hooks).

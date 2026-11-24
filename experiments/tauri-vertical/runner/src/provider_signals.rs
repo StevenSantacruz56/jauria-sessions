@@ -26,10 +26,12 @@ use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{io::Write, path::Path, time::{Duration, Instant}};
 
-pub const OFF_FILE: &str = "provider-signals-off";
+/// Earlier off switch, still respected as «off» (app_settings reads it at startup).
+pub const OFF_FILE: &str = crate::app_settings::PROVIDER_OFF_FILE;
 
-/// Whether new sessions of this profile get the provider hooks.
-pub fn enabled(data_dir: &Path) -> bool { !data_dir.join(OFF_FILE).exists() }
+/// Whether new sessions of this profile get the provider hooks: the setting
+/// «Avisos de Claude Code y Codex», and never while the earlier off file exists.
+pub fn enabled(setting: bool, data_dir: &Path) -> bool { setting && !data_dir.join(OFF_FILE).exists() }
 
 /// The OSC 7501 bytes for one hook state; `turn` is a whole turn (Codex).
 pub fn sequence(state: &str) -> Option<&'static [u8]> {
@@ -167,10 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn off_switch_is_a_profile_file() {
+    fn the_setting_decides_and_the_earlier_off_file_still_means_off() {
         let profile = tempfile::tempdir().unwrap();
-        assert!(enabled(profile.path()));
+        assert!(enabled(true, profile.path()));
+        assert!(!enabled(false, profile.path()));
         std::fs::write(profile.path().join(OFF_FILE), "").unwrap();
-        assert!(!enabled(profile.path()));
+        assert!(!enabled(true, profile.path()));
     }
 }

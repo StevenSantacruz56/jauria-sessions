@@ -93,6 +93,8 @@ fn bridge_fields(op: &str) -> Option<&'static [&'static str]> {
         "status" | "telemetry" | "refresh_quotas" | "get_settings" => &[],
         // settingsVersion 2 adds pulsoAutoAccess; settingsVersion 1 sends only the limit.
         "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
+        // «Avisos de Claude Code y Codex» (runner providerSignals).
+        "set_provider_signals" => &["enabled"],
         "rename_session" => &["id","title"],
         "native_binding" => &["id"],
         "resume_native" => &["id","sourceId","rows","cols"],
@@ -124,6 +126,9 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     }
     if op == "set_settings" && obj.get("pulsoAutoAccess").is_some_and(|v| !v.is_boolean()) {
         return Err("El acceso automático a Pulso debe ser verdadero o falso".into());
+    }
+    if op == "set_provider_signals" && !obj.get("enabled").is_some_and(Value::is_boolean) {
+        return Err("Los avisos de Claude Code y Codex deben ser verdadero o falso".into());
     }
     if op == "rename_session" {
         let title = args["title"].as_str().ok_or("Falta título de sesión")?;
@@ -326,6 +331,22 @@ async fn pulso_request(op:String,args:Value,state:tauri::State<'_,Bridge>)->Resu
         if line.len()>512*1024 || line.last()!=Some(&b'\n') { return Err("Respuesta incompleta de Pulso".into()); }
         serde_json::from_slice(&line).map_err(|_|"Respuesta inválida de Pulso".into())
     }).await.map_err(error)?
+}
+/// The one System Settings pane the renderer may open: Notifications (macOS 13+).
+/// Fixed URL, no argument from the client: never a generic URL opener.
+const NOTIFICATION_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+fn notification_settings_command() -> std::process::Command {
+    let mut command = std::process::Command::new("/usr/bin/open");
+    command.arg(NOTIFICATION_SETTINGS_URL).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command
+}
+/// Configuración → Avisos → «Abrir Ajustes de notificaciones». Main window only.
+#[tauri::command]
+fn open_notification_settings(window: tauri::WebviewWindow) -> Result<()> {
+    if window.label() != "main" { return Err("Ventana no permitida".into()); }
+    let status = notification_settings_command().status().map_err(|_| "No se pudo abrir Ajustes del Sistema")?;
+    if !status.success() { return Err("No se pudo abrir Ajustes del Sistema".into()); }
+    Ok(())
 }
 // Keep the renderer limited to selecting a single directory. No generic file API.
 #[tauri::command]
@@ -546,7 +567,7 @@ fn main() {
                 let _ = app.emit("open-settings", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, restart_runner, preview_diagnostic, export_diagnostic, confirm_history, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
+        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, restart_runner, preview_diagnostic, export_diagnostic, confirm_history, select_directory, home_directory, open_notification_settings, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }
 
@@ -584,6 +605,23 @@ mod tests {
         }
         assert!(validate("set_settings", &json!({})).is_err());
         assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"force":true})).is_err());
+    }
+    #[test]
+    fn provider_signals_take_exactly_one_boolean() {
+        for enabled in [true, false] { assert!(validate("set_provider_signals", &json!({"enabled":enabled})).is_ok()); }
+        for bad in [json!({}), json!({"enabled":1}), json!({"enabled":"true"}), json!({"enabled":null}), json!({"enabled":true,"path":"/tmp"})] {
+            assert!(validate("set_provider_signals", &bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn notification_settings_opens_only_the_fixed_pane() {
+        let command = notification_settings_command();
+        assert_eq!(command.get_program(), "/usr/bin/open");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [NOTIFICATION_SETTINGS_URL]);
+        assert_eq!(NOTIFICATION_SETTINGS_URL, "x-apple.systempreferences:com.apple.Notifications-Settings.extension");
+        // The command has no parameter a client could fill: no generic opener.
+        let source = include_str!("main.rs");
+        assert!(source.contains("fn open_notification_settings(window: tauri::WebviewWindow) -> Result<()>"));
     }
     #[test]
     fn settings_bridge_accepts_the_v2_payload_the_app_sends() {

@@ -14,6 +14,7 @@ pub fn allowed_args(op: &str) -> Option<&'static [&'static str]> {
         "status" => &["workspaceAfter"],
         "get_settings" => &[],
         "set_settings" => &["maxConcurrentSessions", "pulsoAutoAccess"],
+        "set_provider_signals" => &["enabled"],
         "rename_session" => &["id", "title"],
         "native_binding" => &["id"],
         "resume_native" => &["id", "sourceId", "rows", "cols"],
@@ -53,10 +54,21 @@ pub fn settings_args(args: &Value) -> Result<(Option<u64>, Option<bool>), &'stat
     Ok((limit, auto))
 }
 
+/// `set_provider_signals` value: `enabled`, required and strictly boolean.
+pub fn provider_signals_args(args: &Value) -> Result<bool, &'static str> {
+    args.get("enabled").and_then(Value::as_bool).ok_or("enabled must be a boolean")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn provider_signals_args_are_one_strict_boolean() {
+        assert_eq!(provider_signals_args(&json!({"enabled":false})), Ok(false));
+        for bad in [json!({}), json!({"enabled":1}), json!({"enabled":"true"}), json!({"enabled":null})] { assert!(provider_signals_args(&bad).is_err(), "{bad}"); }
+        assert_eq!(allowed_args("set_provider_signals"), Some(&["enabled"][..]));
+    }
     #[test]
     fn settings_args_are_optional_and_strict() {
         assert_eq!(settings_args(&json!({})), Ok((None, None)));

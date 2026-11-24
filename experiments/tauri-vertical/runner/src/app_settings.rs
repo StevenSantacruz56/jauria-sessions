@@ -16,10 +16,16 @@ const MAX_BYTES: u64 = 16 * 1024;
 const WARNING: &str = "No se pudo cargar la configuración. Se usan los valores predeterminados; guarda para reemplazarla.";
 const DURABILITY_WARNING: &str = "La configuración se guardó, pero no se pudo confirmar su persistencia ante un apagado inesperado. Vuelve a guardar para reintentar.";
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+/// Earlier off switch of the provider hooks; respected as «off» (same name as provider_signals::OFF_FILE).
+pub const PROVIDER_OFF_FILE: &str = "provider-signals-off";
 
 struct State {
     limit: usize,
     pulso_auto_access: bool,
+    /// Provider hooks for new Claude Code / Codex sessions (provider_signals.rs).
+    /// Default on. Stored only when off (schemaVersion 3), so a file with it on
+    /// stays the schema 2 that runners 1.3.x read.
+    provider_signals: bool,
     warning: Option<&'static str>,
 }
 
@@ -38,15 +44,17 @@ impl AppSettings {
     /// creates or repairs files. Invalid settings remain available for inspection.
     pub fn open(profile: &Path) -> Result<Self> {
         let directory = open_profile(profile)?;
-        let (limit, pulso_auto_access, warning) = match load(&directory) {
-            Ok(Some((limit, pulso_auto_access))) => (limit, pulso_auto_access, None),
-            Ok(None) => (2, true, None),
-            Err(_) => (2, true, Some(WARNING)),
+        let (limit, pulso_auto_access, mut provider_signals, warning) = match load(&directory) {
+            Ok(Some((limit, pulso_auto_access, provider))) => (limit, pulso_auto_access, provider, None),
+            Ok(None) => (2, true, true, None),
+            Err(_) => (2, true, true, Some(WARNING)),
         };
+        // The earlier off switch (a `provider-signals-off` file) still means off.
+        if profile.join(PROVIDER_OFF_FILE).exists() { provider_signals = false; }
         Ok(Self {
             profile: profile.to_owned(),
             directory,
-            state: Mutex::new(State { limit, pulso_auto_access, warning }),
+            state: Mutex::new(State { limit, pulso_auto_access, provider_signals, warning }),
             #[cfg(test)]
             fail_directory_sync: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -60,6 +68,21 @@ impl AppSettings {
 
     pub fn pulso_auto_access(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).pulso_auto_access
+    }
+
+    pub fn provider_signals(&self) -> bool {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).provider_signals
+    }
+
+    /// «Avisos de Claude Code y Codex». Applies to sessions started afterwards.
+    /// Turning it on also removes the earlier `provider-signals-off` file.
+    pub fn set_provider_signals(&self, enabled: bool) -> Result<Value> {
+        let value = self.write(None, None, Some(enabled))?;
+        if enabled {
+            let name = CString::new(PROVIDER_OFF_FILE)?;
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0); }
+        }
+        Ok(value)
     }
 
     pub fn snapshot(&self) -> Value {
@@ -76,15 +99,23 @@ impl AppSettings {
 
     pub fn update(&self, limit: Option<usize>, pulso_auto_access: Option<bool>) -> Result<Value> {
         ensure!(limit.is_some() || pulso_auto_access.is_some(), "settings change required");
+        self.write(limit, pulso_auto_access, None)
+    }
+
+    fn write(&self, limit: Option<usize>, pulso_auto_access: Option<bool>, provider_signals: Option<bool>) -> Result<Value> {
         if let Some(limit) = limit { ensure!((1..=8).contains(&limit), "session limit must be an integer from 1 to 8"); }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.validate_profile()?;
         validate_target(&self.directory)?;
-        let bytes = serde_json::to_vec(&json!({
+        let provider = provider_signals.unwrap_or(state.provider_signals);
+        let mut file = json!({
             "schemaVersion": 2,
             "maxConcurrentSessions": limit.unwrap_or(state.limit),
             "pulsoAutoAccess": pulso_auto_access.unwrap_or(state.pulso_auto_access),
-        }))?;
+        });
+        // Only «off» needs the new key: schema 3. On is schema 2, which 1.3.x runners read.
+        if !provider { file["schemaVersion"] = json!(3); file["providerSignals"] = json!(false); }
+        let bytes = serde_json::to_vec(&file)?;
 
         let (temporary, mut file) = create_temp(&self.directory)?;
         file.write_all(&bytes)?;
@@ -106,6 +137,7 @@ impl AppSettings {
         // reported as a failed save: memory and admission must match the new file.
         if let Some(limit) = limit { state.limit = limit; }
         if let Some(enabled) = pulso_auto_access { state.pulso_auto_access = enabled; }
+        state.provider_signals = provider;
         state.warning = if self.sync_directory().is_err() { Some(DURABILITY_WARNING) } else { None };
         Ok(snapshot(&state))
     }
@@ -133,6 +165,7 @@ fn snapshot(state: &State) -> Value {
         "maxConcurrentSessions": state.limit,
         "maxSupportedSessions": 8,
         "pulsoAutoAccess": state.pulso_auto_access,
+        "providerSignals": state.provider_signals,
         "warning": state.warning,
     })
 }
@@ -189,7 +222,7 @@ fn validate_target(directory: &File) -> Result<()> {
     existing(directory).map(|_| ())
 }
 
-fn load(directory: &File) -> Result<Option<(usize, bool)>> {
+fn load(directory: &File) -> Result<Option<(usize, bool, bool)>> {
     let Some(file) = existing(directory)? else { return Ok(None) };
     ensure!(file.metadata()?.len() <= MAX_BYTES, "settings too large");
     let mut bytes = Vec::new();
@@ -198,13 +231,15 @@ fn load(directory: &File) -> Result<Option<(usize, bool)>> {
     let value: Value = serde_json::from_slice(&bytes)?;
     let object = value.as_object().context("settings must be an object")?;
     let schema=object.get("schemaVersion").and_then(Value::as_u64).context("unsupported settings schema")?;
-    ensure!((schema == 1 && object.len() == 2 || schema == 2 && object.len() == 3)
+    ensure!((schema == 1 && object.len() == 2 || schema == 2 && object.len() == 3 || schema == 3 && object.len() == 4)
         && object.contains_key("maxConcurrentSessions")
-        && (schema == 1 || object.contains_key("pulsoAutoAccess")), "unknown or missing settings fields");
+        && (schema == 1 || object.contains_key("pulsoAutoAccess"))
+        && (schema != 3 || object.contains_key("providerSignals")), "unknown or missing settings fields");
     let limit = object.get("maxConcurrentSessions").and_then(Value::as_u64).context("invalid session limit")?;
     ensure!((1..=8).contains(&limit), "invalid session limit");
     let auto=if schema == 1 {true} else {object.get("pulsoAutoAccess").and_then(Value::as_bool).context("invalid Pulso access setting")?};
-    Ok(Some((limit as usize, auto)))
+    let provider=if schema == 3 {object.get("providerSignals").and_then(Value::as_bool).context("invalid provider signals setting")?} else {true};
+    Ok(Some((limit as usize, auto, provider)))
 }
 
 fn create_temp(directory: &File) -> Result<(Temporary<'_>, File)> {

@@ -6,6 +6,8 @@ export type AppSettings = {
   maxConcurrentSessions: number;
   maxSupportedSessions: number;
   pulsoAutoAccess?: boolean;
+  /** «Avisos de Claude Code y Codex» (runner with provider hooks); absent on older runners. */
+  providerSignals?: boolean;
   warning?: string | null;
 };
 export type Grouping = 'project' | 'state';
@@ -26,6 +28,10 @@ type Options = {
   grouping?: { get: () => Grouping; set: (value: Grouping) => void };
   /** Restore the sidebar width, the Proyectos/Agentes split and unfold both sections. */
   resetSidebar?: () => void;
+  /** Sends set_provider_signals; the answer is the runner's settings. */
+  saveProviderSignals?: (enabled: boolean) => Promise<AppSettings>;
+  /** Opens the Notifications pane of System Settings (fixed, bridge command). */
+  openNotificationSettings?: () => Promise<void>;
   version: string;
   canEdit: () => boolean;
   onSaved: (settings: AppSettings) => void;
@@ -176,9 +182,30 @@ export function mountSettings(options: Options): {
   // Avisos
   const notices = section('Avisos', 'notices');
   notices.append(help('Jauría avisa cuando un agente pide tu atención, termina un turno o su proceso termina. La salida normal del terminal no avisa. Dentro de la app los avisos están siempre: la campana, la barra de estado y el número sobre el icono del Dock. Ver un aviso no lo resuelve.', 'settings-dialog-help'));
+  // Provider hooks: a runner setting, applied to sessions started afterwards.
+  const providerRow = node('label', '', 'settings-pulso-switch');
+  const providerToggle = node('input'); providerToggle.type = 'checkbox'; providerToggle.id = `${prefix}-provider-signals`;
+  providerRow.append(node('span', 'Avisos de Claude Code y Codex'), providerToggle);
+  const providerHelp = help('Jauría añade a cada sesión nueva un aviso de cuándo trabaja, te necesita o termina. No cambia tu configuración de Claude ni de Codex. Se aplica a las sesiones que abras después; las abiertas siguen como empezaron.', 'settings-dialog-help');
+  providerHelp.id = `${providerToggle.id}-help`; providerToggle.setAttribute('aria-describedby', providerHelp.id);
+  const providerCompatibility = help('Este runner no ofrece estos avisos. Reinícialo desde Acerca de y diagnóstico cuando no tengas trabajo en curso.', 'settings-dialog-help settings-unavailable');
+  providerCompatibility.hidden = true;
+  if (options.saveProviderSignals) notices.append(providerRow, providerHelp, providerCompatibility);
+  let providerSaving = false;
   if (options.notificationControls) {
     for (const button of Array.from(options.notificationControls.querySelectorAll('button'))) button.type = 'button';
     notices.append(options.notificationControls);
+  }
+  if (options.openNotificationSettings) {
+    const openSettings = node('button', 'Abrir Ajustes de notificaciones', 'secondary'); openSettings.type = 'button';
+    openSettings.id = `${prefix}-open-notification-settings`;
+    const openHelp = help('Abre Ajustes del Sistema → Notificaciones, donde macOS decide si muestra los avisos de Jauría.');
+    openHelp.id = `${openSettings.id}-help`; openSettings.setAttribute('aria-describedby', openHelp.id);
+    openSettings.addEventListener('click', () => {
+      options.openNotificationSettings!().then(() => { status.textContent = 'Ajustes del Sistema abierto en Notificaciones.'; })
+        .catch(() => { showError('No se pudo abrir Ajustes del Sistema. Ábrelo a mano: Ajustes del Sistema → Notificaciones → Jauría.'); });
+    });
+    notices.append(row(node('span', 'Permiso de macOS', 'settings-row-label'), openHelp, openSettings));
   }
 
   // Acerca de y diagnóstico
@@ -241,6 +268,7 @@ export function mountSettings(options: Options): {
     pulsoToggle.checked = auto;
     pulsoState.textContent = current?.schemaVersion === 2 ? (current.pulsoAutoAccess ? 'Activado: las sesiones nuevas reciben acceso.' : 'Desactivado: ninguna sesión lo recibe de forma automática.') : '';
     warning.textContent = current?.warning ?? ''; warning.hidden = !current?.warning;
+    if (!providerSaving) providerToggle.checked = current?.providerSignals === true;
   }
   function sync(): void {
     const editable = options.canEdit();
@@ -251,6 +279,8 @@ export function mountSettings(options: Options): {
     pulsoToggle.disabled = loading || !loaded || !editable || current?.schemaVersion !== 2;
     compatibility.hidden = editable || !loaded;
     pulsoCompatibility.hidden = !loaded || (editable && current?.schemaVersion === 2);
+    providerToggle.disabled = loading || !loaded || !editable || providerSaving || typeof current?.providerSignals !== 'boolean';
+    providerCompatibility.hidden = !loaded || !editable || typeof current?.providerSignals === 'boolean';
     closeButton.disabled = inFlight || !!permissions?.isBusy;
     closeButton.textContent = saving ? 'Guardando…' : 'Cerrar';
     retry.disabled = loading; retry.hidden = !readFailed;
@@ -347,6 +377,20 @@ export function mountSettings(options: Options): {
   pulsoToggle.addEventListener('change', () => {
     if (current?.schemaVersion !== 2) { paintRunner(); return; }
     wantedPulso = pulsoToggle.checked; pulsoSeq++; void flush(); sync();
+  });
+  providerToggle.addEventListener('change', () => {
+    if (!options.saveProviderSignals || typeof current?.providerSignals !== 'boolean' || providerSaving) { paintRunner(); return; }
+    const enabled = providerToggle.checked;
+    providerSaving = true; showError(''); status.textContent = 'Guardando…'; sync();
+    options.saveProviderSignals(enabled).then(saved => {
+      if (disposed) return;
+      accept(checked(saved)); options.onSaved(saved);
+      status.textContent = `Avisos de Claude Code y Codex ${saved.providerSignals ? 'activados' : 'desactivados'} para las sesiones nuevas.`;
+    }).catch(() => {
+      if (disposed) return;
+      showError(`No se pudo guardar. Siguen ${current?.providerSignals ? 'activados' : 'desactivados'} los avisos de Claude Code y Codex. Vuelve a elegir para reintentar.`);
+      status.textContent = '';
+    }).finally(() => { if (!disposed) { providerSaving = false; sync(); } });
   });
   form.addEventListener('submit', event => event.preventDefault());
   retry.addEventListener('click', () => { void read(); });

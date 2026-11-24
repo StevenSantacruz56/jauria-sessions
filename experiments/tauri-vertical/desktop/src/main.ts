@@ -1976,6 +1976,12 @@ const settingsPanel = mountSettings({
     const check = workspaceContext();
     const result = await request<AppSettings>('set_settings', settingsArgs(runner.settingsVersion, maxConcurrentSessions, pulsoAutoAccess)); check(); return result;
   },
+  async saveProviderSignals(enabled) {
+    if (!connected || connecting) throw new Error('Sin conexión con el runner.');
+    const check = workspaceContext();
+    const result = await request<AppSettings>('set_provider_signals', { enabled }); check(); return result;
+  },
+  openNotificationSettings: () => invoke<void>('open_notification_settings'),
   getTheme: () => theme.value, setTheme: applyTheme, version: appVersion,
   canEdit: () => connected && !connecting && (runner?.settingsVersion === 1 || runner?.settingsVersion === 2),
   onSaved(settings) { if (runner) runner.settings = settings; refresh(); },
