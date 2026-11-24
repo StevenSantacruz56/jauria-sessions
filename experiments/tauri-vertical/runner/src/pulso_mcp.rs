@@ -79,22 +79,24 @@ fn tool_call(params: &Value) -> Value {
     })();
     match result {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value}),
-        Err(error) => {
-            let detail=error.to_string();
-            let message=if detail=="revision conflict" {"La fase cambió. Consulta su revisión actual antes de decidir qué conservar."}
-              else if detail=="requestId reused with different body" {"El identificador de reintento ya se usó con otro contenido. Conserva la solicitud original o crea otra con un UUID nuevo."}
-              else if detail=="unauthorized" || detail=="Esta sesión no tiene acceso a Pulso" || detail.contains("Habilita el acceso del agente") {"Esta sesión no tiene acceso a Pulso. Concédelo desde Configuración en Jauria."}
-              else if detail=="project creation not authorized" {"Este permiso permite trabajar en un proyecto existente, pero no crear otro."}
-              else if detail=="not found or not authorized" {"El proyecto o la fase no está disponible para esta sesión."}
-              else if detail=="session is not live" {"La sesión terminó. Abre una sesión nueva y concede acceso si aún lo necesitas."}
-              else if detail=="Herramienta desconocida" {"Herramienta desconocida: este servidor solo ofrece las herramientas de tools/list (jauria_projects, jauria_project, jauria_create_project, jauria_phases, jauria_phase, jauria_create_phase, jauria_update_phase y jauria_checkpoint). No se hizo ningún cambio; no reintentes con este nombre."}
-              else if detail==crate::pulso::PROJECT_ARCHIVED {"El proyecto está en el histórico; reábrelo para cambiarlo. No se hizo ningún cambio."}
-              else if detail=="invalid status" {"Estado no válido: usa todo, doing, waiting o done. No se hizo ningún cambio."}
-              else if detail.starts_with("Falta ") || detail=="Argumento MCP no disponible para esta herramienta" || detail.starts_with("idempotencyKey debe ser estable") || detail=="Indica un cambio de título, nota o estado" {detail.as_str()}
-              else {"No se confirmó la operación. Comprueba el acceso y consulta el resultado antes de reintentar con el mismo idempotencyKey."};
-            json!({"content":[{"type":"text","text":message}],"isError":true})
-        }
+        Err(error) => json!({"content":[{"type":"text","text":tool_error(&error.to_string())}],"isError":true}),
     }
+}
+
+/** What an agent reads when a tool fails: Spanish, actionable, never the raw runner detail. */
+fn tool_error(detail: &str) -> String {
+    let message=if detail=="revision conflict" {"La fase cambió. Consulta su revisión actual antes de decidir qué conservar."}
+      else if detail=="requestId reused with different body" {"El identificador de reintento ya se usó con otro contenido. Conserva la solicitud original o crea otra con un UUID nuevo."}
+      else if detail=="unauthorized" || detail=="Esta sesión no tiene acceso a Pulso" || detail.contains("Habilita el acceso del agente") {"Esta sesión no tiene acceso a Pulso. Concédelo desde Configuración en Jauria."}
+      else if detail=="project creation not authorized" {"Este permiso permite trabajar en un proyecto existente, pero no crear otro."}
+      else if detail=="not found or not authorized" {"El proyecto o la fase no está disponible para esta sesión."}
+      else if detail=="session is not live" {"La sesión terminó. Abre una sesión nueva y concede acceso si aún lo necesitas."}
+      else if detail=="Herramienta desconocida" {"Herramienta desconocida: este servidor solo ofrece las herramientas de tools/list (jauria_projects, jauria_project, jauria_create_project, jauria_phases, jauria_phase, jauria_create_phase, jauria_update_phase y jauria_checkpoint). No se hizo ningún cambio; no reintentes con este nombre."}
+      else if detail==crate::pulso::PROJECT_ARCHIVED {"El proyecto está en el histórico; reábrelo para cambiarlo. No se hizo ningún cambio."}
+      else if detail=="invalid status" {"Estado no válido: usa todo, doing, waiting o done. No se hizo ningún cambio."}
+      else if detail.starts_with("Falta ") || detail=="Argumento MCP no disponible para esta herramienta" || detail.starts_with("idempotencyKey debe ser estable") || detail=="Indica un cambio de título, nota o estado" {detail}
+      else {"No se confirmó la operación. Comprueba el acceso y consulta el resultado antes de reintentar con el mismo idempotencyKey."};
+    message.to_string()
 }
 
 fn response(message: &Value) -> Option<Value> {
@@ -122,5 +124,16 @@ pub fn run() -> Result<()> {
             Err(_)=>{writeln!(output,"{}",json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"JSON inválido"}}))?;output.flush()?;continue;}
         };
         if let Some(value)=response(&message) {serde_json::to_writer(&mut output,&value)?;output.write_all(b"\n")?;output.flush()?;}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_error;
+    #[test]
+    fn archived_project_refusal_is_explained_to_agents() {
+        assert_eq!(tool_error(crate::pulso::PROJECT_ARCHIVED), "El proyecto está en el histórico; reábrelo para cambiarlo. No se hizo ningún cambio.");
+        assert_eq!(tool_error("revision conflict"), "La fase cambió. Consulta su revisión actual antes de decidir qué conservar.");
+        assert!(tool_error("disk on fire").starts_with("No se confirmó la operación."), "raw details never reach the agent");
     }
 }
