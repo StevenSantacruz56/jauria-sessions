@@ -12,7 +12,7 @@ import { mountCodexConversation } from './codex-conversation';
 import './codex-conversation.css';
 import { validateSequence } from './events';
 import { TerminalStreamCursor, isLocalHistoryLimit, historyUsage, deferTerminalGap, terminalFramesPayload, terminalGapNotice, historyLabel, historyReasonLabel, type TerminalStream, type TerminalFrame, type TerminalGap, type TerminalHistory } from './terminal-stream';
-import { mountTelemetry, formatTelemetryCpu, formatTelemetryBytes } from './telemetry';
+import { mountTelemetry, formatTelemetryBytes } from './telemetry';
 import './telemetry.css';
 import { invoke } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
@@ -634,7 +634,7 @@ function refresh() {
   renderProjectList(planning);
 
   if (!connected) text('#telemetry-summary','Recursos sin conexión');
-  else if ($('#telemetry-summary').textContent === 'Recursos sin conexión') text('#telemetry-summary','CPU — · RAM —');
+  else if ($('#telemetry-summary').textContent === 'Recursos sin conexión') text('#telemetry-summary','Jauría · CPU — · RAM —');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
   // Acerca de y diagnóstico (Configuración): the runner version next to the app's, and what to do when they differ.
@@ -1979,7 +1979,7 @@ function commandContext(): AppCommandContext {
     actions: {
       togglePalette: () => palette?.toggle(), newSession: () => openNew(), searchSessions: focusSessionSearch, toggleSplit: () => setSplit(!split), focusOtherPane,
       showPulso, leavePulso, newProject: function newProjectAction() { if (!pulsoNavigationAllowed(newProjectAction)) return; showPulso(); pulsoPanel?.newProject(); },
-      openSettings, markAlertsSeen, resetSidebar, toggleSection, createFixtures: smoke ? createFixtures : undefined,
+      openSettings, openUsage: openTelemetry, markAlertsSeen, resetSidebar, toggleSection, createFixtures: smoke ? createFixtures : undefined,
       openSession: function openSessionAction(id) { if (views.has(id) && pulsoNavigationAllowed(() => openSessionAction(id))) selectSession(id); },
       toggleGrouping, showFilter, setTheme: applyTheme, rename: openRename, interrupt: focusInterruptControl,
       stop: id => { const target = views.get(id); if (target) openStopConfirmation(target); },
@@ -2263,12 +2263,22 @@ refresh();
 // Connect is safe at launch: replay only. All start operations require visible controls.
 void connect();
 
-const disposeTelemetry = mountTelemetry($('#telemetry-host'), request, () => connected, (snapshot) => {
-  const resources=snapshot.resources as {app?:{processes?:{cpuPercent?:number;rssBytes?:number}[]}} | undefined;
-  const current=resources?.app?.processes?.[0];
-  text('#telemetry-summary',`Interfaz · CPU ${current?.cpuPercent == null ? '—' : formatTelemetryCpu(current.cpuPercent)} · RAM ${current?.rssBytes == null ? '—' : formatTelemetryBytes(current.rssBytes)}`);
+// «Uso y recursos»: its own dialog (sidebar footer row, status bar total, palette).
+const telemetryPanel = mountTelemetry({
+  request, isConnected: () => connected,
+  sessionTitle: id => runner?.sessions.find(session => session.id === id)?.title ?? null,
+  // The status bar total is hidden below 1050 px (style.css): no polling for it then.
+  wantsSummary: () => !document.hidden && $('#telemetry-summary').getClientRects().length > 0,
+  onSummary: summary => text('#telemetry-summary', summary),
+  fallbackFocus: () => $('#open-telemetry'),
 });
-window.addEventListener('beforeunload', disposeTelemetry, { once: true });
+function openTelemetry(from?: HTMLElement) {
+  if (disposed || document.querySelector('dialog[open]')) return;
+  telemetryPanel.open(from); closeSidebar(); refresh();
+}
+$('#open-telemetry').addEventListener('click', () => openTelemetry($('#open-telemetry')));
+$('#telemetry-summary').addEventListener('click', () => openTelemetry($('#telemetry-summary')));
+window.addEventListener('beforeunload', () => telemetryPanel.dispose(), { once: true });
 
 let diagnosticPreviewId: string | null = null;
 $('#preview-diagnostic').addEventListener('click', () => action(async () => {

@@ -50,6 +50,8 @@ export type AppCommandContext = {
     leavePulso(): void;
     newProject(): void;
     openSettings(): void;
+    /** «Uso y recursos» (quotas and what Jauría uses); optional for older hosts. */
+    openUsage?: () => void;
     resetSidebar(): void;
     toggleSection(section: 'projects' | 'agents'): void;
     /** Only in smoke profiles. */
@@ -126,6 +128,8 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
       unavailable: () => null, run: () => a.toggleSection('agents') },
     { id: 'settings', label: 'Abrir Configuración', keywords: 'ajustes preferencias límite plazas permisos diagnóstico versión runner acerca', shortcut: 'settings', confirmation: 'dialog',
       unavailable: () => null, run: a.openSettings },
+    ...(a.openUsage ? [{ id: 'usage', label: 'Abrir Uso y recursos', keywords: 'cuota cuotas límite consumo memoria ram cpu recursos codex claude', confirmation: 'dialog' as const,
+      unavailable: () => null, run: a.openUsage }] : []),
     theme('system'), theme('light'), theme('dark'),
     { id: 'rename', label: focused ? `Cambiar nombre de ${focused.title}…` : 'Cambiar nombre de la sesión…', keywords: 'renombrar título', confirmation: 'dialog',
       unavailable: () => !c.renameSupported ? 'El runner no permite cambiar nombres' : sessionControl(c, false), run: () => { if (focused) a.rename(focused.id); } },

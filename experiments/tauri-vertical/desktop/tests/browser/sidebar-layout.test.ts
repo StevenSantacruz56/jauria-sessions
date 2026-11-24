@@ -48,7 +48,7 @@ try {
           if (width <= 860) { await page.locator('#toggle-sidebar').click(); await page.waitForTimeout(300); }
           for (const filter of ['open', 'closed']) {
             await page.locator(`button[data-filter="${filter}"]`).click(); await page.waitForTimeout(100);
-            for (const selector of ['#sidebar-projects-heading', '#sidebar-agents-heading', 'button[data-filter="closed"]', '#open-settings', '#telemetry-host > summary'])
+            for (const selector of ['#sidebar-projects-heading', '#sidebar-agents-heading', 'button[data-filter="closed"]', '#open-settings', '#open-telemetry'])
               assert.equal(await visibleAt(page, selector), 'ok', `${width}×${height} ${filter}: ${selector}`);
             assert.ok(await projectRowsVisible(page) >= 2, `${width}×${height} ${filter}: at least two projects visible`);
           }

@@ -296,18 +296,11 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim)
 .state-dot[data-state="error"], .state-dot[data-state="failed"], .state-dot[data-state="offline"] { background: var(--error); }
 .state-dot[data-state="closed"], .state-dot[data-state="stopped"], .state-dot[data-state="exited"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--state-paused); }
 
-/* Footer: usage disclosure, settings and a quiet connection line. */
+/* Footer: two fixed rows that open dialogs (Uso y recursos, Configuración); it never changes height. */
 .sidebar-footer { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; padding: 6px 8px 8px; border-top: 1px solid var(--border); }
 .sidebar-footer .sidebar-row { color: var(--muted); }
 .sidebar-footer .sidebar-row .icon { width: 14px; height: 14px; }
 .sidebar-footer .sidebar-row kbd { margin-left: auto; }
-#telemetry-host { flex: 0 0 auto; min-height: 0; }
-#telemetry-host > summary { list-style: none; cursor: pointer; }
-#telemetry-host > summary::-webkit-details-marker { display: none; }
-#telemetry-host > summary::marker { content: ""; }
-#telemetry-host > summary .disclosure-chevron { transition: transform 150ms ease-out; }
-#telemetry-host[open] > summary .disclosure-chevron { transform: rotate(90deg); }
-#telemetry-host[open] > summary { color: var(--text); }
 #connection-state.online { color: var(--success); }
 .sidebar-scrim { display: none; }
 
@@ -569,7 +562,9 @@ html[data-theme="dark"] .brand-dark { display: block; }
   .welcome-symbol { padding: 8px; }
 }
 
-#telemetry-summary { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dim); }
+/* Same total as «Uso y recursos»; a flat button that opens it (status bar height unchanged). */
+#telemetry-summary { height: 22px; min-height: 22px; padding: 0 6px; margin-right: -6px; border: 0; background: transparent; font: inherit; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--dim); }
+#telemetry-summary:hover { color: var(--text); }
 @media (max-width: 1050px) { #telemetry-summary { display: none; } }
 
 .top-back { flex: 0 0 auto; min-height: 28px; height: 28px; padding: 0 8px; gap: 6px; font-size: 12px; color: var(--muted); }

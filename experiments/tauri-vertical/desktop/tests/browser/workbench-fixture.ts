@@ -27,6 +27,8 @@ export type WorkbenchOptions = {
   failLinks?: string[];
   /** Events already stored when the window connects (replayed as history); `seq` is assigned in order. */
   history?: { sessionId: string; kind: string; data: string }[];
+  /** `telemetry` result («Uso y recursos»); `workbench.setTelemetry` replaces it later. Default `{}`. */
+  telemetry?: any;
 };
 
 export async function installWorkbench(page: Page, options: WorkbenchOptions = {}) {
@@ -50,7 +52,9 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       normalTerminalVersion: 1, sessionRenameVersion: 1, ...(options.nativeResume ? { nativeResumeVersion: 1, pulsoBoardCardsVersion: 1 } : {}), telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
       ...(options.settingsVersion === null ? {} : { settingsVersion: options.settingsVersion ?? 2, settings }), sessions, lastSeq: events.length });
     let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
+    let telemetry: any = options.telemetry ?? {};
     w.workbench = { out, resizes, inputs, calls, native, sessions, links, resumeMode(mode: typeof resumeMode) { resumeMode = mode; },
+      setTelemetry(value: any) { telemetry = value; },
       remove(id: string) { const index = sessions.findIndex(s => s.id === id); if (index >= 0) sessions.splice(index, 1); }, get settings() { return settings; },
       setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart() { failNextStart = true; }, stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
@@ -78,7 +82,8 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       if (cmd === 'runner_request') {
         calls.push(a.op);
         if (a.op === 'status') return { ok: true, result: status() };
-        if (a.op === 'telemetry') return { ok: true, result: {} };
+        if (a.op === 'telemetry') return { ok: true, result: structuredClone(typeof telemetry === 'function' ? telemetry() : telemetry) };
+        if (a.op === 'refresh_quotas') return { ok: true, result: { refreshing: true } };
         if (a.op === 'events') return { ok: true, result: { events: events.filter(e => e.seq > a.args.after).slice(0, a.args.limit ?? 64), lastSeq: events.length, hasMore: false } };
         if (a.op === 'get_settings') return { ok: true, result: structuredClone(settings) };
         if (a.op === 'set_settings') { native.push(['set_settings', structuredClone(a.args)]); settings = { ...settings, ...a.args }; return { ok: true, result: structuredClone(settings) }; }

@@ -1,7 +1,7 @@
 import { appVersion } from './app-version';
 // Workbench direction: native macOS conventions from the user's Conductor,
 // Nimbalyst and Claude Squad references. Operate mode; real session data only.
-export type IconName = 'rows' | 'bell' | 'layers' | 'plus' | 'search' | 'folder' | 'terminal' | 'spark' | 'split' | 'info' | 'sidebar' | 'close' | 'more' | 'stop' | 'interrupt' | 'chevron' | 'settings' | 'refresh' | 'copy' | 'clock' | 'arrow';
+export type IconName = 'rows' | 'bell' | 'layers' | 'plus' | 'search' | 'folder' | 'terminal' | 'spark' | 'split' | 'info' | 'sidebar' | 'close' | 'more' | 'stop' | 'interrupt' | 'chevron' | 'settings' | 'refresh' | 'copy' | 'clock' | 'arrow' | 'gauge';
 const paths: Record<IconName, string> = {
   rows: '<path d="M10 6h10M10 12h10M10 18h10"/><circle cx="5" cy="6" r="1.6"/><circle cx="5" cy="12" r="1.6"/><circle cx="5" cy="18" r="1.6"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
@@ -24,6 +24,7 @@ const paths: Record<IconName, string> = {
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
+  gauge: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 14 3.5-4.5"/>',
 };
 export function icon(name: IconName) {
   return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
@@ -47,7 +48,7 @@ export const shell = `
         </div>
       </section>
       </div>
-      <div class="sidebar-footer"><details id="telemetry-host"><summary class="sidebar-row">${icon('chevron').replace('class="icon"', 'class="icon disclosure-chevron"')}<span class="sidebar-row-name">Uso y recursos</span></summary></details><button id="open-settings" class="sidebar-row" aria-keyshortcuts="Meta+,">${icon('settings')}<span class="sidebar-row-name">Configuración</span><kbd>⌘,</kbd></button></div>
+      <div class="sidebar-footer"><button id="open-telemetry" type="button" class="sidebar-row" aria-haspopup="dialog" title="Cuotas de Claude Code y Codex, y lo que usa Jauría en este Mac">${icon('gauge')}<span class="sidebar-row-name">Uso y recursos</span></button><button id="open-settings" class="sidebar-row" aria-keyshortcuts="Meta+,">${icon('settings')}<span class="sidebar-row-name">Configuración</span><kbd>⌘,</kbd></button></div>
       <div id="sidebar-width-handle" class="sidebar-width-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="sidebar" aria-label="Ancho de la barra lateral" aria-valuemin="220" aria-valuemax="420" aria-valuenow="264" aria-valuetext="264 px" title="Arrastra para cambiar el ancho. Doble clic o Intro: 264 px."></div>
     </aside>
     <main id="workbench" class="workbench">
@@ -93,7 +94,7 @@ export const shell = `
         <span class="status-spacer"></span>
         <span class="status-item status-connection"><span id="connection-dot" class="state-dot"></span><span id="connection-state" role="status">Conectando…</span><button id="connect" class="icon-button" aria-label="Reconectar" title="Reconectar">${icon('refresh')}</button></span>
         <span id="terminal-size" class="status-item terminal-size" title="Columnas × filas del terminal del panel enfocado">—</span>
-        <span id="telemetry-summary" class="status-item" title="Proceso de interfaz; RSS, no memoria privada. WebKit y CLI se muestran por separado en Uso y recursos.">CPU — · RAM —</span>
+        <button id="telemetry-summary" type="button" class="status-item" aria-haspopup="dialog" title="Total de Jauría: sesiones abiertas, runner e interfaz. Pulsa para ver el detalle en Uso y recursos.">Jauría · CPU — · RAM —</button>
       </footer>
     </main>
   </div>
