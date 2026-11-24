@@ -416,6 +416,21 @@ try {
         });
       });
 
+      await t.test('Descartar an Interrumpida also marks its runner alerts seen (H7)', async () => {
+        await fixture({ runner: true, closed: 1 }, async page => {
+          await open(page);
+          await fx(page, `f.status('closed-0','interrupted');`);
+          const dismiss = page.locator('.session-dismiss[data-session-id="closed-0"]');
+          await dismiss.waitFor();
+          await page.waitForFunction(() => Number(document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread) >= 2);
+          await dismiss.click();
+          await page.waitForFunction(() => (window as any).agentFixture.marks.some((m: any[]) => m.some(i => i.id === 'closed-0')));
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '1');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.agentOf('closed-0').seenSeq), 1);
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 1, 'only the background finish is left');
+        });
+      });
+
       await t.test('degraded mode: a BEL behind the sidebar drawer at 760 px is an unread alert', async () => {
         await fixture({ runner: false, viewport: { width: 760, height: 640 } }, async page => {
           await open(page);

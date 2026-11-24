@@ -112,4 +112,14 @@ test('status bar agrees with the bell: finished turns count, «Sin avisos» only
     assert.equal(m.quietLabel(alerts, counts), quiet, kinds.join());
   }
   assert.equal(m.finishedLabel(1), '1 terminó'); assert.equal(m.finishedLabel(2), '2 terminaron');
+  // H9: with the runner list capped, the bar names the sessions it cannot classify (bell and Dock count them).
+  assert.equal(m.quietLabel(129, { needs: 0, finished: 128 }, 1), '1 sin listar');
+  assert.equal(m.quietLabel(3, { needs: 1, finished: 2 }, 0), null);
+});
+
+test('a second identical alert with a new runner sequence is announced (H11)', () => {
+  const row = (seq: number) => ({ id: 'a', title: 'Sesión a', label: 'Aviso del terminal', reason: 'La sesión emitió una alerta', unseen: true, kind: 'notice', unseenKeys: [`a:agent:bell:7:${seq}`] });
+  const known = m.unseenKeys([row(1)]);
+  assert.equal(m.alertAnnouncement(known, [row(1)]), null, 'the same alert is not repeated');
+  assert.equal(m.alertAnnouncement(known, [row(2)]), 'Nuevo aviso: Sesión a · Aviso del terminal.', 'same text, new sequence: announced');
 });

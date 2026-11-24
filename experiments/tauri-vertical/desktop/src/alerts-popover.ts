@@ -7,14 +7,14 @@ import type { ActivityKind } from './session-activity';
  * floats over the workbench (absolute positioning), so opening it, marking alerts
  * seen or receiving a new one never changes the terminal's size.
  */
-export type AlertRow = { id: string; title: string; label: string; reason: string; unseen: boolean; kind: ActivityKind };
-type AlertInput = { id: string; reason: string; unseen: boolean };
+export type AlertRow = { id: string; title: string; label: string; reason: string; unseen: boolean; kind: ActivityKind; unseenKeys?: readonly string[] };
+type AlertInput = { id: string; reason: string; unseen: boolean; unseenKeys?: readonly string[] };
 
 /** Rows in the sidebar's priority order: action, notices, unseen finish, working, waiting, no report; unseen first. */
 export function alertRows(alerts: readonly AlertInput[], titleOf: (id: string) => string | undefined, activityOf: (id: string) => { kind: ActivityKind; label: string } | undefined): AlertRow[] {
   return alerts.map((alert, index) => {
     const activity = activityOf(alert.id);
-    return { index, row: { id: alert.id, title: titleOf(alert.id) ?? 'Sesión', label: activity?.label ?? 'Aviso', reason: alert.reason, unseen: alert.unseen, kind: activity?.kind ?? 'unreported' } };
+    return { index, row: { id: alert.id, title: titleOf(alert.id) ?? 'Sesión', label: activity?.label ?? 'Aviso', reason: alert.reason, unseen: alert.unseen, kind: activity?.kind ?? 'unreported', ...(alert.unseenKeys ? { unseenKeys: alert.unseenKeys } : {}) } };
   }).sort((a, b) => agentRank(a.row.kind) - agentRank(b.row.kind) || Number(b.row.unseen) - Number(a.row.unseen) || a.index - b.index).map(entry => entry.row);
 }
 
@@ -29,19 +29,23 @@ export const workingLabel = (count: number) => `${count} trabajando`;
  * The quiet slot agrees with the bell: «Sin avisos» only when the bell is at zero.
  * Alerts that no counter shows (rare lifecycle causes) read «N avisos».
  */
-export function quietLabel(alerts: number, counts: { needs: number; finished: number }): string | null {
+export function quietLabel(alerts: number, counts: { needs: number; finished: number }, hidden = 0): string | null {
   if (alerts === 0) return 'Sin avisos';
-  return counts.needs + counts.finished === 0 ? `${alerts} ${alerts === 1 ? 'aviso' : 'avisos'}` : null;
+  if (counts.needs + counts.finished === 0) return `${alerts} ${alerts === 1 ? 'aviso' : 'avisos'}`;
+  // Runner hasMore: the bell and the Dock count sessions the counters cannot classify; say so here too.
+  return hidden > 0 ? `${hidden} sin listar` : null;
 }
 
+/** Identity of an unseen alert: its keys (runner keys carry epoch and sequence), else session and reason. */
+const rowKeys = (row: AlertRow) => row.unseenKeys?.length ? row.unseenKeys : [`${row.id}:${row.reason}`];
 /** Text for the polite live region when unseen alerts appear; null when nothing new arrived. */
 export function alertAnnouncement(previous: ReadonlySet<string>, rows: readonly AlertRow[]): string | null {
-  const fresh = rows.filter(row => row.unseen && !previous.has(`${row.id}:${row.reason}`));
+  const fresh = rows.filter(row => row.unseen && rowKeys(row).some(key => !previous.has(key)));
   if (!fresh.length) return null;
   const first = fresh[0];
   return fresh.length === 1 ? `Nuevo aviso: ${first.title} · ${first.label}.` : `${fresh.length} avisos nuevos. El primero: ${first.title} · ${first.label}.`;
 }
-export const unseenKeys = (rows: readonly AlertRow[]) => new Set(rows.filter(row => row.unseen).map(row => `${row.id}:${row.reason}`));
+export const unseenKeys = (rows: readonly AlertRow[]) => new Set(rows.filter(row => row.unseen).flatMap(rowKeys));
 
 export type AlertsPopoverOptions = {
   button: HTMLButtonElement;

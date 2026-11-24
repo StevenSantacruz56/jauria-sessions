@@ -547,6 +547,8 @@ function markContinued(id: string, successor: string) { if (dismissed.get(id) !=
 function dismissSession(id: string, afterFocus?: () => void) {
   const session = views.get(id)?.session; if (!session || category(session.status) !== 'interrupted') return;
   rememberDismissed(withDismissed(dismissed, id));
+  // Discarding is the person's decision about it: its alerts (runner ones included) are seen.
+  source.select(id, attentionSessions());
   recoveryFolded.delete(id);
   const shown = panes.find((pane, index) => pane.id === id && (index === 0 || split));
   if (shown) leavePane(shown, id); else refresh();
@@ -803,7 +805,7 @@ function refresh() {
   $('#status-needs').title = needsTarget ? `Abrir ${needsTarget.title} · ${activityById.get(needsTarget.id)?.label ?? ''}` : '';
   $('#status-finished').hidden = counts.finished === 0; text('#status-finished-text', finishedLabel(counts.finished));
   $('#status-working').hidden = counts.working === 0; text('#status-working-text', workingLabel(counts.working));
-  const quiet = quietLabel(total, counts);
+  const quiet = quietLabel(total, counts, hidden);
   $('#status-quiet').hidden = quiet === null; text('#status-quiet', quiet ?? '');
   syncNotice();
   nativeAttention.update(source.nativeItems(alerts));
