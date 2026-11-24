@@ -295,7 +295,10 @@ export function mountSettings(options: Options): {
       status.textContent = `Guardado: ${sessionsLabel(saved.maxConcurrentSessions)} a la vez${saved.schemaVersion === 2 ? `; acceso automático a Pulso ${saved.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}.`;
     } catch {
       if (disposed || token !== generation) return;
-      wantedLimit = null; wantedPulso = null;
+      // Only what this call sent goes back to the runner value; a change chosen
+      // meanwhile stays wanted and is sent by the call that follows.
+      if (wantedLimit === sentLimit) wantedLimit = null;
+      if (wantedPulso === sentPulso) wantedPulso = null;
       showError(`No se pudo guardar. Sigue el valor anterior: ${sessionsLabel(base.maxConcurrentSessions)} a la vez${base.schemaVersion === 2 ? `, acceso automático ${base.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}. Vuelve a elegir para reintentar.`);
       status.textContent = '';
     } finally {

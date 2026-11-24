@@ -206,6 +206,22 @@ for (const engine of [chromium, webkit]) {
       assert.equal(await page.getByRole('alert').isVisible(), false);
     });
 
+    await t.test('a failed save reverts only what it sent: a change queued meanwhile is still sent', async () => {
+      const page = await mounted('f.holdSave = true;');
+      await page.locator('#opener').click(); await ready(page);
+      await page.getByLabel('Máximo de sesiones simultáneas').selectOption('5');
+      // Queued while the first save is pending: the Pulso switch.
+      await page.getByRole('checkbox', { name: 'Acceso automático a Pulso' }).uncheck();
+      assert.deepEqual(await action(page, 'return f.saves'), [5]);
+      await action(page, 'const r = f.resolveSave; f.holdSave = false; f.resolveSave = null; r(Promise.reject(Error("Synthetic save error")));');
+      await page.waitForFunction(() => (window as any).fixture.saves.length === 2);
+      await page.waitForFunction(() => /desactivado/.test(document.querySelector('.settings-dialog-status')?.textContent ?? ''));
+      // The limit that failed goes back to the runner value; the queued switch reaches the runner.
+      assert.deepEqual(await action(page, 'return [f.saves, f.autoSaves]'), [[5, 2], [true, false]]);
+      assert.equal(await page.getByLabel('Máximo de sesiones simultáneas').inputValue(), '2');
+      assert.equal(await page.getByRole('checkbox', { name: 'Acceso automático a Pulso' }).isChecked(), false);
+    });
+
     await t.test('forced native close during a save reopens; an intentional close event cannot undo a rapid reopen', async () => {
       const page = await mounted('f.holdSave = true;');
       await page.locator('#opener').click(); await ready(page);
