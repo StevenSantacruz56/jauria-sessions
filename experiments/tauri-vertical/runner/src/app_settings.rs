@@ -41,25 +41,34 @@ pub struct AppSettings {
 
 impl AppSettings {
     /// Requires an existing absolute, owned 0700 profile directory. Opening never
-    /// creates or repairs files. Invalid settings remain available for inspection.
+    /// creates or repairs files, except migrating the schema 3 an early 1.4.0
+    /// build wrote. Invalid settings remain available for inspection.
     pub fn open(profile: &Path) -> Result<Self> {
         let directory = open_profile(profile)?;
-        let (limit, pulso_auto_access, mut provider_signals, warning) = match load(&directory) {
-            Ok(Some((limit, pulso_auto_access, provider))) => (limit, pulso_auto_access, provider, None),
-            Ok(None) => (2, true, true, None),
-            Err(_) => (2, true, true, Some(WARNING)),
+        let (limit, pulso_auto_access, stored_v3, warning) = match load(&directory) {
+            Ok(Some((limit, pulso_auto_access, v3))) => (limit, pulso_auto_access, v3, None),
+            Ok(None) => (2, true, None, None),
+            Err(_) => (2, true, None, Some(WARNING)),
         };
-        // The earlier off switch (a `provider-signals-off` file) still means off.
-        if profile.join(PROVIDER_OFF_FILE).exists() { provider_signals = false; }
-        Ok(Self {
+        // «Off» is the `provider-signals-off` file; the settings file stays the
+        // schema 2 that every runner (1.3.x included) reads.
+        let off = exists_at(&directory, PROVIDER_OFF_FILE) || stored_v3 == Some(false);
+        let settings = Self {
             profile: profile.to_owned(),
             directory,
-            state: Mutex::new(State { limit, pulso_auto_access, provider_signals, warning }),
+            state: Mutex::new(State { limit, pulso_auto_access, provider_signals: !off, warning }),
             #[cfg(test)]
             fail_directory_sync: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fail_before_rename: std::sync::atomic::AtomicBool::new(false),
-        })
+        };
+        // Migration of the schema 3 an early 1.4.0 build wrote: the off file
+        // first, then the settings back to schema 2. Only that case writes on open.
+        if stored_v3.is_some() {
+            if off { let _ = settings.set_off_file(true); }
+            let _ = settings.write(None, None);
+        }
+        Ok(settings)
     }
 
     pub fn limit(&self) -> usize {
@@ -75,14 +84,30 @@ impl AppSettings {
     }
 
     /// «Avisos de Claude Code y Codex». Applies to sessions started afterwards.
-    /// Turning it on also removes the earlier `provider-signals-off` file.
+    /// Off is the empty `provider-signals-off` file in the profile (created or
+    /// removed here); app-settings.json is not touched, so it stays schema 2.
     pub fn set_provider_signals(&self, enabled: bool) -> Result<Value> {
-        let value = self.write(None, None, Some(enabled))?;
-        if enabled {
-            let name = CString::new(PROVIDER_OFF_FILE)?;
-            unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0); }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.validate_profile()?;
+        self.set_off_file(!enabled)?;
+        state.provider_signals = enabled;
+        state.warning = if self.sync_directory().is_err() { Some(DURABILITY_WARNING) } else { None };
+        Ok(snapshot(&state))
+    }
+
+    fn set_off_file(&self, off: bool) -> Result<()> {
+        let name = CString::new(PROVIDER_OFF_FILE)?;
+        if off {
+            match open_at(&self.directory, &name, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL) {
+                Ok(file) => { cvt(unsafe { libc::fchmod(file.as_raw_fd(), 0o600) })?; file.sync_all()?; }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else if unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0) } < 0 {
+            let error = std::io::Error::last_os_error();
+            ensure!(error.kind() == std::io::ErrorKind::NotFound, "could not remove {PROVIDER_OFF_FILE}: {error}");
         }
-        Ok(value)
+        Ok(())
     }
 
     pub fn snapshot(&self) -> Value {
@@ -99,23 +124,20 @@ impl AppSettings {
 
     pub fn update(&self, limit: Option<usize>, pulso_auto_access: Option<bool>) -> Result<Value> {
         ensure!(limit.is_some() || pulso_auto_access.is_some(), "settings change required");
-        self.write(limit, pulso_auto_access, None)
+        self.write(limit, pulso_auto_access)
     }
 
-    fn write(&self, limit: Option<usize>, pulso_auto_access: Option<bool>, provider_signals: Option<bool>) -> Result<Value> {
+    fn write(&self, limit: Option<usize>, pulso_auto_access: Option<bool>) -> Result<Value> {
         if let Some(limit) = limit { ensure!((1..=8).contains(&limit), "session limit must be an integer from 1 to 8"); }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.validate_profile()?;
         validate_target(&self.directory)?;
-        let provider = provider_signals.unwrap_or(state.provider_signals);
-        let mut file = json!({
+        // Always schema 2: the exact three keys a 1.3.x runner accepts.
+        let bytes = serde_json::to_vec(&json!({
             "schemaVersion": 2,
             "maxConcurrentSessions": limit.unwrap_or(state.limit),
             "pulsoAutoAccess": pulso_auto_access.unwrap_or(state.pulso_auto_access),
-        });
-        // Only «off» needs the new key: schema 3. On is schema 2, which 1.3.x runners read.
-        if !provider { file["schemaVersion"] = json!(3); file["providerSignals"] = json!(false); }
-        let bytes = serde_json::to_vec(&file)?;
+        }))?;
 
         let (temporary, mut file) = create_temp(&self.directory)?;
         file.write_all(&bytes)?;
@@ -137,7 +159,6 @@ impl AppSettings {
         // reported as a failed save: memory and admission must match the new file.
         if let Some(limit) = limit { state.limit = limit; }
         if let Some(enabled) = pulso_auto_access { state.pulso_auto_access = enabled; }
-        state.provider_signals = provider;
         state.warning = if self.sync_directory().is_err() { Some(DURABILITY_WARNING) } else { None };
         Ok(snapshot(&state))
     }
@@ -222,7 +243,9 @@ fn validate_target(directory: &File) -> Result<()> {
     existing(directory).map(|_| ())
 }
 
-fn load(directory: &File) -> Result<Option<(usize, bool, bool)>> {
+/// The last field is Some(providerSignals) only for the schema 3 an early
+/// 1.4.0 build wrote (migrated by `open`); schema 1 and 2 give None.
+fn load(directory: &File) -> Result<Option<(usize, bool, Option<bool>)>> {
     let Some(file) = existing(directory)? else { return Ok(None) };
     ensure!(file.metadata()?.len() <= MAX_BYTES, "settings too large");
     let mut bytes = Vec::new();
@@ -238,8 +261,14 @@ fn load(directory: &File) -> Result<Option<(usize, bool, bool)>> {
     let limit = object.get("maxConcurrentSessions").and_then(Value::as_u64).context("invalid session limit")?;
     ensure!((1..=8).contains(&limit), "invalid session limit");
     let auto=if schema == 1 {true} else {object.get("pulsoAutoAccess").and_then(Value::as_bool).context("invalid Pulso access setting")?};
-    let provider=if schema == 3 {object.get("providerSignals").and_then(Value::as_bool).context("invalid provider signals setting")?} else {true};
+    let provider=if schema == 3 {Some(object.get("providerSignals").and_then(Value::as_bool).context("invalid provider signals setting")?)} else {None};
     Ok(Some((limit as usize, auto, provider)))
+}
+
+fn exists_at(directory: &File, name: &str) -> bool {
+    let Ok(name) = CString::new(name) else { return false };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    unsafe { libc::fstatat(directory.as_raw_fd(), name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) == 0 }
 }
 
 fn create_temp(directory: &File) -> Result<(Temporary<'_>, File)> {
