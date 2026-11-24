@@ -621,7 +621,8 @@ html[data-theme="dark"] .brand-dark { display: block; }
 .pane-recovery[data-folded="true"] .pane-recovery-detail, .pane-recovery[data-folded="true"] .pane-recovery-note { display: none; }
 .pane-recovery[data-folded="true"] .pane-recovery-copy { flex: 1 1 auto; }
 .pane-recovery[data-folded="true"] .pane-recovery-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-recovery[data-folded="true"] .pane-recovery-actions { flex-wrap: nowrap; }
+.pane-recovery[data-folded="true"] .pane-recovery-actions { flex-wrap: nowrap; flex: 0 0 auto; }
+.pane-recovery-actions button { white-space: nowrap; }
 .pane-recovery[data-folded="true"] [data-recovery="dismiss"] { margin-left: 0; }
 
 /* Interrumpidas inside Abiertas: the row and its Descartar. */

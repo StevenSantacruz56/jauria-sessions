@@ -711,7 +711,7 @@ function refresh() {
       state: view ? (stopUncertain.has(view.session.id) && !finalStatus(view.session.status) ? 'No se pudo confirmar el cierre' : stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
       stateKey: view && isLive(view.session) ? source.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
       activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
-      history: !view || isLive(view.session) ? '' : category(view.session.status) === 'ended' ? 'Terminada · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
+      history: !view || isLive(view.session) ? '' : category(view.session.status) === 'ended' ? 'Terminada · solo lectura' : 'Entrada deshabilitada',
       meta: view ? `${providerLabel(view.session.kind)} · ${statusLabel(view.session.status)}${view.session.transport === 'app-server' ? '' : ` · ${view.term.cols} × ${view.term.rows}`} · ${view.session.id}` : '',
       note: view && isLocalHistoryLimit(streamMetadata(view.session)?.history)
         ? `Historial local parcial. ${isLive(view.session) ? 'La sesión continúa normalmente. Se alcanzó el límite de guardado local; la salida nueva no se añade al historial de Jauría.' : 'Este límite solo afecta a la salida guardada por Jauría.'} No limita el uso ni afecta la cuota del proveedor.` : '',
@@ -864,7 +864,7 @@ function paintRecovery(pane: Pane, view: View | null) {
   const set = (selector: string, value: string) => { const node = box.querySelector(selector)!; if (node.textContent !== value) node.textContent = value; };
   if (box.dataset.folded !== String(folded)) box.dataset.folded = String(folded);
   set('.pane-recovery-title', `${session.title} · Interrumpida`);
-  set('.pane-recovery-detail', `${interruptionDetail(session.status)}. No puedes escribir en ella: el proceso ya no existe.`);
+  set('.pane-recovery-detail', `${interruptionDetail(session.status)}. No puedes escribir en ella.`);
   set('.pane-recovery-note', plan.note);
   const primary = box.querySelector<HTMLButtonElement>('[data-recovery="primary"]')!;
   set('[data-recovery="primary"]', plan.action === 'continue' ? 'Continuar conversación' : 'Empezar de nuevo aquí');
