@@ -131,14 +131,24 @@ async function transition(page: Page, id: string, status: string) {
 }
 
 async function geometry(page: Page) {
-  // Allow the production ResizeObserver debounce and evidence cadence to settle.
-  await page.waitForTimeout(700);
-  return page.evaluate(() => {
+  const read = () => page.evaluate(() => {
     // No message rail since 1.4: the fixed chrome is the top bar, the pane heading and the status bar.
     const box = (selector: string) => { const r = document.querySelector(selector)!.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
     const terminal = (window as any).attentionFixture.snapshot().evidence.sessions.find((s: any) => s.id === 'foreground');
     return { chrome: { top: box('.workbench-header'), heading: box('.pane-heading'), status: box('.status-bar') }, rows: terminal.rows, cols: terminal.cols };
   });
+  // Allow the production ResizeObserver debounce and evidence cadence to settle: the first fit can land
+  // well after 700 ms on a loaded runner, and a reading taken before it is not a baseline. Settled means
+  // two equal readings 350 ms apart (at most ~7 s); the caller still compares before and after.
+  await page.waitForTimeout(700);
+  let last = await read();
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(350);
+    const next = await read();
+    if (JSON.stringify(next) === JSON.stringify(last)) return next;
+    last = next;
+  }
+  return last;
 }
 
 test('real browser: attention totals, unseen header and Dock stay consistent', {
