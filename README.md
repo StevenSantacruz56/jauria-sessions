@@ -32,9 +32,9 @@ Los permisos de las sesiones nativas se resuelven mediante la configuración de 
 Con la aplicación abierta:
 
 1. Pulsa **Nueva sesión** o `⌘N`.
-2. Elige **Codex**, **Claude Code** o **Terminal** en Herramienta.
-3. La carpeta personal viene seleccionada. Elige otra **Carpeta de trabajo** si lo necesitas; puedes volver con **Usar mi carpeta personal**. No hace falta registrar un proyecto.
-4. Añade un **Nombre** opcional y pulsa **Iniciar sesión**.
+2. Elige **Codex**, **Claude Code** o **Terminal** en Herramienta. Una CLI que no está instalada aparece deshabilitada, con **Comprobar otra vez**.
+3. **Carpeta de trabajo**: viene **Mi carpeta personal**; elige otra con **Elegir otra carpeta…** o una de las cinco **Recientes**.
+4. Opcional: un **Proyecto de Pulso** al que vincular la sesión y un **Nombre de la sesión**. Pulsa **Abrir sesión**. El pie dice cuántas plazas quedan y, si no se puede abrir, por qué.
 5. En Codex o Claude Code, escribe tu petición y atiende los permisos que solicite la herramienta. En Terminal, ejecuta tus comandos habituales, por ejemplo:
 
    ```sh

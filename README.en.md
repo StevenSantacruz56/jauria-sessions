@@ -76,8 +76,8 @@ The [v1.3.3 GitHub release](https://github.com/StevenSantacruz56/jauria-sessions
 Jauria itself does not require Rust or Node to run from an app bundle. Provider CLIs must be installed and authenticated separately. This release expects Codex at `/opt/homebrew/bin/codex` and Claude Code at `~/.local/bin/claude`; Terminal uses `/bin/zsh -il`.
 
 1. Open **Nueva sesión** (`⌘N`).
-2. Choose Codex, Claude Code or Terminal and a working directory.
-3. Optionally name the session, then select **Iniciar sesión**.
+2. Choose Codex, Claude Code or Terminal (a CLI that is not installed is disabled, with **Comprobar otra vez**) and a working directory: your home folder, **Elegir otra carpeta…** or one of the five **Recientes**.
+3. Optionally pick a **Proyecto de Pulso** to link the session to and name it, then select **Abrir sesión**. The footer shows the free slots and, when the button is disabled, why.
 4. Open **Configuración…** (`⌘,`) to change the appearance, the terminal font size (11–18 px), the sidebar grouping and layout, the concurrency limit, Pulso access and macOS notices, or to see the app and runner versions, check the CLIs, preview a diagnostic and restart the runner. Every change applies and is saved at once; there is no Guardar button.
 5. Use **Dividir** to display two sessions side by side.
 6. Press `⌘⇧P` (or the search button in the top bar) for the **command palette**: sessions that need you, open sessions, Pulso boards and actions, filtered as you type. Unavailable actions are listed with the reason; **Terminar** and **Cambiar nombre** open their usual confirmation or form, and the palette never types into a terminal. `⌘K` still filters the agent list. The Información panel and `⌘I` were retired in 1.4.0: its useful parts moved to Configuración and to the pane's «…» menu (folder, identifier, history clean-up).

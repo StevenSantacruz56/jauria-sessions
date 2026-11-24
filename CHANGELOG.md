@@ -56,6 +56,16 @@ Rediseño de la ventana, paleta de comandos, Pulso conectado con las sesiones y 
 - Teclado y accesibilidad: patrón combobox + listbox con grupos con nombre, flechas, Inicio/Fin, Intro, Escape o clic fuera, y anuncio del número de resultados. Ninguna tecla escrita en la paleta llega al terminal o a un campo de Codex, tampoco el propio atajo, su repetición al mantenerlo pulsado ni una composición IME. Al cerrar, el foco vuelve a donde estaba o, si ese control ya no existe, al terminal del panel enfocado. No se abre sobre otro diálogo y, en Pulso, respeta las guardas del borrador.
 - `⌘K` no cambia: sigue enfocando la búsqueda de la lista de agentes. `⌘N`, `⌘K`, `⌘,` y `⌘⇧P` comparten un registro único de atajos.
 
+### Nueva sesión
+
+- La ventana se ordena como se usa: **Herramienta → Carpeta de trabajo → Proyecto de Pulso (opcional) → Nombre de la sesión (opcional)**, con un solo subtítulo («Elige una herramienta y una carpeta para empezar.»). Desaparecen «sin crear un proyecto», «sin registrar un proyecto» y la nota de worktrees.
+- El botón principal dice **Abrir sesión** («Iniciar sesión» sonaba a entrar con una cuenta) y muestra «Abriendo sesión…» sin permitir un doble envío. Cancelar es un botón secundario.
+- Las herramientas muestran su marca (Claude, OpenAI, terminal). Una CLI que no está instalada queda deshabilitada con «CLI no instalada» y **Comprobar otra vez**; se vuelve a comprobar al abrir la sesión.
+- **Carpeta de trabajo**: «Mi carpeta personal · ruta», **Elegir otra carpeta…** y **Recientes** (las cinco últimas, por perfil; solo en la vista, nunca en el diagnóstico). Si la carpeta ya no existe, lo dice junto al campo.
+- **Proyecto de Pulso (opcional)**: la sesión nueva se vincula a ese proyecto sin cambiar su sesión principal. Desde Nuevo proyecto aparece fijo («Proyecto: «Nombre» · sesión principal»). Si la sesión se abre pero el vínculo falla, no se abre otra: **Reintentar vínculo**.
+- El pie dice «3 de 8 plazas ocupadas · 5 disponibles» y, si no se puede abrir, el motivo exacto (con **Reconectar** sin conexión). Otra sesión de Claude Code en la misma carpeta es un aviso, no un bloqueo.
+- Teclado: el foco empieza en la herramienta elegida, las flechas recorren el grupo, Enter solo envía un formulario válido y Escape cierra y devuelve el foco a quien abrió la ventana. A 760 × 560 no hay desplazamiento horizontal. El título no se puede seleccionar por accidente.
+
 ### Pulso
 
 - La barra superior de Pulso separa tres cosas: **Terminal** (volver, con divisor), las pestañas, que son solo tableros (Pendientes y proyectos abiertos), y dos botones con borde siempre visibles: **+ Nuevo proyecto** (ya no un «+» igual al de nueva sesión) e **Histórico** con su contador. La barra del proyecto ocupa una línea: título, «n de m fases hechas», **Proyecto**, **Sesiones** y la única acción ámbar. Las cuatro columnas caben a 1220 px.

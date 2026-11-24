@@ -15,7 +15,7 @@ La [release v1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/release
 
 3. Abre el DMG y arrastra **Jauria.app** al acceso directo **Applications**.
 4. Expulsa la imagen y abre Jauria desde Aplicaciones. No ejecutes la app directamente desde el DMG.
-5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y selecciona la carpeta de trabajo. No necesitas registrar un proyecto para abrir una sesión.
+5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y la carpeta de trabajo, y pulsa **Abrir sesión**. Vincularla a un proyecto de Pulso es opcional.
 
 Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en `target/debug` o `target/release` al compilar son salidas de desarrollo, no instalaciones adicionales; macOS puede mostrarlos como apps si se abrieron durante pruebas. Retira o archiva copias antiguas sin borrar el perfil de datos. La lista reciente de un lanzador puede tardar en reflejar la limpieza aunque Spotlight y Launch Services ya apunten a la app instalada.
 
