@@ -259,8 +259,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     // One compact line: title, progress, Plan y sesiones and the primary action.
     toolbar.replaceChildren();const title=el('h2',selectedProject?.title??'Pendientes','pulso-board-title');title.title=title.textContent??'';
     const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
-    const progress=el('p',total?`${complete} de ${total} ${selectedProject?'fases hechas':'pendientes hechos'}`:'Sin tarjetas todavía','pulso-progress');
-    progress.title=total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'}`:'Añade una tarjeta en la columna donde quieras empezar.';
+    const progress=el('p',total?`${complete} de ${total} ${selectedProject?'fases hechas':'pendientes hechos'}`:selectedProject?'Sin fases todavía':'Sin pendientes todavía','pulso-progress');
+    progress.title=total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'}`:`Añade ${selectedProject?'una fase':'un pendiente'} en la columna donde quieras empezar.`;
     toolbar.append(title,progress);
     if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet pulso-plan-button'));
     if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Continuar sesión principal');toolbar.append(recovery);}
@@ -667,7 +667,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!isClosed(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
         else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
         else {
-          area.append(el('span',session?.kind==='codex'?'Codex en terminal no permite continuar la conversación.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
+          // The board header has one line: it only names the action; the reason lives in its tooltip and in Plan y sesiones.
+          const why=session?.kind==='codex'?'Codex en terminal no permite continuar la conversación.':'La sesión principal no guardó una conversación que se pueda continuar. Abre su historial desde Plan y sesiones o empieza de nuevo.';
+          const note=el('span',region==='board'?'Sin conversación que continuar':why,'pulso-muted');if(region==='board')note.title=why;area.append(note);
           if(options.restartSession&&session?.cwd)area.append(button('Empezar de nuevo aquí',()=>options.restartSession!(id),'quiet'));
         }
         freeze();restoreRecoveryFocus();

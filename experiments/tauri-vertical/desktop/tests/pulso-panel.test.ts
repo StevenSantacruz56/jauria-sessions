@@ -464,7 +464,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.locator('.pulso-board-toolbar').getByRole('button',{name:/Continuar.*principal/}).waitFor();
         const before=await run(p,'return f.bindings.filter(id=>id==="ended").length');
         await run(p, `f.bindingProvider=null; ${change === 'session' ? 'f.sessions.find(s=>s.id==="live").status="exited";' : 'f.cacheKey="synthetic-connection-2";'} ${change === 'profile' ? 'f.panel.hide();f.profile="synthetic-lifecycle-b";f.panel.show();' : ''} return f.panel.refresh()`);
-        await p.locator('.pulso-board-toolbar').getByText(/No hay una identidad de conversación/).waitFor();
+        await p.locator('.pulso-board-toolbar').getByText('Sin conversación que continuar').waitFor();
         assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),before+1);
         await run(p,'return f.panel.refresh()');
         assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),before+1,'stable lifecycle must reuse metadata');
@@ -474,7 +474,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         const p=await mounted('f.holdBinding=true;'); await projectBoard(p);
         await p.locator('.pulso-board-toolbar').getByText(/Comprobando conversación/).waitFor();
         await run(p,'f.holdBinding=false;f.bindingProvider=null;f.cacheKey="synthetic-reconnected";return f.panel.refresh()');
-        await p.locator('.pulso-board-toolbar').getByText(/No hay una identidad de conversación/).waitFor();
+        await p.locator('.pulso-board-toolbar').getByText('Sin conversación que continuar').waitFor();
         await run(p,'f.bindingHeld.splice(0).forEach(resolve=>resolve())');
         assert.equal(await p.locator('.pulso-board-toolbar').getByRole('button',{name:/Continuar.*principal/}).count(),0);
         assert.equal(await run(p,'return f.bindings.filter(id=>id==="ended").length'),2);
