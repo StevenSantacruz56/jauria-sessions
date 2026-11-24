@@ -37,6 +37,7 @@ import { SidebarProjects, projectProgressLabel } from './sidebar-projects';
 import { statusLabel, providerLabel, matchesSession, type SessionFilter } from './workspace';
 import { CommandPalette, type PaletteItem } from './command-palette';
 import { appCommands, newSessionUnavailable, paletteEntries, type AppCommandContext, type Theme } from './app-commands';
+import { capacityText, claudeFolderConflict, folderLabel, isMissingFolderError, providerNames, readRecentFolders, rememberRecentFolder, startBlockedReason, type Provider, type ToolState } from './new-session';
 import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcutAria, shortcutHint } from './shortcuts';
 import { claimFloating, release as releaseFloating } from './floating';
 import { clampShare, clampWidth, defaultSidebarLayout, effectiveSidebarWidth, maxSidebarWidth, projectsMaxHeight, projectsShare, readSidebarLayout, sameLayout, saveSidebarLayout, separatorKey, sidebarOverlayBelow, sidebarWidth, type SidebarLayout } from './sidebar-layout';
@@ -88,6 +89,16 @@ let archiveHasMore = false;
 let busyAction = false;
 let disposed = false;
 let selectedDirectory: string | null = null;
+// «Nueva sesión» state: home folder, a folder the runner reported missing, CLI checks,
+// the Pulso project fixed by «Nuevo proyecto», a link still to confirm and the in-flight open.
+let homeDirectory: string | null = null;
+let folderMissing = false;
+const toolState: Record<'codex' | 'claude', ToolState> = { codex: 'checking', claude: 'checking' };
+let lockedProject: { id: string; title: string } | null = null;
+let pendingLink: { sessionId: string; projectId: string; title: string; requestId: string } | null = null;
+let openingSession = false;
+/** The dialog was opened with a tool already chosen (Empezar de nuevo aquí): a late CLI check does not switch it. */
+let newDialogPreset = false;
 let stageView: 'terminal' | 'pulso' | 'history' = 'terminal';
 // Vista Historial (1.4.0): the Terminada being read in the stage; never a pane.
 let historyId: string | null = null;
@@ -194,29 +205,105 @@ function activeView() { return panes[focusedPane]?.id ? views.get(panes[focusedP
 // Null-safe: the Configuración controls are moved into its dialog, which is removed on unload.
 function text(selector: string, value: string) { const node = document.querySelector(selector); if (node) node.textContent = value; }
 function closeSidebar() { $('.workspace-shell').classList.remove('sidebar-open'); $('#sidebar-scrim').hidden = true; $('#toggle-sidebar').setAttribute('aria-expanded', 'false'); }
-/** `preset` (Empezar de nuevo aquí): provider and name already filled; the person confirms. */
-function openNew(cwd: string | null = null, preset?: { kind: string; title: string }) {
+/**
+ * `preset` (Empezar de nuevo aquí, Nueva sesión en esta carpeta): folder, provider and name
+ * already filled; the person confirms. `project` (Pulso «Nuevo proyecto»): fixed and shown
+ * as «Proyecto: «Nombre» · sesión principal».
+ */
+function openNew(cwd: string | null = null, preset?: { kind: string; title: string }, project?: { id: string; title: string }) {
   if (busyAction || newDialog.open) return;
   const version = ++newDialogVersion;
-  selectedDirectory = cwd;
-  text('#selected-directory', cwd ?? 'Cargando carpeta personal…'); $('#selected-directory').title = cwd ?? '';
+  selectedDirectory = cwd ?? homeDirectory; folderMissing = false; pendingLink = null; lockedProject = project ?? null;
   $<HTMLInputElement>('#session-title').value = preset?.title ?? '';
   const provider = preset && ['codex', 'claude', 'terminal'].includes(preset.kind) ? document.querySelector<HTMLInputElement>(`input[name=provider][value=${preset.kind}]`) : null;
-  if (provider && !provider.disabled) provider.checked = true;
-  $('#new-session-error').hidden = true;
+  if (provider) provider.checked = true; newDialogPreset = !!provider;
+  for (const id of ['#new-session-error', '#folder-error', '#session-link-retry']) $(id).hidden = true;
+  renderFolderOptions(); renderProjectField();
   dialogReturn = document.activeElement as HTMLElement;
   closeSidebar(); newDialog.showModal(); refresh();
-  if (cwd === null) void invoke<string>('home_directory').then(directory => {
-    if (version !== newDialogVersion || !newDialog.open || selectedDirectory !== null) return;
-    setSessionDirectory(directory);
+  // A preset keeps its tool even if its CLI is missing (the reason says so); otherwise an available one.
+  if (!provider) selectAvailableProvider();
+  focusSelectedProvider();
+  if (homeDirectory === null) void invoke<string>('home_directory').then(directory => {
+    homeDirectory = directory;
+    if (version !== newDialogVersion || !newDialog.open) return;
+    if (selectedDirectory === null) selectedDirectory = directory;
+    renderFolderOptions(); refresh();
   }).catch(e => {
     if (version !== newDialogVersion || !newDialog.open || selectedDirectory !== null) return;
-    text('#selected-directory', 'Elegir carpeta…');
-    text('#new-session-error', message(e)); $('#new-session-error').hidden = false;
+    renderFolderOptions(); text('#folder-error', message(e)); $('#folder-error').hidden = false;
   });
 }
+function checkedProvider(): Provider | null { const value = document.querySelector<HTMLInputElement>('input[name=provider]:checked')?.value; return value === 'codex' || value === 'claude' || value === 'terminal' ? value : null; }
+function selectAvailableProvider() {
+  const usable = (value: string) => value === 'terminal' ? runner?.normalTerminalVersion === 1 : toolState[value as 'codex' | 'claude'] !== 'missing';
+  const checked = checkedProvider(); if (checked && usable(checked)) return;
+  const first = Array.from(document.querySelectorAll<HTMLInputElement>('input[name=provider]')).find(input => usable(input.value));
+  if (first) { first.checked = true; refresh(); }
+}
+/** Keyboard starts on the selected tool (arrows move within the group). */
+function focusSelectedProvider() {
+  const target = document.querySelector<HTMLInputElement>('input[name=provider]:checked:not(:disabled)') ?? document.querySelector<HTMLInputElement>('input[name=provider]:not(:disabled)');
+  (target ?? $<HTMLSelectElement>('#session-folder')).focus();
+}
+/** Mi carpeta personal first, the chosen folder if it is new, then «Recientes» (5 per profile). */
+function renderFolderOptions() {
+  const select = $<HTMLSelectElement>('#session-folder'); select.replaceChildren();
+  const option = (value: string, label: string, parent: HTMLElement = select) => { const o = document.createElement('option'); o.value = value; o.textContent = label; o.title = value; parent.append(o); return o; };
+  if (homeDirectory) option(homeDirectory, `Mi carpeta personal · ${homeDirectory}`);
+  else option('', 'Cargando carpeta personal…').disabled = true;
+  let recents: string[] = []; try { recents = readRecentFolders(localStorage, profileDataDir).filter(folder => folder !== homeDirectory); } catch { /* Optional view preference. */ }
+  if (selectedDirectory && selectedDirectory !== homeDirectory && !recents.includes(selectedDirectory)) {
+    const chosen = document.createElement('optgroup'); chosen.label = 'Carpeta elegida'; option(selectedDirectory, folderLabel(selectedDirectory, homeDirectory), chosen); select.append(chosen);
+  }
+  if (recents.length) { const group = document.createElement('optgroup'); group.label = 'Recientes'; for (const folder of recents) option(folder, folderLabel(folder, homeDirectory), group); select.append(group); }
+  select.value = selectedDirectory ?? '';
+}
+/** Proyecto de Pulso (opcional): open projects from the sidebar summary; hidden without Pulso. */
+function renderProjectField() {
+  const field = $('#session-project-field'), select = $<HTMLSelectElement>('#session-project'), locked = $('#session-project-locked');
+  if (lockedProject) {
+    field.hidden = false; select.hidden = true; locked.hidden = false;
+    locked.textContent = `Proyecto: «${lockedProject.title}» · sesión principal`; return;
+  }
+  select.hidden = false; locked.hidden = true; field.hidden = !pulsoReadable();
+  const keep = select.value; select.replaceChildren();
+  const none = document.createElement('option'); none.value = ''; none.textContent = 'Sin proyecto'; select.append(none);
+  for (const project of sidebarProjects.snapshot.projects) { const o = document.createElement('option'); o.value = project.id; o.textContent = project.title; select.append(o); }
+  select.value = newDialog.open && Array.from(select.options).some(o => o.value === keep) ? keep : '';
+}
+/** Nueva sesión: tool states, capacity, the exact reason «Abrir sesión» is blocked, and the Claude same-folder warning. */
+function syncNewSessionDialog(occupied: number, sessions: Session[]) {
+  const working = busyAction || openingSession;
+  $<HTMLButtonElement>('#choose-directory').disabled = working || connecting; $<HTMLSelectElement>('#session-folder').disabled = working;
+  const terminalSupported = runner?.normalTerminalVersion === 1;
+  $<HTMLInputElement>('input[name=provider][value=terminal]').disabled = !terminalSupported || working;
+  text('#new-terminal-status', connecting ? 'Conectando…' : !connected ? 'Sin conexión' : terminalSupported ? 'Shell zsh' : 'Requiere reiniciar runner');
+  const toolLabel: Record<ToolState, string> = { available: 'CLI disponible', missing: 'CLI no instalada', unknown: 'CLI sin verificar', checking: 'Comprobando…' };
+  for (const kind of ['codex', 'claude'] as const) {
+    const input = $<HTMLInputElement>(`input[name=provider][value=${kind}]`);
+    // A missing CLI cannot be chosen; a preset that names it stays selected so the reason is shown.
+    input.disabled = (toolState[kind] === 'missing' && !input.checked) || working;
+    text(`#new-${kind}-status`, toolLabel[toolState[kind]]);
+  }
+  const missing = (['codex', 'claude'] as const).filter(kind => toolState[kind] === 'missing');
+  $('#provider-help').hidden = !missing.length;
+  text('#provider-help-text', missing.length ? `${missing.map(kind => providerNames[kind]).join(' y ')} no ${missing.length > 1 ? 'están instalados' : 'está instalado'} en este Mac.` : '');
+  $<HTMLButtonElement>('#recheck-tools').disabled = missing.some(kind => toolState[kind] === 'checking');
+  const provider = checkedProvider(), limit = sessionLimit();
+  const reason = pendingLink || openingSession ? null : startBlockedReason({ connected, connecting, replaying, busy: busyAction, occupied, limit, folder: selectedDirectory, folderMissing, provider,
+    tool: provider && provider !== 'terminal' ? toolState[provider] : 'available', terminalSupported });
+  text('#session-capacity', capacityText(occupied, limit));
+  $('#start-blocked').hidden = !reason; text('#start-blocked-text', reason?.text ?? ''); $('#reconnect-from-dialog').hidden = !reason?.reconnect;
+  const startButton = $<HTMLButtonElement>('#start-session');
+  startButton.hidden = !!pendingLink; startButton.disabled = !!reason || working;
+  startButton.textContent = openingSession ? 'Abriendo sesión…' : 'Abrir sesión';
+  startButton.setAttribute('aria-describedby', reason ? 'start-blocked-text' : 'session-capacity');
+  $('#session-conflict').hidden = !claudeFolderConflict(sessions, provider, selectedDirectory);
+  for (const id of ['cancel-session', 'cancel-session-x']) $<HTMLButtonElement>(`#${id}`).disabled = working;
+}
 function setSessionDirectory(directory: string) {
-  selectedDirectory = directory; text('#selected-directory', directory); $('#selected-directory').title = directory; $('#new-session-error').hidden = true; refresh();
+  selectedDirectory = directory; folderMissing = false; $('#folder-error').hidden = true; $('#new-session-error').hidden = true; renderFolderOptions(); refresh();
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
 function lifecycleOf(session: Session) { return category(session.status, isRetired(session.id)); }
@@ -746,12 +833,7 @@ function refresh() {
   syncHistoryView(newSessionBlocked);
   const reading = stageView === 'history';
   for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = newSessionBlocked;
-  for (const id of ['choose-directory', 'use-home-directory']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction || connecting;
-  const terminalSupported = runner?.normalTerminalVersion === 1;
-  $<HTMLInputElement>('input[name=provider][value=terminal]').disabled = !terminalSupported || busyAction;
-  text('#new-terminal-status', connecting ? 'Conectando…' : !connected ? 'Sin conexión' : terminalSupported ? 'Shell zsh' : 'Requiere reiniciar runner');
-  $<HTMLButtonElement>('#start-session').disabled = !selectedDirectory || !connected || connecting || busyAction || replaying || occupied >= sessionLimit() || (!document.querySelector<HTMLInputElement>('input[name=provider]:checked') || ($<HTMLInputElement>('input[name=provider]:checked').value === 'terminal' && !terminalSupported));
-  for (const id of ['cancel-session', 'cancel-session-x']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction;
+  syncNewSessionDialog(occupied, sessions);
   for (const pane of panes) {
     const index = panes.indexOf(pane);
     const view = pane.id ? views.get(pane.id) : null;
@@ -1450,24 +1532,53 @@ $('#choose-directory').addEventListener('click', () => action(async () => {
   const directory = await invoke<string | null>('select_directory');
   if (directory !== null) setSessionDirectory(directory);
 }));
-$('#use-home-directory').addEventListener('click', () => action(async () => {
-  setSessionDirectory(await invoke<string>('home_directory'));
-}));
-newDialog.addEventListener('close', () => { newDialogVersion++; projectSessionTarget = null; });
+$('#session-folder').addEventListener('change', () => setSessionDirectory($<HTMLSelectElement>('#session-folder').value));
+$('#recheck-tools').addEventListener('click', () => void probeTools(true));
+$('#reconnect-from-dialog').addEventListener('click', () => void connect());
+newDialog.addEventListener('close', () => {
+  newDialogVersion++; projectSessionTarget = null; lockedProject = null; pendingLink = null;
+  // Escape or the close button: keyboard goes back to the control that opened the dialog.
+  if (dialogReturn?.isConnected && (document.activeElement === document.body || newDialog.contains(document.activeElement))) dialogReturn.focus();
+});
+/** Pulso project chosen in the dialog: link the new session (same requestId on retries, so never twice). */
+async function linkPendingSession(): Promise<boolean> {
+  const link = pendingLink; if (!link) return true;
+  try {
+    await requestPulso('link', { projectId: link.projectId, sessionId: link.sessionId, requestId: link.requestId });
+    pendingLink = null; $('#session-link-retry').hidden = true; loadSidebarProjects(); return true;
+  } catch {
+    text('#session-link-retry-text', `La sesión se abrió, pero no quedó vinculada a «${link.title}».`); $('#session-link-retry').hidden = false; refresh();
+    $<HTMLButtonElement>('#retry-session-link').focus(); return false;
+  }
+}
+$('#retry-session-link').addEventListener('click', () => action(async () => { if (await linkPendingSession()) { newDialog.close(); focusView(activeView()); } }));
+$('#close-session-link').addEventListener('click', () => { pendingLink = null; closeNew(); });
 $('#new-session-form').addEventListener('submit', event => {
   event.preventDefault();
+  if (pendingLink || openingSession || busyAction || $<HTMLButtonElement>('#start-session').disabled) return; // Enter only sends a valid form, once.
+  const kind = checkedProvider(), folder = selectedDirectory;
+  if (!kind || !folder) return;
+  const projectId = lockedProject ? '' : $<HTMLSelectElement>('#session-project').value;
+  const project = projectId ? sidebarProjects.snapshot.projects.find(p => p.id === projectId) ?? null : null;
+  openingSession = true; $('#new-session-error').hidden = true; announce('Abriendo sesión…');
   void action(async () => {
     try {
-      if (!connected || !selectedDirectory) throw new Error('Selecciona una carpeta antes de iniciar.');
-      const kind = document.querySelector<HTMLInputElement>('input[name=provider]:checked')?.value;
-      if (!kind || !['codex', 'claude', 'terminal'].includes(kind)) throw new Error('Selecciona una herramienta para iniciar.');
-      if (kind === 'terminal' && runner?.normalTerminalVersion !== 1) throw new Error('Reinicia el runner desde Diagnóstico para habilitar Terminal cuando no tengas sesiones en ejecución.');
+      // The CLI may have been removed since the last check: confirm before starting.
+      if (kind !== 'terminal') { await probeTools(); if (toolState[kind] === 'missing') { refresh(); return; } }
       const title = $<HTMLInputElement>('#session-title').value.trim() || providerLabel(kind);
-      const started = await start(`${kind}-${crypto.randomUUID()}`, kind, title, panes[focusedPane], selectedDirectory);
+      let started: string;
+      try { started = await start(`${kind}-${crypto.randomUUID()}`, kind, title, panes[focusedPane], folder); }
+      catch (e) {
+        if (isMissingFolderError(message(e))) { folderMissing = true; text('#folder-error', 'Esta carpeta ya no existe. Elige otra carpeta.'); $('#folder-error').hidden = false; $<HTMLSelectElement>('#session-folder').focus(); return; }
+        throw e;
+      }
+      try { rememberRecentFolder(localStorage, profileDataDir, folder); } catch { /* Optional view preference. */ }
       // Opened from Pulso «Nuevo proyecto»: that project takes this session as its main one.
       const target = projectSessionTarget; projectSessionTarget = null; target?.(started);
+      if (project) { pendingLink = { sessionId: started, projectId: project.id, title: project.title, requestId: `new-session-link-${started}-${project.id}` }; if (!await linkPendingSession()) return; }
       newDialog.close(); focusView(activeView());
     } catch (e) { text('#new-session-error', message(e)); $('#new-session-error').hidden = false; }
+    finally { openingSession = false; }
   });
 });
 document.querySelectorAll<HTMLInputElement>('input[name=provider]').forEach(input => input.addEventListener('change', refresh));
@@ -2054,19 +2165,20 @@ function createFixtures(which: 'both' | 1 | 2) {
 }
 async function probeTools(explicit = false) {
   const button = $<HTMLButtonElement>('#probe'); button.disabled = true;
+  if (explicit) { for (const kind of ['codex', 'claude'] as const) toolState[kind] = 'checking'; refresh(); }
   try {
     const tools = await invoke<{ tool: string; available: boolean; path?: string; version?: string }[]>('probe_tools');
     // Versions only: paths stay out of the interface.
     text('#tools', ['claude', 'codex'].map(kind => { const tool = tools.find(t => t.tool === kind); return `${providerLabel(kind)}: ${tool?.available ? (tool.version ?? 'disponible').replace(/\s*\(.*\)\s*$/, '') : 'no encontrado'}`; }).join(' · '));
-    for (const kind of ['codex', 'claude']) {
+    for (const kind of ['codex', 'claude'] as const) {
       const tool = tools.find(t => t.tool === kind);
-      const label = tool?.available ? 'CLI disponible' : 'CLI no disponible';
-      text(`#welcome-${kind}`, `${providerLabel(kind)} · ${label}`); text(`#new-${kind}-status`, label);
+      toolState[kind] = tool?.available ? 'available' : 'missing';
+      text(`#welcome-${kind}`, `${providerLabel(kind)} · ${tool?.available ? 'CLI disponible' : 'CLI no instalada'}`);
     }
   } catch (e) {
-    for (const kind of ['codex', 'claude']) { text(`#welcome-${kind}`, `${providerLabel(kind)} · CLI sin verificar`); text(`#new-${kind}-status`, 'CLI sin verificar'); }
+    for (const kind of ['codex', 'claude'] as const) { toolState[kind] = 'unknown'; text(`#welcome-${kind}`, `${providerLabel(kind)} · CLI sin verificar`); }
     text('#tools', `No se pudo comprobar: ${message(e)}`);
-  } finally { button.disabled = false; }
+  } finally { button.disabled = false; if (!disposed) { if (newDialog.open && !newDialogPreset && !openingSession) selectAvailableProvider(); refresh(); } }
 }
 $('#probe').addEventListener('click', () => void probeTools(true));
 
@@ -2078,7 +2190,7 @@ pulsoPanel = mountPulsoPanel({
   persistenceKey: () => profileDataDir,
   bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,
   // «Empezar una sesión nueva para este proyecto»: the usual Nueva sesión dialog; the session it starts is handed back once.
-  startProjectSession: started => { openNew(); if (!newDialog.open) return false; projectSessionTarget = started; return true; },
+  startProjectSession: (started, project) => { openNew(null, undefined, project); if (!newDialog.open) return false; projectSessionTarget = started; return true; },
   sessions: () => [...views.values()].map(view => ({...view.session,programState:source.display(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },

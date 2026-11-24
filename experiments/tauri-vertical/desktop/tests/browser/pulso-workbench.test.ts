@@ -173,10 +173,12 @@ try{
         await page.getByLabel('Empezar una sesión nueva para este proyecto').check();
         await page.getByLabel('Nombre del proyecto',{exact:true}).fill(title); await page.getByRole('button',{name:'Crear proyecto',exact:true}).click();
         const dialog=page.getByRole('dialog',{name:'Nueva sesión'}); await dialog.waitFor();
-        await page.waitForFunction(()=>document.querySelector('#selected-directory')?.textContent==='/synthetic/home');
+        await page.waitForFunction(()=>(document.querySelector('#session-folder') as HTMLSelectElement)?.value==='/synthetic/home');
         return dialog;
       };
       await create('Proyecto con sesión');
+      // The dialog shows the project it comes from, fixed, as its main session; no free project choice.
+      assert.equal(await page.locator('#session-project-locked').innerText(),'Proyecto: «Proyecto con sesión» · sesión principal');assert.equal(await page.locator('#session-project').isHidden(),true);
       await page.locator('#session-title').fill('Sesión del proyecto'); await page.locator('#start-session').click();
       await page.waitForFunction(()=>(window as any).pulsoFixture.calls.some((c:any)=>c.op==='project_update'&&c.args.mainSessionId));
       const started=await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>c.op==='start').map((c:any)=>c.args.id));

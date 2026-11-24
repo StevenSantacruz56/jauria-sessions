@@ -464,7 +464,7 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 .session-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--text); background: var(--surface); box-shadow: var(--shadow); overflow: auto; overscroll-behavior: contain; }
 .session-dialog::backdrop { background: var(--scrim); }
 .dialog-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
-.dialog-heading h2 { font-size: 20px; letter-spacing: -.02em; }
+.dialog-heading h2 { font-size: 20px; letter-spacing: -.02em; -webkit-user-select: none; user-select: none; }
 .dialog-heading p { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .dialog-heading .icon-button { margin: -6px -6px 0 0; }
 .provider-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 20px; padding: 0; border: 0; }
@@ -473,6 +473,7 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 .provider-picker input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .provider-option { display: grid; height: 100%; align-content: start; grid-template-columns: 18px minmax(0, 1fr); gap: 5px 8px; padding: 12px; border: 1px solid var(--control-border); border-radius: var(--radius-row); }
 .provider-option .icon { grid-column: 1; align-self: center; }
+.provider-option .provider-badge { grid-column: 1; align-self: center; width: 16px; height: 16px; }
 .provider-option strong { grid-column: 2; font-size: 12px; font-weight: 600; }
 .provider-option small { grid-column: 2; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 /* Selection keeps the 1px border; the cold focus color marks the choice. */
@@ -486,12 +487,26 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 .form-field > label span { color: var(--muted); font-weight: 400; margin-left: 3px; }
 .form-field > input { width: 100%; min-height: 36px; }
 .form-field > p, .form-note { color: var(--muted); font-size: 11px; line-height: 1.6; margin-top: 8px; }
-.directory-choice { width: 100%; min-height: 37px; text-align: left; justify-content: flex-start; }
 #selected-directory { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
-.directory-choice > .icon:last-child { width: 13px; color: var(--muted); }
 .form-note { margin-top: 20px; }
 .form-error { margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-control); color: var(--error); background: var(--error-bg); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .dialog-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+/* Nueva sesión (1.4.0): folder select + chooser on one row, help next to the field it is about,
+   and a footer with the capacity line, the exact reason «Abrir sesión» is blocked and the buttons. */
+.folder-row { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.folder-row select { flex: 1 1 100%; min-width: 0; min-height: 36px; }
+.folder-row button { flex: 0 0 auto; }
+.field-help { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -10px 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.field-error { margin-top: 8px; color: var(--error); font-size: 12px; line-height: 1.6; }
+.field-warning { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--raised); font-size: 12px; line-height: 1.6; }
+.field-locked { min-height: 36px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.form-field > select { width: 100%; min-height: 36px; }
+.link-retry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.link-retry > span { flex: 1 1 100%; }
+.new-session-footer { flex-direction: column; align-items: stretch; gap: 10px; }
+.session-capacity { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.start-blocked { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text); font-size: 12px; line-height: 1.6; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .stop-dialog > p, #stop-session-effects { font-size: 13px; color: var(--muted); line-height: 1.7; overflow-wrap: anywhere; }
 #stop-session-effects p + p { margin-top: 12px; }
 #stop-session-description { overflow-wrap: anywhere; }

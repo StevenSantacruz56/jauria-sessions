@@ -151,7 +151,7 @@ try {
         await page.locator('#new-session-dialog[open]').waitFor();
         assert.equal(await page.locator('#session-title').inputValue(), 'Codex caída');
         assert.equal(await page.locator('input[name=provider][value=codex]').isChecked(), true);
-        assert.equal(await page.locator('#selected-directory').innerText(), '/synthetic/codex');
+        assert.equal(await page.locator('#session-folder').inputValue(), '/synthetic/codex');
         await page.locator('#cancel-session').click();
         await recovery.locator('[data-recovery="dismiss"]').click();
         await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId !== 'crash-codex');

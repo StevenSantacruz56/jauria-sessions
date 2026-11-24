@@ -51,15 +51,19 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true, pulsoSummaryVersion: 1, pulsoRevisionVersion: 1, pulsoRevision: 1,
       normalTerminalVersion: 1, sessionRenameVersion: 1, ...(options.nativeResume ? { nativeResumeVersion: 1, pulsoBoardCardsVersion: 1 } : {}), telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
       ...(options.settingsVersion === null ? {} : { settingsVersion: options.settingsVersion ?? 2, settings }), sessions, lastSeq: events.length });
-    let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
+    let failNextStart: string | false = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
     let telemetry: any = options.telemetry ?? {};
+    let tools: any[] = [{ tool: 'claude', available: true, version: '2.1.325 (Claude Code)', path: '/synthetic/bin/claude' }, { tool: 'codex', available: false }];
     w.workbench = { out, resizes, inputs, calls, native, sessions, links, resumeMode(mode: typeof resumeMode) { resumeMode = mode; },
       setTelemetry(value: any) { telemetry = value; },
       remove(id: string) { const index = sessions.findIndex(s => s.id === id); if (index >= 0) sessions.splice(index, 1); }, get settings() { return settings; },
-      setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart() { failNextStart = true; }, stopMode(mode: typeof stopMode) { stopMode = mode; } };
+      setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart(error = 'No se pudo abrir la carpeta sintética.') { failNextStart = error; },
+      /** Nueva sesión: CLI probe result, the folder «Elegir otra carpeta…» returns, links that fail. */
+      setTools(list: any[]) { tools = list; }, nextDirectory: null as string | null, failLinks: [...(options.failLinks ?? [])], stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
       if (cmd === 'connect_runner') { native.push(cmd); return { dataDir: '/synthetic-profile', socket: '/synthetic.sock', status: status(), smoke: false }; }
-      if (cmd === 'probe_tools') return [{ tool: 'claude', available: true, version: '2.1.325 (Claude Code)', path: '/synthetic/bin/claude' }, { tool: 'codex', available: false }];
+      if (cmd === 'probe_tools') { w.workbench.probes = (w.workbench.probes ?? 0) + 1; return structuredClone(tools); }
+      if (cmd === 'select_directory') return w.workbench.nextDirectory;
       if (cmd === 'home_directory') return '/synthetic-home';
       if (cmd.startsWith('plugin:')) return cmd === 'plugin:event|listen' ? 1 : cmd === 'plugin:notification|is_permission_granted' ? false : undefined;
       if (cmd === 'record_ui_evidence') return;
@@ -70,7 +74,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       if (cmd === 'pulso_request') {
         calls.push(a.op);
         if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: !!options.summaryHasMore, pendingOpen: 2, links: structuredClone(options.pulsoLinks ?? []), linksTruncated: false } };
-        if (a.op === 'link' && (options.failLinks ?? []).includes(a.args.projectId ?? a.args.itemId)) return { ok: false, error: 'Pulso no confirmó el vínculo sintético.' };
+        if (a.op === 'link' && w.workbench.failLinks.includes(a.args.projectId ?? a.args.itemId)) return { ok: false, error: 'Pulso no confirmó el vínculo sintético.' };
         if (a.op === 'link') { links.push(structuredClone(a.args)); return { ok: true, result: { link: { id: `link-${links.length}`, ...a.args } } }; }
         if (a.op === 'revision') return { ok: true, result: { revision: 1 } };
         if (a.op === 'projects' && a.args.archived === true) return { ok: true, result: { projects: [], revision: 1, totalCount: 0, hasMore: false } };
@@ -107,7 +111,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
           const s = sessions.find(s => s.id === a.args.id); s.status = stopMode; return { ok: true, result: structuredClone(s) };
         }
         if (a.op === 'start') {
-          if (failNextStart) { failNextStart = false; return { ok: false, error: 'No se pudo abrir la carpeta sintética.' }; }
+          if (failNextStart) { const error = failNextStart; failNextStart = false; return { ok: false, error }; }
           const s = { id: a.args.id, title: a.args.title, kind: a.args.kind, cwd: a.args.cwd ?? null, status: 'starting', rows: a.args.rows, cols: a.args.cols };
           sessions.push(s); return { ok: true, result: structuredClone(s) };
         }

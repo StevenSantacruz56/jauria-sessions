@@ -31,7 +31,7 @@ export type PulsoPanelOptions = {
    * Returns false if it could not open; `started` runs once if a session starts
    * from that dialog (never on cancel).
    */
-  startProjectSession?: (started: (sessionId: string) => void) => boolean;
+  startProjectSession?: (started: (sessionId: string) => void, project: { id: string; title: string }) => boolean;
   persistenceKey?: () => string | null;
   bindingCacheKey?: () => string;
   /** Kept for compatibility; the top-bar tabs and sidebar return to the terminal. */
@@ -1001,7 +1001,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(!created||disposed||failed)return;
       // What comes next: the first phase, ready to type in Por hacer.
       if(selectedProject?.id===id)addOpeners.todo?.();
-      if(startSession&&!options.startProjectSession!(sessionId=>void adoptMainSession(id,title,sessionId)))options.notice('No se pudo abrir Nueva sesión. Puedes elegir la sesión principal en Sesiones.');
+      if(startSession&&!options.startProjectSession!(sessionId=>void adoptMainSession(id,title,sessionId),{id,title}))options.notice('No se pudo abrir Nueva sesión. Puedes elegir la sesión principal en Sesiones.');
     })();
   };
   /**

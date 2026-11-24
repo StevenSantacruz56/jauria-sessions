@@ -18,7 +18,7 @@ const url = server.resolvedUrls!.local[0];
 const noticeVisible = (page: Page) => page.locator('#notice').isVisible();
 async function startSession(page: Page) {
   await page.locator('#new-session').click();
-  await page.waitForFunction(() => document.querySelector('#selected-directory')?.textContent === '/synthetic-home');
+  await page.waitForFunction(() => (document.querySelector('#session-folder') as HTMLSelectElement)?.value === '/synthetic-home');
   await page.locator('input[name=provider][value=terminal]').check();
   await page.locator('#start-session').click();
 }
