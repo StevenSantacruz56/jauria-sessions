@@ -216,12 +216,13 @@ async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>
         for key in ["pids","helpers","others"] { if let Some(rows)=discovery[key].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));} }
         let mut sample=sampler.lock().map_err(error)?.sample(&pids);
         let set=|key:&str|->std::collections::HashSet<u64>{discovery[key].as_array().into_iter().flatten().filter_map(Value::as_u64).collect()};
-        let (helpers,others)=(set("helpers"),set("others"));
+        // «web»: WebKit's own processes; «service»: other system XPC services of the window (Metal, audio…).
+        let (webkit,helpers,others)=(set("webkit"),set("helpers"),set("others"));
         // «other»: attributed to this app by macOS but not a window service
         // (e.g. a job a session left behind); shown apart, never as Interfaz.
         if let Some(rows)=sample["processes"].as_array_mut(){ for row in rows {
             let pid=row["pid"].as_u64().unwrap_or(0);
-            row["role"]=json!(if pid==u64::from(std::process::id()){"app"}else if helpers.contains(&pid){"web"}else if others.contains(&pid){"other"}else{"app-child"});
+            row["role"]=json!(if pid==u64::from(std::process::id()){"app"}else if webkit.contains(&pid){"web"}else if helpers.contains(&pid){"service"}else if others.contains(&pid){"other"}else{"app-child"});
         } }
         sample["webEngine"]=discovery.get("helpersStatus").cloned().unwrap_or(json!("unavailable"));
         sample["discovery"]=discovery;Some(sample)

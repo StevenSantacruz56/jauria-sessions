@@ -271,8 +271,11 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim)
 .session-item-duration:empty { display: none; }
 .session-item-state { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 12px; height: 12px; }
 .provider-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 16px; height: 16px; border-radius: var(--radius-control); background: var(--provider-terminal); color: var(--provider-ink); font: 500 11px/1 "JetBrains Mono", ui-monospace, monospace; }
-.provider-badge[data-provider="claude"] { background: var(--provider-claude); }
-.provider-badge[data-provider="codex"] { background: var(--provider-codex); }
+/* A session's badge is its tool's own mark, drawn as a mask. Claude keeps its colour; the others take the text colour of where they sit (sidebar, tab or the dark pane heading). */
+.provider-badge[data-provider] { border-radius: 0; background: currentColor; color: inherit; font-size: 0; -webkit-mask: var(--provider-logo) center / contain no-repeat; mask: var(--provider-logo) center / contain no-repeat; }
+.provider-badge[data-provider="terminal"] { --provider-logo: url("/brand/proveedores/terminal.svg"); }
+.provider-badge[data-provider="claude"] { --provider-logo: url("/brand/proveedores/claude.svg"); background: var(--provider-claude); }
+.provider-badge[data-provider="codex"] { --provider-logo: url("/brand/proveedores/codex.svg"); }
 .agent-indicator { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; color: var(--state-paused); }
 .agent-indicator[data-tone="working"] { color: var(--state-working); }
 .agent-indicator[data-tone="attention"] { color: var(--state-attention); }
@@ -316,7 +319,8 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim)
 .session-tab[aria-current="true"], .session-tab[aria-current="true"]:hover:not(:disabled) { background: var(--raised); border-color: var(--border); color: var(--text); }
 .session-tab[data-shown="true"]:not([aria-current="true"]) { color: var(--text); }
 .session-tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.session-tab .provider-badge { width: 14px; height: 14px; font-size: 11px; }
+.session-tab .provider-badge { width: 14px; height: 14px; }
+.session-tab .provider-badge:not([data-provider]) { font-size: 11px; }
 .top-add { width: 26px; min-height: 26px; height: 26px; padding: 5px; }
 .top-add .icon { width: 15px; height: 15px; }
 .top-spacer { flex: 1 1 0; align-self: stretch; min-width: 8px; }

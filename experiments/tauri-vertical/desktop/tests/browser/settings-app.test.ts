@@ -40,6 +40,11 @@ try {
         await settings(page);
         assert.deepEqual(await page.locator('.settings-dialog h3').allTextContents(), ['Apariencia', 'Barra lateral', 'Sesiones', 'Pulso y agentes', 'Avisos', 'Acerca de y diagnóstico']);
         assert.equal(await page.getByRole('button', { name: 'Guardar', exact: true }).count(), 0);
+        // «Cerrar» is a secondary button with a visible border, as in Uso y recursos.
+        const close = await page.locator('.settings-dialog').getByRole('button', { name: 'Cerrar', exact: true }).evaluate(node => { const s = getComputedStyle(node); return { cls: node.className, width: s.borderTopWidth, color: s.borderTopColor }; });
+        assert.equal(close.cls, 'secondary');
+        assert.notEqual(close.width, '0px');
+        assert.doesNotMatch(close.color, /rgba\(0, 0, 0, 0\)|transparent/);
         assert.match(await page.locator('.settings-dialog').innerText(), /se aplican y se guardan al momento/);
         assert.match(await page.locator('.settings-sessions').innerText(), /Cerrar la ventana no detiene las sesiones/);
         assert.match(await page.locator('.settings-sessions').innerText(), /Bajarlo no cierra las sesiones abiertas/);

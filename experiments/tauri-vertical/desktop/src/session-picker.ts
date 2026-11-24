@@ -228,7 +228,7 @@ export class SessionPicker {
         if (option.disabled) row.title = 'Ya está visible en el otro panel';
         const badge = document.createElement('span'); badge.className = 'provider-badge'; badge.setAttribute('aria-hidden', 'true');
         const provider = option.kind === 'claude' || option.kind === 'codex' ? option.kind : 'terminal';
-        badge.dataset.provider = provider; badge.textContent = option.id === NEW_SESSION_OPTION ? '+' : option.id ? provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$' : '–';
+        if (option.id && option.id !== NEW_SESSION_OPTION) badge.dataset.provider = provider; badge.textContent = option.id === NEW_SESSION_OPTION ? '+' : option.id ? provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$' : '–';
         const name = document.createElement('span'); name.className = 'session-picker-name'; name.textContent = option.label;
         const detail = document.createElement('span'); detail.className = 'session-picker-detail'; detail.textContent = option.disabled ? 'En el otro panel' : option.detail;
         row.append(badge, name, detail);
