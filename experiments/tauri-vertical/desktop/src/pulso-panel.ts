@@ -1,4 +1,5 @@
 import { claimFloating, release } from './floating';
+import { isClosed } from './session-lifecycle';
 import './pulso-panel.css';
 import { readLastBoard,saveLastBoard } from './board-preferences';
 import { programStateLabel, type ProgramState } from './program-status';
@@ -494,7 +495,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     };
     form.append(b); watch(form); return b;
   }
-  function sessionOptions() { return options.sessions().map(s => [s.id, `${s.title} · ${isLivePulsoSession(s) ? 'viva' : ['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status) ? 'historial local' : 'estado por comprobar'}`] as [string, string]); }
+  function sessionOptions() { return options.sessions().map(s => [s.id, `${s.title} · ${isLivePulsoSession(s) ? 'viva' : isClosed(s.status) ? 'historial local' : 'estado por comprobar'}`] as [string, string]); }
   function renderProject(queryBindings: boolean) {
     const p = selectedProject!; detail.replaceChildren(); dirty = false; editBase = { revision: p.revision }; const base = editBase;
     activeEditor = null; detail.append(el('h2', p.title));
@@ -590,7 +591,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (s && isLivePulsoSession(s)) {
         if (id !== actionAboveId) row.append(button('Enfocar sesión viva', () => options.openSession(id)));
       }
-      else if (s && !['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status)) {
+      else if (s && !isClosed(s.status)) {
         row.append(el('span', 'Estado por comprobar', 'pulso-muted'));
         if (id !== actionAboveId) row.append(button('Inspeccionar sesión', () => options.openSession(id)));
       } else {
@@ -647,7 +648,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     };
     const session=options.sessions().find(s=>s.id===id);
     if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'quiet'));restoreRecoveryFocus();return;}
-    if(session&&!['exited','stopped','released','failed','interrupted'].includes(session.status)){
+    if(session&&!isClosed(session.status)){
       area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'quiet'));restoreRecoveryFocus();return;
     }
     if(!session||!options.binding||!options.resumeSession){area.append(el('span','Usa el historial local o el contexto guardado para continuar.','pulso-muted'));restoreRecoveryFocus();return;}
@@ -661,7 +662,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         area.replaceChildren();
         const active=options.sessions().find(s=>s.id===data.activeSessionId&&isLivePulsoSession(s));
         if(active)area.append(button('Abrir conversación activa',()=>options.openSession(active.id),primary?'primary':'quiet'));
-        else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!['exited','stopped','released','failed','interrupted'].includes(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
+        else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!isClosed(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
         else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
         else area.append(el('span',session?.kind==='codex'?'Codex: continúa con el historial local o el contexto de la fase.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
         freeze();restoreRecoveryFocus();

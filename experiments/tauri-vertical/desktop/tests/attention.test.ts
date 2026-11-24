@@ -16,10 +16,32 @@ try {
     const a = new SessionAttention(); const sessions = [session('claude', 'needs_attention')];
     assert.equal(a.list(sessions)[0].unseen, false);
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
-    a.see(a.list(sessions)); assert.equal(a.list(sessions)[0].unseen, false);
+    // 1.4.0: a seen failure leaves the alerts (it stays in the sidebar's Interrumpidas).
+    a.see(a.list(sessions)); assert.deepEqual(a.list(sessions), []);
     sessions[0].status = 'running'; assert.deepEqual(a.list(sessions), []);
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
     assert.equal(a.list([session('unknown', 'future')]).length, 1);
+  });
+  test('1.4.0: interrupted and failed leave the alerts once seen or dismissed; needs_attention does not', () => {
+    const a = new SessionAttention();
+    const sessions = [session('crash', 'interrupted'), session('boot', 'failed'), session('custody', 'needs_attention'), session('gone', 'interrupted')];
+    const retired = new Set(['gone']); a.retired = (id: string) => retired.has(id);
+    // First contact is quiet: listed as seen, not counted, until the person looks at it.
+    const first = a.list(sessions);
+    assert.deepEqual(first.map((item: { id: string }) => item.id), ['crash', 'boot', 'custody'], 'a dismissed one is never an alert');
+    assert.equal(first.every((item: { unseen: boolean }) => !item.unseen), true);
+    assert.match(first.find((item: { id: string }) => item.id === 'boot').reason, /Interrumpida · No llegó a iniciarse/);
+    // Opening one acknowledges only that one.
+    a.see(first.filter((item: { id: string }) => item.id === 'crash'));
+    assert.deepEqual(a.list(sessions).map((item: { id: string }) => item.id), ['boot', 'custody']);
+    // «Marcar vistos»: the failure leaves too; custody in doubt stays listed, seen.
+    a.see(a.list(sessions));
+    const left = a.list(sessions);
+    assert.deepEqual(left.map((item: { id: string; unseen: boolean }) => [item.id, item.unseen]), [['custody', false]]);
+    // Dismissing later works the same; another state of the same session is a new cause.
+    retired.add('boot'); assert.equal(a.list(sessions).length, 1);
+    sessions[2].status = 'interrupted';
+    assert.equal(a.list(sessions).find((item: { id: string }) => item.id === 'custody')?.unseen, true, 'a later interruption is new');
   });
   test('old seen failure plus background process end is two listed sessions but only one new alert', () => {
     const a=new SessionAttention();

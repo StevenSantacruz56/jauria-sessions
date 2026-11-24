@@ -1,4 +1,5 @@
 import { providerLabel } from './workspace';
+import { category, categoryLabel, orderRecent } from './session-lifecycle';
 
 /**
  * Session picker for a pane: a button in the pane heading opens a search
@@ -9,17 +10,37 @@ import { providerLabel } from './workspace';
  * never changes the terminal host's size.
  */
 export type PickerSession = { id: string; title: string; kind: string; status: string; cwd: string | null };
-export type PickerOption = { id: string; label: string; detail: string; group: 'none' | 'open' | 'history'; disabled: boolean; selected: boolean; kind: string };
+export type PickerGroup = 'none' | 'open' | 'interrupted' | 'new';
+export type PickerOption = { id: string; label: string; detail: string; group: PickerGroup; disabled: boolean; selected: boolean; kind: string };
+/** The «Nueva sesión…» row: never a session id (the runner refuses ':' in ids). */
+export const NEW_SESSION_OPTION = ':new';
+export const pickerGroupLabels: Record<PickerGroup, string> = { none: '', open: 'Abiertas', interrupted: 'Interrumpidas · se pueden continuar', new: '' };
+export type PickerRules = {
+  /** Dismissed or continued interrupted sessions are Terminadas. */
+  retired?: (id: string) => boolean;
+  /** An Interrumpida is listed only when its conversation can be continued (session-lifecycle `continuation`). */
+  canContinue?: (session: PickerSession) => boolean;
+};
 
-const closedStatuses = ['exited', 'stopped', 'failed', 'interrupted', 'released'];
-export const pickerGroupLabels = { none: '', open: 'Abiertas', history: 'Historial' } as const;
-
-/** Same names and disambiguation as the former native select; same grouping and disabling. */
-export function sessionPickerOptions(sessions: readonly PickerSession[], paneIndex: number, paneIds: readonly (string | null)[], split: boolean): PickerOption[] {
+/**
+ * A pane is for working (owner, 1.4.0): Abiertas (with Sin confirmar, marked),
+ * Interrumpidas that can be continued, and «Nueva sesión…». Never a Terminada:
+ * those are read in the Historial view. Most recent first in each group.
+ * Same names and disambiguation as the former native select; a session shown
+ * in the other visible pane is disabled.
+ */
+export function sessionPickerOptions(sessions: readonly PickerSession[], paneIndex: number, paneIds: readonly (string | null)[], split: boolean, rules: PickerRules = {}): PickerOption[] {
   const own = paneIds[paneIndex] ?? null;
   const options: PickerOption[] = [{ id: '', label: 'Sin sesión', detail: 'Vaciar este panel', group: 'none', disabled: false, selected: own === null, kind: '' }];
-  for (const history of [false, true]) {
-    for (const s of sessions.filter(s => closedStatuses.includes(s.status) === history)) {
+  const groupOf = (s: PickerSession): PickerGroup | null => {
+    const value = category(s.status, rules.retired?.(s.id) ?? false);
+    if (value === 'open' || value === 'unconfirmed') return 'open';
+    if (value === 'interrupted' && (rules.canContinue?.(s) ?? false)) return 'interrupted';
+    return null;
+  };
+  const recent = orderRecent(sessions);
+  for (const group of ['open', 'interrupted'] as const) {
+    for (const s of recent.filter(s => groupOf(s) === group)) {
       const provider = providerLabel(s.kind);
       const name = s.title.trim().toLocaleLowerCase() === provider.toLocaleLowerCase() ? s.title : `${s.title} · ${provider}`;
       const duplicates = sessions.filter(other => other.title === s.title);
@@ -28,9 +49,11 @@ export function sessionPickerOptions(sessions: readonly PickerSession[], paneInd
       const label = name + (duplicates.length > 1 ? ` · ${folder ?? s.id.slice(-8)}${folder && sameFolder ? ` (${s.id.slice(-8)})` : ''}` : '');
       // A session already shown in another visible pane cannot be chosen here.
       const disabled = paneIds.some((id, index) => index !== paneIndex && (split || index === 0) && id === s.id);
-      options.push({ id: s.id, label, detail: s.cwd ?? '', group: history ? 'history' : 'open', disabled, selected: own === s.id, kind: s.kind });
+      const mark = category(s.status) === 'unconfirmed' ? `${categoryLabel('unconfirmed')} · ` : '';
+      options.push({ id: s.id, label, detail: mark + (s.cwd ?? ''), group, disabled, selected: own === s.id, kind: s.kind });
     }
   }
+  options.push({ id: NEW_SESSION_OPTION, label: 'Nueva sesión…', detail: 'En este panel', group: 'new', disabled: false, selected: false, kind: '' });
   return options;
 }
 
@@ -39,7 +62,8 @@ const fold = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu
 export function filterPickerOptions(options: readonly PickerOption[], query: string): PickerOption[] {
   const words = fold(query).split(/\s+/).filter(Boolean);
   if (!words.length) return [...options];
-  return options.filter(option => option.id && words.every(word => fold(`${option.label} ${option.detail}`).includes(word)));
+  // «Nueva sesión…» stays at the end of any search: it is the way out when nothing matches.
+  return options.filter(option => option.id === NEW_SESSION_OPTION || (option.id && words.every(word => fold(`${option.label} ${option.detail}`).includes(word))));
 }
 
 /** Next enabled option index for ArrowUp/ArrowDown/Home/End; wraps around. -1 when none is enabled. */
@@ -191,7 +215,7 @@ export class SessionPicker {
       this.list.replaceChildren();
       let group: HTMLElement | null = null; let groupName = '';
       this.shown.forEach((option, index) => {
-        if (option.group !== 'none' && option.group !== groupName) {
+        if (option.group !== 'none' && option.group !== 'new' && option.group !== groupName) {
           groupName = option.group;
           group = document.createElement('div'); group.setAttribute('role', 'group');
           const heading = document.createElement('div'); heading.className = 'session-picker-group'; heading.id = `${this.prefix}-${groupName}`;
@@ -204,14 +228,16 @@ export class SessionPicker {
         if (option.disabled) row.title = 'Ya está visible en el otro panel';
         const badge = document.createElement('span'); badge.className = 'provider-badge'; badge.setAttribute('aria-hidden', 'true');
         const provider = option.kind === 'claude' || option.kind === 'codex' ? option.kind : 'terminal';
-        badge.dataset.provider = provider; badge.textContent = option.id ? provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$' : '–';
+        badge.dataset.provider = provider; badge.textContent = option.id === NEW_SESSION_OPTION ? '+' : option.id ? provider === 'claude' ? 'C' : provider === 'codex' ? 'X' : '$' : '–';
         const name = document.createElement('span'); name.className = 'session-picker-name'; name.textContent = option.label;
         const detail = document.createElement('span'); detail.className = 'session-picker-detail'; detail.textContent = option.disabled ? 'En el otro panel' : option.detail;
         row.append(badge, name, detail);
-        (option.group === 'none' ? this.list : group ?? this.list).append(row);
+        if (option.group === 'none' || option.group === 'new') { group = null; groupName = ''; }
+        (option.group === 'none' || option.group === 'new' ? this.list : group ?? this.list).append(row);
       });
-      if (!this.shown.length) {
-        const empty = document.createElement('p'); empty.className = 'session-picker-empty'; empty.textContent = 'Ninguna sesión coincide.'; this.list.append(empty);
+      if (!this.shown.some(option => option.id && option.id !== NEW_SESSION_OPTION)) {
+        const empty = document.createElement('p'); empty.className = 'session-picker-empty'; empty.textContent = this.input.value.trim() ? 'Ninguna sesión coincide.' : 'No hay sesiones abiertas.';
+        this.list.insertBefore(empty, this.list.querySelector(`[data-session-id="${NEW_SESSION_OPTION}"]`));
       }
     }
     const kept = previous === undefined ? -1 : this.shown.findIndex(option => option.id === previous && !option.disabled);

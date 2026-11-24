@@ -1,8 +1,9 @@
 import { paintAgentIndicator, providerBadge } from './agent-list';
 import type { ActivityKind } from './session-activity';
+import { category } from './session-lifecycle';
 
 /**
- * Top bar (42 px): one raised tab per open session, in runner order. A tab
+ * Top bar (42 px): one raised tab per open session (and Sin confirmar), in runner order. A tab
  * selects its session in the focused pane, like a sidebar row. Sessions shown
  * in a pane keep their tab even after they close, so the bar always names
  * what is on screen. Overflow scrolls horizontally inside the strip.
@@ -10,11 +11,11 @@ import type { ActivityKind } from './session-activity';
 export type TabSession = { id: string; title: string; kind: string; status: string };
 export type SessionTab = { id: string; title: string; kind: string; activity: ActivityKind; label: string; current: boolean; shown: boolean };
 
-const closedStatuses = ['exited', 'stopped', 'failed', 'interrupted', 'released'];
 
 export function sessionTabs(sessions: readonly TabSession[], shownIds: readonly (string | null)[], currentId: string | null | undefined,
   activityOf: (id: string) => { kind: ActivityKind; label: string } | undefined): SessionTab[] {
-  return sessions.filter(s => !closedStatuses.includes(s.status) || shownIds.includes(s.id)).map(s => {
+  // A tab chooses a session for the focused pane: only Abiertas (with Sin confirmar), plus whatever is on screen.
+  return sessions.filter(s => ['open', 'unconfirmed'].includes(category(s.status)) || shownIds.includes(s.id)).map(s => {
     const activity = activityOf(s.id);
     return { id: s.id, title: s.title, kind: s.kind, activity: activity?.kind ?? 'unreported', label: activity?.label ?? '', current: s.id === currentId, shown: shownIds.includes(s.id) };
   });

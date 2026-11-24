@@ -41,6 +41,7 @@ import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcu
 import { claimFloating, release as releaseFloating } from './floating';
 import { clampShare, clampWidth, defaultSidebarLayout, effectiveSidebarWidth, maxSidebarWidth, projectsMaxHeight, projectsShare, readSidebarLayout, sameLayout, saveSidebarLayout, separatorKey, sidebarOverlayBelow, sidebarWidth, type SidebarLayout } from './sidebar-layout';
 import { readTerminalFont, saveTerminalFont, terminalFontSize } from './terminal-font';
+import { category, isClosed, isLiveStatus } from './session-lifecycle';
 
 type Session = { agent?: unknown; programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = { agentAttentionVersion?: number; agentAttention?: object; settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -157,7 +158,7 @@ function scheduleProgramRefresh(){if(programRefresh!==undefined)return;programRe
 function programLabel(id:string){const state=source.display(id);return state?programStateLabel(state):'';}
 function attentionSessions(): Session[] { return source.sessions([...views.values()].map(v => v.session)); }
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const finalStatus = (status: string) => ['exited', 'stopped', 'failed', 'interrupted', 'released'].includes(status);
+const finalStatus = isClosed;
 // Terminar the person confirmed whose end the runner did not confirm (needs_attention or no answer in time).
 const stopUncertain = new Set<string>();
 const stopConfirmMs = 12000;
@@ -375,7 +376,7 @@ async function request<T = unknown>(op: string, args: object): Promise<T> {
   if (!response.ok) throw new Error(response.error ?? 'El runner rechazó la operación.');
   return response.result;
 }
-function isLive(session: Session) { return ['running', 'starting'].includes(session.status); }
+function isLive(session: Session) { return isLiveStatus(session.status); }
 /** Proyectos: Pulso boards from the read-only sidebar summary; rows open the board. */
 function renderProjectList(planning: boolean) {
   const summary = sidebarProjects.snapshot;
@@ -505,7 +506,7 @@ function refresh() {
   nativeAttention.update(source.nativeItems(alerts));
   document.title = unseen ? `(${unseen}) Avisos · Jauría` : 'Jauría';
   const open = count('open');
-  const occupied=sessions.filter(s=>!['exited','stopped','failed','interrupted','released'].includes(s.status)).length;
+  const occupied=sessions.filter(s=>!isClosed(s.status)).length;
   if (filter === 'attention' && count('attention') === 0) filter = openFilter();
   text('#capacity', `${occupied} de ${sessionLimit()} plazas`);
   $('#capacity').title = `${occupied} de ${sessionLimit()} plazas ocupadas`;
@@ -547,7 +548,7 @@ function refresh() {
       state: view ? (stopUncertain.has(view.session.id) && !finalStatus(view.session.status) ? 'No se pudo confirmar el cierre' : stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
       stateKey: view && isLive(view.session) ? source.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
       activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
-      history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
+      history: !view || isLive(view.session) ? '' : category(view.session.status) === 'ended' ? 'Terminada · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
       meta: view ? `${providerLabel(view.session.kind)} · ${statusLabel(view.session.status)}${view.session.transport === 'app-server' ? '' : ` · ${view.term.cols} × ${view.term.rows}`} · ${view.session.id}` : '',
       note: view && isLocalHistoryLimit(streamMetadata(view.session)?.history)
         ? `Historial local parcial. ${isLive(view.session) ? 'La sesión continúa normalmente. Se alcanzó el límite de guardado local; la salida nueva no se añade al historial de Jauría.' : 'Este límite solo afecta a la salida guardada por Jauría.'} No limita el uso ni afecta la cuota del proveedor.` : '',
@@ -774,7 +775,7 @@ async function action(work: () => Promise<void>) {
   busyAction = true; refresh();
   try { await work(); } catch (e) { notice(message(e), true); } finally { busyAction = false; refresh(); }
 }
-function occupiedSessions() { return [...views.values()].filter(v => !['exited','stopped','failed','interrupted','released'].includes(v.session.status)).length; }
+function occupiedSessions() { return [...views.values()].filter(v => !isClosed(v.session.status)).length; }
 function sessionLimit() { return runner?.settingsVersion === 1 || runner?.settingsVersion === 2 ? runner.settings?.maxConcurrentSessions ?? 2 : 2; }
 function requireSessionCapacity() {
   if (occupiedSessions() >= sessionLimit()) throw new Error(`Se alcanzó el límite de ${sessionLimit()} sesiones simultáneas. Ajústalo en Configuración o termina una sesión.`);

@@ -1,21 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { groupSessions, isProviderSession, matchesSession, providerLabel, statusLabel } from '../src/workspace.ts';
+import { after } from 'node:test';
+import { build } from 'esbuild';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { SessionFilter, WorkspaceSession } from '../src/workspace.ts';
+// Bundle like the other module tests: workspace.ts imports session-lifecycle without extension.
+const temporary = await mkdtemp(join(tmpdir(), 'jauria-workspace-'));
+const output = join(temporary, 'workspace.mjs');
+await build({ entryPoints: [new URL('../src/workspace.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', outfile: output });
+const { groupSessions, isProviderSession, matchesSession, providerLabel, statusLabel } = await import(pathToFileURL(output).href);
+after(() => rm(temporary, { recursive: true, force: true }));
 
 function session(overrides: Partial<WorkspaceSession> = {}): WorkspaceSession {
   return { id: 'session-1', title: 'Revisión de sesión', kind: 'codex', status: 'running', cwd: null, rows: 24, cols: 80, ...overrides };
 }
 
-test('etiquetas describen la sesión; abierta no significa turno en progreso', () => {
+test('etiquetas: cuatro categorías (1.4.0); abierta no significa turno en progreso', () => {
   const labels = {
-    starting: 'Abriendo', running: 'Abierta', exited: 'Cerrada', stopped: 'Detenida',
-    released: 'Carpeta liberada', needs_attention: 'Requiere atención', failed: 'Falló',
-    interrupted: 'Interrumpida', unknown: 'Estado desconocido',
+    starting: 'Abriendo', running: 'Abierta', exited: 'Terminada', stopped: 'Terminada',
+    released: 'Interrumpida', needs_attention: 'Sin confirmar — ocupa plaza', failed: 'Interrumpida',
+    interrupted: 'Interrumpida', unknown: 'Sin confirmar — ocupa plaza',
   };
   for (const [status, label] of Object.entries(labels)) assert.equal(statusLabel(status), label);
   for (const status of ['future_status', '', 'done', 'constructor', '__proto__']) {
-    assert.equal(statusLabel(status), 'Estado desconocido');
+    assert.equal(statusLabel(status), 'Sin confirmar — ocupa plaza');
   }
 });
 
@@ -30,16 +41,20 @@ test('proveedores reales se distinguen de fixtures, shell y probes', () => {
   }
 });
 
-test('matriz de filtros por estado observado, incluidos desconocidos', () => {
+test('matriz de filtros por estado observado, incluidos desconocidos (1.4.0: Abiertas incluye Sin confirmar)', () => {
   const expected: Record<string, SessionFilter[]> = {
-    starting: ['all', 'open'], running: ['all', 'open'],
-    needs_attention: ['all', 'attention'], failed: ['all', 'attention'], interrupted: ['all', 'attention'],
-    exited: ['all', 'closed'], stopped: ['all', 'closed'], released: ['all', 'closed'],
-    unknown: ['all', 'attention'], future_status: ['all', 'attention'], done: ['all', 'attention'], '': ['all', 'attention'],
+    starting: ['all', 'open', 'activity'], running: ['all', 'open', 'activity'],
+    needs_attention: ['all', 'open', 'activity', 'attention'], failed: ['all', 'activity', 'attention'], interrupted: ['all', 'activity', 'attention'],
+    exited: ['all', 'closed'], stopped: ['all', 'closed'], released: ['all', 'activity'],
+    unknown: ['all', 'open', 'activity', 'attention'], future_status: ['all', 'open', 'activity', 'attention'], done: ['all', 'open', 'activity', 'attention'], '': ['all', 'open', 'activity', 'attention'],
   };
-  const filters: SessionFilter[] = ['all', 'open', 'attention', 'closed'];
+  const filters: SessionFilter[] = ['all', 'open', 'activity', 'attention', 'closed'];
   for (const [status, allowed] of Object.entries(expected)) {
     for (const filter of filters) assert.equal(matchesSession(session({ status }), filter, ''), allowed.includes(filter), `${status}/${filter}`);
+  }
+  // Dismissed or continued: an interrupted session is Terminada (Historial), nothing else.
+  for (const status of ['interrupted', 'failed', 'released']) {
+    for (const filter of filters) assert.equal(matchesSession(session({ status }), filter, '', true), filter === 'all' || filter === 'closed', `retired ${status}/${filter}`);
   }
 });
 
@@ -64,7 +79,7 @@ test('no busca IDs, PID, estado ni salida PTY, ni deriva tarea terminada', () =>
   assert.equal(matchesSession(item, 'attention', ''), false);
   assert.equal(matchesSession(item, 'closed', ''), false);
   assert.equal(statusLabel(item.status), 'Abierta');
-  assert.equal(statusLabel('exited'), 'Cerrada');
+  assert.equal(statusLabel('exited'), 'Terminada');
 });
 
 test('workspace tiene prioridad sobre cwd; comparte grupo con cwd equivalente', () => {

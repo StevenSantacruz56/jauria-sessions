@@ -1,4 +1,5 @@
-import { matchesSession, statusLabel, type WorkspaceSession } from './workspace';
+import { statusLabel, type WorkspaceSession } from './workspace';
+import { interruptionDetail, isClosed, isLiveStatus, lifecycleIncident } from './session-lifecycle';
 import type { ProgramState } from './program-status';
 export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
 type Session = AttentionSession;
@@ -16,6 +17,10 @@ export class SessionAttention {
   private initialized = new Set<string>();
   private permissionBaseline = new Map<string, number>();
   private ended = new Set<string>();
+  /** Interrupted/failed causes the person saw (id → that status): they leave the alerts (1.4.0). */
+  private acknowledged = new Map<string, string>();
+  /** Dismissed or continued sessions (view metadata): their interruption is never an alert. */
+  retired: (id: string) => boolean = () => false;
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
   clearProgram(id:string):boolean {const values=this.signals.get(id);const changed=values?.delete('program')??false;if(values&&!values.size)this.signals.delete(id);return changed;}
@@ -37,7 +42,11 @@ export class SessionAttention {
       const reasons: string[] = [], keys: string[] = [];
       const outside = new Map<string, boolean>();
       const add = (key: string, reason: string) => { keys.push(`${s.id}:${key}`); if (reason) reasons.push(reason); };
-      if (matchesSession(s, 'attention', '')) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : statusLabel(s.status));
+      // An interruption or failure is an alert until it is seen or dismissed; it then lives in
+      // the sidebar's Interrumpidas. Custody in doubt (needs_attention) stays until its source changes.
+      const ended = s.status === 'interrupted' || s.status === 'failed';
+      if (this.acknowledged.has(s.id) && this.acknowledged.get(s.id) !== s.status) this.acknowledged.delete(s.id);
+      if (lifecycleIncident(s.status) && !(ended && (this.retired(s.id) || this.acknowledged.get(s.id) === s.status))) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : ended ? `${statusLabel(s.status)} · ${interruptionDetail(s.status)}` : statusLabel(s.status));
       const p = s.transport === 'app-server' ? this.permissions.get(s.id) : undefined;
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');
@@ -59,20 +68,24 @@ export class SessionAttention {
   }
   see(items: readonly Attention[]) {
     for (const item of items) {
-      for (const key of item.keys) this.seen.add(key);
+      for (const key of item.keys) {
+        this.seen.add(key);
+        const lifecycle = /:state:(interrupted|failed)$/.exec(key);
+        if (lifecycle && key === `${item.id}:state:${lifecycle[1]}`) this.acknowledged.set(item.id, lifecycle[1]);
+      }
       // Activity is consumed by viewing; lifecycle and permission causes stay listed.
       this.signals.delete(item.id);
     }
   }
   seeProgram(id: string) { this.seen.add(`${id}:program:needs`); }
   observeEnd(id: string, previous: string, status: string) {
-    if (['running', 'starting'].includes(previous) && ['exited', 'stopped', 'failed'].includes(status) && !this.ended.has(id)) {
+    if (isLiveStatus(previous) && (status === 'exited' || status === 'stopped' || status === 'failed') && !this.ended.has(id)) {
       this.ended.add(id); this.signal(id, 'ended');
     }
   }
   async poll(sessions: readonly Session[], rpc: (op: string, args: { id: string }) => Promise<unknown>, current: () => boolean): Promise<void> {
     const queue = sessions.filter(s => s.transport === 'app-server' &&
-      (!['exited', 'stopped', 'released'].includes(s.status) || (this.permissions.get(s.id)?.count ?? 0) > 0));
+      (!(isClosed(s.status) && s.status !== 'failed' && s.status !== 'interrupted') || (this.permissions.get(s.id)?.count ?? 0) > 0));
     let index = 0;
     const worker = async () => { while (index < queue.length && current()) {
       const s = queue[index++];
