@@ -42,7 +42,7 @@ import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcu
 import { claimFloating, release as releaseFloating } from './floating';
 import { clampShare, clampWidth, defaultSidebarLayout, effectiveSidebarWidth, maxSidebarWidth, projectsMaxHeight, projectsShare, readSidebarLayout, sameLayout, saveSidebarLayout, separatorKey, sidebarOverlayBelow, sidebarWidth, type SidebarLayout } from './sidebar-layout';
 import { readTerminalFont, saveTerminalFont, terminalFontSize } from './terminal-font';
-import { category, categoryLabel, continuation, interruptionDetail, isClosed, isLiveStatus, orderRecent, readDismissed, saveDismissed, withDismissed, type DismissedSessions } from './session-lifecycle';
+import { category, categoryLabel, continuation, interruptionDetail, isClosed, isLiveStatus, orderRecent, readDismissed, saveDismissed, withDismissed, readSeenIncidents, saveSeenIncidents, type DismissedSessions } from './session-lifecycle';
 
 type Session = { agent?: unknown; programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = { agentAttentionVersion?: number; agentAttention?: object; settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -1497,6 +1497,9 @@ async function connect() {
       groupingProfile = profileDataDir; sidebarProjects.reset(); sidebarAsked = null; sidebarRetryAt = 0; projectListKey = '';
       try { grouping = readAgentGrouping(localStorage, profileDataDir); } catch { grouping = 'project'; }
       try { dismissed = readDismissed(localStorage, profileDataDir); } catch { dismissed = new Map(); }
+      // Seen interruptions per profile: one that happened while Jauría was closed is a new alert.
+      { const profile = profileDataDir; let seenIncidents: Map<string, string> | null = null; try { seenIncidents = readSeenIncidents(localStorage, profile); } catch { /* unreadable: quiet baseline */ }
+        attention.restoreIncidents(seenIncidents, incidents => { try { saveSeenIncidents(localStorage, profile, incidents); } catch { /* holds for this window */ } }); }
       // Per-profile view preferences, applied before any terminal is fitted.
       try { layout = readSidebarLayout(localStorage, profileDataDir); } catch { layout = { ...defaultSidebarLayout }; }
       applySidebarLayout();

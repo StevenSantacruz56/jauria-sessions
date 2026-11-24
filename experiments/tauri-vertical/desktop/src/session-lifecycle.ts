@@ -145,6 +145,34 @@ export function saveDismissed(storage: Pick<Storage, 'setItem'>, profile: string
   const entries = [...sessions].filter(([id, next]) => validId(id) && (next === null || validId(next))).slice(-dismissedLimit);
   try { storage.setItem(key, JSON.stringify({ schemaVersion: 1, sessions: entries })); } catch { /* Optional view metadata. */ }
 }
+/**
+ * Interrupted/failed incidents the person already saw in an earlier opening
+ * (id → status), per profile. `null` when nothing was ever stored (first run
+ * of 1.4.0 on this profile): the caller keeps the quiet first snapshot then.
+ */
+export type SeenIncidents = Map<string, string>;
+const incidentStatus = (value: unknown) => value === 'interrupted' || value === 'failed';
+export function incidentsKey(profile: string | null): string | null {
+  return profile && profile.length <= 4096 ? `jauria:incidents-seen:${profile}` : null;
+}
+export function readSeenIncidents(storage: Pick<Storage, 'getItem'>, profile: string | null): SeenIncidents | null {
+  const key = incidentsKey(profile); if (!key) return null;
+  try {
+    const value = JSON.parse(storage.getItem(key) ?? 'null');
+    if (value?.schemaVersion !== 1 || !Array.isArray(value.incidents)) return null;
+    const result: SeenIncidents = new Map();
+    for (const entry of value.incidents.slice(-dismissedLimit)) {
+      if (Array.isArray(entry) && entry.length === 2 && validId(entry[0]) && incidentStatus(entry[1])) { result.delete(entry[0]); result.set(entry[0], entry[1]); }
+    }
+    return result;
+  } catch { return null; }
+}
+export function saveSeenIncidents(storage: Pick<Storage, 'setItem'>, profile: string | null, incidents: SeenIncidents): void {
+  const key = incidentsKey(profile); if (!key) return;
+  const entries = [...incidents].filter(([id, status]) => validId(id) && incidentStatus(status)).slice(-dismissedLimit);
+  try { storage.setItem(key, JSON.stringify({ schemaVersion: 1, incidents: entries })); } catch { /* Optional: it holds for this window. */ }
+}
+
 /** Adds (or moves to the newest end) one entry, keeping the bound. */
 export function withDismissed(sessions: DismissedSessions, id: string, continuedAs: string | null = null): DismissedSessions {
   const next = new Map(sessions); next.delete(id); next.set(id, continuedAs);

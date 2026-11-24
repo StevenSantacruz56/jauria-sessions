@@ -23,6 +23,24 @@ export class SessionAttention {
   retired: (id: string) => boolean = () => false;
   /** Sessions the person is terminating (Terminar): their `stopped` end is their own action, not an alert. */
   stopRequested: (id: string) => boolean = () => false;
+  /** Interrupted/failed incidents seen in earlier openings (per profile); null = never stored (quiet baseline). */
+  private stored: Map<string, string> | null = null;
+  private saveStored: (incidents: Map<string, string>) => void = () => {};
+  /** First opening of this profile with the memory: its first snapshot becomes the stored baseline. */
+  private baselineIncidents = false;
+  /**
+   * Profile memory of seen incidents. With it, an interruption that happened while
+   * the window was closed is a new alert, not part of the quiet first snapshot.
+   */
+  restoreIncidents(stored: Map<string, string> | null, save: (incidents: Map<string, string>) => void) {
+    this.stored = stored; this.saveStored = save; this.baselineIncidents = stored === null;
+    if (stored) for (const [id, status] of stored) this.acknowledged.set(id, status);
+  }
+  private remember(id: string, status: string) {
+    const next = new Map(this.stored ?? []); next.delete(id); next.set(id, status);
+    while (next.size > 2000) next.delete(next.keys().next().value!);
+    this.stored = next; this.saveStored(next);
+  }
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
   clearProgram(id:string):boolean {const values=this.signals.get(id);const changed=values?.delete('program')??false;if(values&&!values.size)this.signals.delete(id);return changed;}
@@ -39,6 +57,7 @@ export class SessionAttention {
     const next = new Set<string>();
     const result: Attention[] = [];
     const ids = new Set(sessions.map(s => s.id));
+    const baseline: [string, string][] = [];
     for (const id of this.permissions.keys()) if (!ids.has(id)) this.permissions.delete(id);
     for (const s of sessions) {
       const reasons: string[] = [], keys: string[] = [];
@@ -60,8 +79,21 @@ export class SessionAttention {
       for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
       for (const cause of external?.causes(s) ?? []) { keys.push(cause.key); outside.set(cause.key, cause.unseen); if (cause.reason) reasons.push(cause.reason); }
       for (const key of keys) next.add(key);
-      // Initial lifecycle snapshot is quiet, but remains available in the list.
-      if (!this.initialized.has(s.id)) { for (const key of keys) if (!outside.has(key)) this.seen.add(key); this.initialized.add(s.id); }
+      // Initial lifecycle snapshot is quiet, but remains available in the list. Exception: with the
+      // profile's memory of seen incidents, an interruption/failure not in it happened while no window
+      // was looking (UI closed, runner crash): it is a new alert.
+      if (!this.initialized.has(s.id)) {
+        for (const key of keys) {
+          if (outside.has(key)) continue;
+          const incident = /:state:(interrupted|failed)$/.exec(key);
+          if (incident && key === `${s.id}:state:${incident[1]}`) {
+            if (this.stored !== null && !this.baselineIncidents) continue;
+            baseline.push([s.id, incident[1]]);
+          }
+          this.seen.add(key);
+        }
+        this.initialized.add(s.id);
+      }
       const unseenKeys = keys.filter(k => outside.get(k) ?? !this.seen.has(k));
       // Uncertainty is per cause: a stale permission read only makes the row stale when nothing
       // else in it is new (a runner alert or a lifecycle incident stays a confirmed alert).
@@ -69,6 +101,13 @@ export class SessionAttention {
       if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale: stale && unseenKeys.every(uncertain), keys, unseenKeys });
     }
     for (const key of this.seen) if (!next.has(key)) this.seen.delete(key);
+    if (this.baselineIncidents && sessions.length) {
+      // First run with the memory: what exists now is the baseline (never a burst of old incidents).
+      this.baselineIncidents = false;
+      const stored = new Map(this.stored ?? []);
+      for (const [id, status] of baseline) stored.set(id, status);
+      this.stored = stored; this.saveStored(stored);
+    }
     return result;
   }
   see(items: readonly Attention[]) {
@@ -76,7 +115,7 @@ export class SessionAttention {
       for (const key of item.keys) {
         this.seen.add(key);
         const lifecycle = /:state:(interrupted|failed)$/.exec(key);
-        if (lifecycle && key === `${item.id}:state:${lifecycle[1]}`) this.acknowledged.set(item.id, lifecycle[1]);
+        if (lifecycle && key === `${item.id}:state:${lifecycle[1]}`) { this.acknowledged.set(item.id, lifecycle[1]); this.remember(item.id, lifecycle[1]); }
       }
       // Activity is consumed by viewing; lifecycle and permission causes stay listed.
       this.signals.delete(item.id);

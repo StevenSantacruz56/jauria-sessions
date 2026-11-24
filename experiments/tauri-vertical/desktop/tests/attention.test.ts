@@ -120,6 +120,29 @@ try {
     a.see(a.list(sessions)); a.observeEnd('claude', 'running', 'exited'); assert.deepEqual(a.list(sessions), []);
     a.observeEnd('claude', 'running', 'interrupted'); assert.deepEqual(a.list(sessions), []);
   });
+  test('an interruption that happened while Jauría was closed is new on the next opening (H3)', () => {
+    let disk: Map<string, string> | null = null;
+    const opening = (sessions: { id: string; status: string }[]) => {
+      const a = new SessionAttention(); a.restoreIncidents(disk === null ? null : new Map(disk), m => { disk = new Map(m); });
+      return { a, items: a.list(sessions.map(s => session(s.id, s.status))) };
+    };
+    // First opening with the memory: what is already interrupted is the quiet baseline (no burst).
+    let { items } = opening([{ id: 'old', status: 'interrupted' }, { id: 'live', status: 'running' }]);
+    assert.equal(items.find((i: { id: string }) => i.id === 'old').unseen, false);
+    assert.deepEqual([...disk!], [['old', 'interrupted']]);
+    // Closed; the runner crashed meanwhile: «live» is interrupted at the next opening.
+    ({ items } = opening([{ id: 'old', status: 'interrupted' }, { id: 'live', status: 'interrupted' }]));
+    assert.equal(items.some((i: { id: string }) => i.id === 'old'), false, 'seen before: no longer an alert');
+    const live = items.find((i: { id: string }) => i.id === 'live');
+    assert.equal(live.unseen && !live.stale, true, 'happened while nobody looked: counts in bell, Dock and macOS');
+    // Seeing it remembers it: the opening after that is quiet.
+    const next = opening([{ id: 'live', status: 'interrupted' }]);
+    next.a.see(next.items);
+    assert.deepEqual(opening([{ id: 'live', status: 'interrupted' }]).items, []);
+    // Without the memory (no profile, unreadable storage, first run) the snapshot stays quiet as before.
+    const plain = new SessionAttention();
+    assert.equal(plain.list([session('x', 'failed')])[0].unseen, false);
+  });
   test('a stale permission read never silences a confirmed alert of the same row (H4)', async () => {
     const a = new SessionAttention(); const sessions = [session('cx', 'running', 'app-server')]; a.list(sessions);
     await a.poll(sessions, async () => { throw new Error('codex_state unavailable'); }, () => true);
