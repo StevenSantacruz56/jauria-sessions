@@ -1,6 +1,6 @@
 # Pulso: proyectos, fases y continuidad
 
-Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto representa un plan completo y tiene una pestaña de tablero con cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Jira puede conservar las especificaciones y el seguimiento de equipo.
+Pulso es el espacio de planificación dentro de Jauría (desde 1.3.0). Cada proyecto representa un plan completo y tiene una pestaña de tablero con cuatro columnas fijas: **Por hacer, En curso, En espera y Hecho**. Jira puede conservar las especificaciones y el seguimiento de equipo.
 
 ## Empezar desde una sesión
 
@@ -39,16 +39,16 @@ Crear un proyecto de Pulso no crea ramas ni worktrees. Jauria ya no tiene Reposi
 
 ## Lectura del tablero
 
-El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el mutex del servicio Pulso: revisión, las cuatro columnas, hasta 20 tarjetas iniciales por columna y sus contadores totales. No amplía el alcance del agente ni es una nueva operación disponible mediante su permiso CLI. `ifRevision` permite responder sin reconstruir columnas cuando no hay cambios.
+El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el mutex del servicio Pulso: revisión, las cuatro columnas, hasta 20 fases iniciales por columna y sus contadores totales. No amplía el alcance del agente ni es una nueva operación disponible mediante su permiso CLI. `ifRevision` permite responder sin reconstruir columnas cuando no hay cambios.
 
 **Ver más fases** (o **Ver más pendientes**) usa `items` con `status`, `expectedSnapshotRevision` y páginas de hasta 50. El servicio comprueba revisión, cuenta y consulta bajo el mismo mutex. Rechaza una revisión obsoleta antes de usar el offset; consulta el tablero actual ante un conflicto para no mezclar páginas de revisiones diferentes. Los contadores incluyen las fases aún no cargadas.
 
-Desde el runner 1.4 cada tarjeta de `board` añade dos claves (capacidad `pulsoBoardCardsVersion: 1` en `status`; `pulsoBoardVersion` sigue en 1 y no hay argumentos nuevos):
+Desde el runner 1.4 cada fase de `board` añade dos claves (capacidad `pulsoBoardCardsVersion: 1` en `status`; `pulsoBoardVersion` sigue en 1 y no hay argumentos nuevos):
 
-- `session`: `{"id","source"}` o `null`. `source` es `"link"` si sale del vínculo de fase más reciente y `"checkpoint"` si no hay vínculo y sale del checkpoint más reciente que nombra una sesión. Un vínculo al proyecto no cuenta para la tarjeta.
+- `session`: `{"id","source"}` o `null`. `source` es `"link"` si sale del vínculo de fase más reciente y `"checkpoint"` si no hay vínculo y sale del checkpoint más reciente que nombra una sesión. Un vínculo al proyecto no cuenta para la fase.
 - `checkpointCount`: número total de checkpoints de la fase, no solo los 10 del detalle.
 
-Se calculan con una sola consulta para toda la página (como mucho 80 tarjetas) sobre el índice de fases existente. Solo cambian las tarjetas de `board`: `item`, `items` y lo que ve un agente siguen igual.
+Se calculan con una sola consulta para toda la página (como mucho 80 fases) sobre el índice de fases existente. Solo cambian las fases de `board`: `item`, `items` y lo que ve un agente siguen igual.
 
 ### Resumen de la barra lateral y revisión en `status`
 
@@ -59,10 +59,10 @@ Se calculan con una sola consulta para toda la página (como mucho 80 tarjetas) 
 Con un runner 1.4 la interfaz usa esa revisión en lugar de sondear:
 
 - **Barra lateral:** relee `sidebar_summary` (una llamada, con `ifRevision`) solo cuando `pulsoRevision` cambia y la ventana está visible; si está oculta queda pendiente y se relee al volver. Los demás disparadores (foco, sesiones, salir del tablero) solo leen si el resumen ya no tiene la revisión del runner. Ya no relee al terminar un turno. Agrupa por proyecto las sesiones vinculadas al proyecto y a sus fases; muestra 20 proyectos y «Más proyectos…».
-- **Tablero visible:** cada `status` compara su revisión con la del tablero cargado y solo entonces vuelve a leer `projects` y `board`. Un cambio en las sesiones o en la conexión vuelve a pintar tarjetas, sesiones vinculadas y etiquetas de programa sin leer Pulso. Con un borrador, un error, una escritura, un arrastre o una navegación en curso espera al siguiente `status`.
-- **Pie de tarjeta:** sesión vinculada con su estado en vivo y «n checkpoints». Abre la sesión viva o su historial; con un borrador está deshabilitado. Si la sesión ya no está en este perfil se muestra «Sesión no disponible», sin acción. El estado se actualiza con cada `status` sin volver a leer `board`.
+- **Tablero visible:** cada `status` compara su revisión con la del tablero cargado y solo entonces vuelve a leer `projects` y `board`. Un cambio en las sesiones o en la conexión vuelve a pintar fases, sesiones vinculadas y etiquetas de programa sin leer Pulso. Con un borrador, un error, una escritura, un arrastre o una navegación en curso espera al siguiente `status`.
+- **Pie de fase:** sesión vinculada con su estado en vivo y «n checkpoints». Abre la sesión viva o su historial; con un borrador está deshabilitado. Si la sesión ya no está en este perfil se muestra «Sesión no disponible», sin acción. El estado se actualiza con cada `status` sin volver a leer `board`.
 
-Con un runner 1.3.x, mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos, y la barra lateral hace sus lecturas por proyecto en los eventos de antes, incluido el fin de turno. En ambos casos no consulta por tarjeta; la vista oculta o el documento oculto detienen las lecturas. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
+Con un runner 1.3.x, mientras Pulso está visible y sin borrador, error, escritura o arrastre en curso, comprueba revisiones cada dos segundos, y la barra lateral hace sus lecturas por proyecto en los eventos de antes, incluido el fin de turno. En ambos casos no consulta por fase; la vista oculta o el documento oculto detienen las lecturas. No introduce trabajo de planificación en el bucle de teclado/salida de las terminales.
 
 La paleta de comandos ofrece en **Fases** las fases del tablero de proyecto ya cargado; elegir una abre su detalle con las mismas guardas de borrador. No hace lecturas mientras escribes.
 
@@ -84,7 +84,7 @@ Desde una fase se prioriza la sesión de su último checkpoint; después su vín
 
 La continuación conserva metadatos de origen y añade un vínculo de la nueva sesión al proyecto o fase desde donde se solicitó. Si el vínculo falla después del inicio, la interfaz lo avisa y puedes añadirlo manualmente. La sesión principal original se conserva.
 
-**Herencia del vínculo (1.4.0).** Continuar una conversación desde cualquier sitio (panel de una Interrumpida, vista Historial, barra lateral, paleta o Pulso) usa un único camino, y la sesión nueva hereda automáticamente los vínculos de la original, con un aviso visible: si la original era sesión principal o estaba vinculada a un proyecto, la nueva queda **vinculada a ese proyecto** (la sesión principal no se cambia); si estaba vinculada a una fase, a **esa fase**. Solo se usan operaciones existentes: `sidebar_summary` para saber qué proyectos nombran la sesión original y, para las fases, el pie de tarjeta de `board` (primera página de cada columna, la sesión más reciente vinculada a cada fase). Cada vínculo se escribe con el mismo identificador de petición que usa Pulso para su propio vínculo de continuación, así que repetirlo no lo duplica. Límites: una fase fuera de la primera página del tablero, cuya sesión más reciente no sea la original, o un pendiente sin proyecto no se encuentran (el aviso dice qué no se heredó); con un runner 1.3.x no se comprueba y el aviso lo dice. La herencia (y la marca «continuada» de la original) solo ocurre cuando la sesión nueva funciona: dos lecturas seguidas de `status` (separadas por un segundo, más o menos) la ven `running`; si antes se ve cerrada, sin confirmar o fallida, no se marca ni se vincula nada, la original sigue en Interrumpidas y un aviso lo dice. Si `sidebar_summary` no cubrió todos los proyectos (más de 50, o vínculos recortados), el aviso dice que no se pudo comprobar en todos; si un vínculo falla después de otros, lo nombra. Nunca se pega ni se envía nada a la sesión. El vínculo que Pulso añade cuando continúas desde su propio detalle se escribe, como antes, al abrirse la sesión.
+**Herencia del vínculo (1.4.0).** Continuar una conversación desde cualquier sitio (panel de una Interrumpida, vista Historial, barra lateral, paleta o Pulso) usa un único camino, y la sesión nueva hereda automáticamente los vínculos de la original, con un aviso visible: si la original era sesión principal o estaba vinculada a un proyecto, la nueva queda **vinculada a ese proyecto** (la sesión principal no se cambia); si estaba vinculada a una fase, a **esa fase**. Solo se usan operaciones existentes: `sidebar_summary` para saber qué proyectos nombran la sesión original y, para las fases, el pie de fase de `board` (primera página de cada columna, la sesión más reciente vinculada a cada fase). Cada vínculo se escribe con el mismo identificador de petición que usa Pulso para su propio vínculo de continuación, así que repetirlo no lo duplica. Límites: una fase fuera de la primera página del tablero, cuya sesión más reciente no sea la original, o un pendiente sin proyecto no se encuentran (el aviso dice qué no se heredó); con un runner 1.3.x no se comprueba y el aviso lo dice. La herencia (y la marca «continuada» de la original) solo ocurre cuando la sesión nueva funciona: dos lecturas seguidas de `status` (separadas por un segundo, más o menos) la ven `running`; si antes se ve cerrada, sin confirmar o fallida, no se marca ni se vincula nada, la original sigue en Interrumpidas y un aviso lo dice. Si `sidebar_summary` no cubrió todos los proyectos (más de 50, o vínculos recortados), el aviso dice que no se pudo comprobar en todos; si un vínculo falla después de otros, lo nombra. Nunca se pega ni se envía nada a la sesión. El vínculo que Pulso añade cuando continúas desde su propio detalle se escribe, como antes, al abrirse la sesión.
 
 Las fases organizan el trabajo; no son puntos para rebobinar una conversación. La reanudación nativa continúa su estado actual. Para otro camino desde una fase, usa su contexto guardado en una sesión nueva.
 
@@ -94,7 +94,7 @@ Los bloqueos existentes siguen vigentes: no se inicia otro escritor sobre un wor
 
 ## Guardar una fase
 
-En el drawer de la tarjeta despliega **Guardar avance** y registra qué quedó listo y la siguiente acción. **Sesión del checkpoint** empieza en **Sin sesión**; elige una si quieres vincular ese avance. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
+En el detalle de la fase despliega **Guardar avance** y registra qué quedó listo y la siguiente acción. **Sesión del checkpoint** empieza en **Sin sesión**; elige una si quieres vincular ese avance. Los puntos de continuidad (checkpoints) son inmutables: se añaden al historial y no reemplazan los anteriores. El detalle muestra los 10 más recientes; **Ver puntos anteriores** carga otros 10 cada vez. Evita copiar secretos o transcripciones completas: basta el estado necesario para continuar.
 
 Cambiar una fase a **Hecho** registra avance de agenda. No implica pruebas aprobadas, aceptación de código, merge ni modificación de Jira. Terminar una sesión o un turno tampoco completa una fase automáticamente.
 
@@ -168,4 +168,4 @@ Comprueba que el respaldo termine sin errores y que la verificación devuelva `o
 
 Una app nueva conectada a un runner antiguo muestra Pulso deshabilitado. Para activar el nuevo runner hay que resolver las sesiones activas por el flujo habitual; instalar o abrir la interfaz no autoriza detenerlas automáticamente.
 
-Las tarjetas muestran una vista previa de la nota (hasta 240 caracteres). Abrir el detalle carga la nota completa; mover una tarjeta no reescribe su nota. Al refrescar, las columnas ya ampliadas se recuperan en páginas de la misma revisión, conservando lo que tenías cargado.
+Las fases muestran una vista previa de la nota (hasta 240 caracteres). Abrir el detalle carga la nota completa; mover una fase no reescribe su nota. Al refrescar, las columnas ya ampliadas se recuperan en páginas de la misma revisión, conservando lo que tenías cargado.
