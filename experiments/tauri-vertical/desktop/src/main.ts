@@ -255,11 +255,13 @@ for (let i = 0; i < 2; i++) {
   menuSummary.addEventListener('click', () => { if (!menu.open) claimFloating(menuFloating); });
   menu.addEventListener('toggle', () => { if (menu.open) claimFloating(menuFloating); else releaseFloating(menuFloating); });
   menu.addEventListener('keydown', event => { if (event.key === 'Escape' && menu.open) { event.preventDefault(); event.stopPropagation(); menuFloating.close(true); } });
+  // Choosing an option closes the menu; a keyboard choice must not leave focus on the hidden option (body).
+  const closeMenu = () => { const inside = menu.contains(document.activeElement); menu.open = false; if (inside) menuSummary.focus({ preventScroll: true }); };
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
     const local = button.dataset.action!;
     if (['close-pane', 'copy-cwd', 'copy-id', 'new-in-folder', 'purge', 'compact'].includes(local)) {
       button.addEventListener('click', () => {
-        menu.open = false;
+        closeMenu();
         const view = pane.id ? views.get(pane.id) : undefined; if (!view) return;
         if (local === 'close-pane') { leavePane(pane, view.session.id); return; }
         if (local === 'new-in-folder') { openNew(view.session.cwd); return; }
@@ -274,14 +276,14 @@ for (let i = 0; i < 2; i++) {
     }
     if (button.dataset.action === 'rename') {
       button.addEventListener('click', () => {
-        root.querySelectorAll('details').forEach(d => d.open = false);
+        closeMenu();
         if (pane.id) openRename(pane.id);
       });
       return;
     }
     button.addEventListener('click', () => action(async () => {
       const op = button.dataset.action!;
-      root.querySelectorAll('details').forEach(d => d.open = false);
+      closeMenu();
       if (op === 'shell') { requireSessionCapacity(); await start(`shell-${crypto.randomUUID()}`, 'shell', `Shell ${i + 1}`, pane); return; }
       const view = pane.id ? views.get(pane.id) : null;
       if (!view) throw new Error('Selecciona una sesión primero.');
@@ -469,7 +471,12 @@ function refresh() {
   // Same priority as the sidebar: action, notices, unseen finish, working, waiting, no report.
   const rows = alertRows(alerts, id => views.get(id)?.session.title, id => activityById.get(id));
   const firstAlert = rows[0];
-  if (!total && alertsPopover.isOpen) alertsPopover.close(document.activeElement instanceof HTMLElement && $('#attention-banner').contains(document.activeElement));
+  if (!total && alertsPopover.isOpen) {
+    // The bell is already hidden: focus inside the popover goes to the terminal or the palette button, never body.
+    const inside = document.activeElement instanceof HTMLElement && $('#attention-banner').contains(document.activeElement);
+    alertsPopover.close(false);
+    if (inside) restoreWorkbenchFocus();
+  }
   // The popover floats over the workbench; showing or hiding it never resizes a pane.
   $('#attention-banner').hidden = !alertsPopover.isOpen || !total;
   $('#attention-banner').dataset.open = String(alertsPopover.isOpen && !!total);
@@ -1251,13 +1258,19 @@ function leavePane(pane: Pane, id: string) {
   };
   place(); setTimeout(() => { if (!disposed && pane.id === null && (document.activeElement === document.body || document.activeElement?.id === 'open-command-palette')) place(); });
 }
-$('#dismiss-notice').addEventListener('click', dismissNotice);
+/** Closing the notice by the person (button or Escape): focus inside it goes back to the workbench, never body. */
+function closeNoticeByPerson() {
+  const hadFocus = $('#notice').contains(document.activeElement);
+  dismissNotice();
+  if (hadFocus) restoreWorkbenchFocus();
+}
+/** Where focus goes when the control that had it disappears: the focused terminal, else the palette button. */
+function restoreWorkbenchFocus() { const view = activeView(); if (view && stageView === 'terminal') focusView(view); else $<HTMLButtonElement>('#open-command-palette').focus(); }
+$('#dismiss-notice').addEventListener('click', closeNoticeByPerson);
 $('#notice').addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   event.preventDefault(); event.stopPropagation();
-  const hadFocus = $('#notice').contains(document.activeElement);
-  dismissNotice();
-  if (hadFocus) { const view = activeView(); if (view && stageView === 'terminal') focusView(view); else $<HTMLButtonElement>('#open-command-palette').focus(); }
+  closeNoticeByPerson();
 });
 $('#toggle-split').addEventListener('click', () => setSplit(!split));
 $('#toggle-sidebar').addEventListener('click', () => {

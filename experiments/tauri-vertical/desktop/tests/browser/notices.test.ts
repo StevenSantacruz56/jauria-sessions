@@ -75,6 +75,19 @@ try {
         assert.equal(await page.locator('#notice-text').count(), 1, 'messages never stack');
       });
 
+      await t.test('keyboard: a pane menu action and the notice close button never leave focus on body (Codex 6, 8)', async () => {
+        const page = await open();
+        await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new Error('Portapapeles no disponible')) } }));
+        await page.locator('.pane:nth-child(1) .pane-menu > summary').focus(); await page.keyboard.press('Enter');
+        await page.locator('.pane:nth-child(1) [data-action="copy-id"]').focus(); await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.querySelector('#notice')?.classList.contains('error'));
+        assert.notEqual(await page.evaluate(() => document.activeElement === document.body), true, 'the menu action moves focus back to its trigger');
+        assert.equal(await page.evaluate(() => document.activeElement?.closest('.pane-menu') !== null), true);
+        await page.locator('#dismiss-notice').focus(); await page.keyboard.press('Enter');
+        assert.equal(await noticeVisible(page), false);
+        assert.equal(await page.evaluate(() => document.activeElement === document.body), false, 'closing the notice with its button keeps a focus');
+      });
+
       await t.test('a short confirmation leaves on its own after a few seconds and never resizes the terminal', async () => {
         const page = await open();
         const host = await rect(page, '.pane:nth-child(1) .terminal-host'); const resizes = await resizeCount(page);

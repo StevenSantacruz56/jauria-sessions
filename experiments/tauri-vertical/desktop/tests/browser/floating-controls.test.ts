@@ -97,6 +97,19 @@ try {
         await p.keyboard.press('Escape');
       });
 
+      await t.test('the last alert going away with focus inside the popover never leaves focus on body (Codex 7)', async () => {
+        const p = await browser.newPage({ viewport: { width: 1220, height: 800 } }); t.after(() => p.close());
+        await installWorkbench(p, { open: 2, closed: 0, projects: 1 }); await workbenchReady(p, url);
+        await p.evaluate(() => (window as any).workbench.setStatus('open-1', 'needs_attention'));
+        await p.waitForFunction(() => !document.querySelector<HTMLElement>('#session-alerts')!.hidden);
+        await p.locator('#session-alerts').click(); await p.locator('#attention-banner').waitFor();
+        await p.locator('#open-attention-session').focus();
+        await p.evaluate(() => (window as any).workbench.setStatus('open-1', 'running'));
+        await p.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')!.hidden);
+        await p.waitForTimeout(100);
+        assert.equal(await p.evaluate(() => document.activeElement === document.body || !document.activeElement), false);
+      });
+
       await t.test('choosing a menu option closes the menu', async () => {
         const p = await page();
         await floats[0].open(p);
