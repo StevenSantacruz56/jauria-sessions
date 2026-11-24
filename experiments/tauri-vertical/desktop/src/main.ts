@@ -751,11 +751,11 @@ function refresh() {
   text('#storage-usage',retained?`Historial guardado: ${formatTelemetryBytes(retained.outputEncodedBytes)} · ${retained.eventRows} eventos${retained.atCapacity?' · límite de guardado local alcanzado':level ? ` · uso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
   const sessions = attentionSessions();
-  const attended = activeView()?.session.id;
-  // Viewing consumes transient activity even when no new focus event occurs
-  // (for example, the currently focused process exits). Persistent causes stay.
-  if (attended && isAttended(attended)) source.consumeActivity(attended);
-  source.paint(attended ? [attended] : []);
+  // Every visible pane (both when split). Viewing consumes transient activity even when no new
+  // focus event occurs (for example, a process on screen exits). Persistent causes stay.
+  const attended = attendedSessions();
+  for (const id of attended) source.consumeActivity(id);
+  source.paint(attended);
   const alerts = source.list(sessions);
   // Runner hasMore: sessions with pending alerts that status did not list.
   const hidden = source.hiddenUnseen();
@@ -1867,11 +1867,10 @@ document.addEventListener('close', refresh, true);
  * window of 860 px or less, the sidebar drawer with its scrim. The scrim only
  * displays in that layout, so its computed style is the breakpoint.
  */
-function terminalCovered(): boolean {
+function terminalCovered(pane = panes[focusedPane]): boolean {
   if (document.querySelector('dialog[open]')) return true;
-  // The focused pane's own floating layers: its recovery card (not folded by «Ver salida»), its open
+  // The pane's own floating layers: its recovery card (not folded by «Ver salida»), its open
   // session picker or "…" menu. The alerts popover sits in the top bar and is not counted.
-  const pane = panes[focusedPane];
   if (pane) {
     // From the model, not the DOM: the first refresh after the status change has not painted the card yet.
     const shown = pane.id ? views.get(pane.id)?.session : undefined;
@@ -1885,9 +1884,16 @@ function terminalCovered(): boolean {
  * The one rule for «this session is being attended», used by both attention
  * sources (automatic seen, client parser), native notices and activity
  * consumption: visible document, focused window, terminal stage (not Pulso),
- * nothing covering it, and the session in the focused pane.
+ * nothing covering it, and the session in a visible pane: the first, or the
+ * second when the stage is split (both are on screen; 1.4.0 avisos-2).
  */
-function isAttended(id: string) { return document.visibilityState === 'visible' && document.hasFocus() && stageView === 'terminal' && !terminalCovered() && activeView()?.session.id === id; }
+function visiblePane(id: string) { return panes.find((pane, index) => pane.id === id && (index === 0 || split)); }
+function isAttended(id: string) {
+  const pane = visiblePane(id);
+  return !!pane && document.visibilityState === 'visible' && document.hasFocus() && stageView === 'terminal' && !terminalCovered(pane);
+}
+/** Sessions on screen now, for automatic seen and activity consumption. */
+function attendedSessions(): string[] { return panes.flatMap((pane, index) => pane.id && (index === 0 || split) && isAttended(pane.id) ? [pane.id] : []); }
 function showAttention() {
   filter = 'attention'; query = ''; $<HTMLInputElement>('#session-search').value = ''; setSearchOpen(false);
   $('.workspace-navigation').scrollTop = 0;

@@ -416,6 +416,34 @@ try {
         });
       });
 
+      await t.test('split stage: the second visible pane is attended too (automatic seen, no unread, no macOS), unless covered', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await page.locator('#toggle-split').click();
+          await page.waitForFunction(() => document.querySelector('.pane:nth-child(2) .pane-heading')?.textContent?.includes('Claude background'));
+          await page.waitForTimeout(800);
+          // The background finish (frame 2) is now on screen in pane 2 and its frame consumed: marked seen.
+          await page.waitForFunction(() => (window as any).agentFixture.marks.some((m: any[]) => m.some(i => i.id === 'background')));
+          await enableNative(page);
+          const before = await page.evaluate(() => (window as any).agentFixture.marks.length);
+          // A BEL in the second (not focused) pane, frame consumed by its xterm: seen there.
+          await fx(page, `f.raise('background','bell',f.output('background','\\u0007bell\\r\\n'));`);
+          await page.waitForFunction(n => (window as any).agentFixture.marks.length > n, before);
+          assert.equal(await unread(page), '0');
+          await page.waitForTimeout(1800);
+          assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.notices), [], 'on screen: no macOS notice');
+          // Covered by the palette: the second pane is not attended either.
+          await page.keyboard.press('Meta+Shift+P'); await page.locator('dialog.command-palette[open]').waitFor();
+          const covered = await page.evaluate(() => (window as any).agentFixture.marks.length);
+          await page.waitForTimeout(1100);
+          await fx(page, `f.raise('background','notify',f.output('background','\\u001b]9;x\\u0007'));`);
+          await page.waitForTimeout(1500);
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.marks.length), covered, 'covered: no automatic seen');
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(n => (window as any).agentFixture.marks.length > n, covered);
+        });
+      });
+
       await t.test('Descartar an Interrumpida also marks its runner alerts seen (H7)', async () => {
         await fixture({ runner: true, closed: 1 }, async page => {
           await open(page);
