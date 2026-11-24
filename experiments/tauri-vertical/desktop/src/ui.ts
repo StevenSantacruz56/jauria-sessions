@@ -77,6 +77,7 @@ export const shell = `
               <button id="history-continue" type="button" class="secondary" hidden>Continuar conversación</button>
               <details id="history-menu" class="pane-menu history-menu"><summary aria-label="Más acciones del historial" title="Más acciones del historial">${icon('more')}</summary><div class="pane-menu-content"><button id="history-purge" type="button">Borrar salida guardada…</button><button id="history-compact" type="button">Compactar eventos…</button></div></details>
             </div>
+            <p id="history-trimmed" class="history-trimmed" role="note" hidden></p>
             <div id="history-terminal" class="history-terminal" aria-label="Salida guardada, solo lectura"></div>
           </section>
           <section id="welcome" class="welcome"><div class="welcome-symbol"><img class="welcome-mascot" src="/brand/jauria-mascota-simbolo.svg" alt="" width="88" height="77"></div><h2>Tu próxima sesión empieza aquí.</h2><p>Elige una carpeta y abre Codex, Claude Code o una terminal.<br>Vuelve a tus sesiones cuando lo necesites.</p><button id="welcome-create" class="primary">${icon('plus')}Nueva sesión</button><div class="provider-availability"><span id="welcome-codex">Codex · comprobando CLI</span><span id="welcome-claude">Claude Code · comprobando CLI</span></div><div id="close-window-hint" class="welcome-note">${icon('info')}Cerrar la ventana no detiene las sesiones: siguen en marcha hasta que uses Terminar sesión en el menú «…» del panel.</div></section>

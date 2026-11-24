@@ -287,6 +287,47 @@ try {
         assert.equal(await resizeCount(page), resizes);
       });
 
+      await t.test('back from Historial, a pane that showed the session (it ended on screen) shows it again (Codex ronda 2, 5)', async () => {
+        const page = await open();
+        await page.evaluate(() => (window as any).workbench.setStatus('open-0', 'exited'));
+        await page.waitForFunction(() => document.querySelector('.pane:nth-child(1) .session-state')?.textContent === 'Terminada');
+        const resizes = await resizeCount(page);
+        await page.locator('#open-pulso').click(); await page.locator('#pulso-panel-host').waitFor();
+        await page.locator('button[data-filter="closed"]').click();
+        await page.locator('#session-list .session-item[data-session-id="open-0"]').click();
+        await page.locator('#history-view').waitFor();
+        await page.locator('#history-back').click(); await page.locator('#panes').waitFor();
+        assert.equal(await paneSession(page), 'open-0');
+        await page.waitForTimeout(300);
+        assert.equal(await resizeCount(page), resizes);
+      });
+
+      await t.test('a session that leaves status closes the Historial view with focus on a real control (Codex ronda 2, 8)', async () => {
+        const page = await open();
+        await page.locator('button[data-filter="closed"]').click();
+        await page.locator('#session-list .session-item[data-session-id="closed-0"]').click();
+        await page.locator('#history-view').waitFor();
+        assert.equal(await focusIn(page), 'history-back');
+        await page.evaluate(() => (window as any).workbench.remove('closed-0'));
+        await page.waitForFunction(() => (document.querySelector('#history-view') as HTMLElement).hidden, undefined, { timeout: 5000 });
+        assert.notEqual(await focusIn(page), 'body');
+      });
+
+      await t.test('Historial says when the saved output is longer than what the view holds; the count tops at 1000+ (Codex ronda 2, 6)', async () => {
+        const page = await open();
+        await page.evaluate(() => { const lines = ['unicaprimera']; for (let i = 0; i < 8300; i++) lines.push(`linea ${i} x`); (window as any).workbench.out('closed-0', lines.join('\r\n') + '\r\n'); });
+        await page.waitForTimeout(1500);
+        await page.locator('button[data-filter="closed"]').click();
+        await page.locator('#session-list .session-item[data-session-id="closed-0"]').click();
+        await page.locator('#history-view').waitFor();
+        await page.locator('#history-trimmed').waitFor();
+        assert.match(await page.locator('#history-trimmed').innerText(), /Se muestran las últimas \d[\d.]* líneas/);
+        await page.locator('#history-search').fill('unicaprimera');
+        assert.equal(await page.locator('#history-search-count').innerText(), 'Sin coincidencias en lo que se muestra');
+        await page.locator('#history-search').fill('x');
+        assert.match(await page.locator('#history-search-count').innerText(), /de 1000\+$/);
+      });
+
       await t.test('a Claude ended with Terminar offers Continuar conversación as a secondary action in the Historial view', async () => {
         const page = await open({ ...lifecycle, bindings: ['stopped-claude'], sessions: [...lifecycle.sessions!, { id: 'stopped-claude', title: 'Claude terminada', kind: 'claude', cwd: '/synthetic/s', status: 'stopped', pid: 50 }] });
         await page.locator('button[data-filter="closed"]').click();

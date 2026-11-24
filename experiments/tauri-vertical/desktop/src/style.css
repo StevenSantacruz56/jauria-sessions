@@ -655,3 +655,6 @@ html[data-theme="dark"] .brand-dark { display: block; }
 .history-menu summary { width: 32px; height: 32px; min-height: 32px; padding: 8px; color: var(--muted); }
 .history-menu summary:hover { background: var(--hover); color: var(--text); }
 .history-menu summary .icon { width: 16px; height: 16px; }
+.history-trimmed { margin: 8px 24px 0; color: var(--muted); font-size: 12px; }
+.history-trimmed[hidden] { display: none; }
+@media (max-width: 760px) { .history-trimmed { margin-inline: 16px; } }

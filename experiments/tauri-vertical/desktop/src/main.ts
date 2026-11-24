@@ -2081,6 +2081,10 @@ function showPulso() { stageView = 'pulso'; closeSidebar(); refresh(); }
  * attended (isAttended needs the terminal stage).
  */
 let historySearch = { query: '', index: -1 };
+// The pane that showed the read session (it ended on screen): it gets it back when the view leaves.
+let historyReturn: { index: number; id: string } | null = null;
+/** xterm keeps scrollback + rows lines: at that length older output was cut from the view (the runner keeps it). */
+function historyTrimmed(view: View) { return view.term.buffer.active.length >= (view.term.options.scrollback ?? 1000) + view.term.rows; }
 function showHistory(id: string) {
   const session = views.get(id)?.session; if (!session || !pulsoNavigationAllowed()) return;
   source.select(id, attentionSessions());
@@ -2101,14 +2105,28 @@ function historyView() { return stageView === 'history' && historyId ? views.get
 /** Mounts the read session in the view and paints its header and actions (called by refresh). */
 function syncHistoryView(newSessionBlocked: boolean) {
   const host = $('#history-terminal');
-  // A reconnect (purge, compact) rebuilds the views: keep the view until the session is known to be gone.
-  if (stageView === 'history' && !historyView() && !connecting) { stageView = 'terminal'; historyId = null; }
+  // A reconnect (purge, compact) rebuilds the views: keep the view until the session is known to be gone,
+  // also when `status` no longer lists it. Focus inside the hidden view goes to a real control.
+  const gone = stageView === 'history' && !connecting && (!historyView() || (!!runner && !runner.sessions.some(x => x.id === historyId)));
+  if (gone) {
+    const hadFocus = $('#history-view').contains(document.activeElement);
+    stageView = 'terminal'; historyId = null;
+    notice('Esa sesión ya no está en este perfil; se cerró su historial.');
+    if (hadFocus) setTimeout(() => { if (disposed || stageView !== 'terminal') return; const active = activeView(); if (active) focusView(active); if (document.activeElement === document.body || !document.activeElement) ($<HTMLButtonElement>('#welcome-create').disabled || $('#welcome').hidden ? $('#open-command-palette') : $('#welcome-create')).focus(); });
+  }
   const view = historyView();
   $('#history-view').hidden = !view;
   for (const child of Array.from(host.children)) if (child !== view?.host) child.remove();
+  if (historyReturn && historyReturn.id !== view?.session.id) {
+    const { index, id } = historyReturn; historyReturn = null;
+    if (!panes[index].id && views.has(id) && (index === 0 || split)) assign(panes[index], id);
+  }
   if (!view) return;
   const s = view.session;
-  for (const pane of panes) if (pane.id === s.id) assign(pane, null);
+  panes.forEach((pane, index) => { if (pane.id === s.id) { if (index === 0 || split) historyReturn = { index, id: s.id }; assign(pane, null); } });
+  const trimmed = historyTrimmed(view) && s.transport !== 'app-server';
+  $('#history-trimmed').hidden = !trimmed;
+  if (trimmed) text('#history-trimmed', `Se muestran las últimas ${view.term.buffer.active.length.toLocaleString('es')} líneas guardadas en pantalla. La salida anterior sigue en el historial del runner, pero no entra en Buscar ni en Copiar salida.`);
   if (view.host.parentElement !== host) { host.append(view.host); syncTerminalViewport(view.term); }
   const badge = $('#history-provider'); const provider = providerBadge(s.kind);
   if (badge.dataset.provider !== provider.provider) { badge.dataset.provider = provider.provider; badge.textContent = provider.letter; }
@@ -2136,7 +2154,7 @@ function findInHistory(backwards: boolean, restart = false) {
     const line = buffer.getLine(row)?.translateToString(true).toLocaleLowerCase() ?? '';
     for (let at = line.indexOf(needle); at >= 0 && matches.length < 1000; at = line.indexOf(needle, at + needle.length)) matches.push({ row, col: at });
   }
-  if (!matches.length) { view.term.clearSelection(); text('#history-search-count', 'Sin coincidencias'); historySearch = { query, index: -1 }; return; }
+  if (!matches.length) { view.term.clearSelection(); text('#history-search-count', historyTrimmed(view) ? 'Sin coincidencias en lo que se muestra' : 'Sin coincidencias'); historySearch = { query, index: -1 }; return; }
   const index = restart || historySearch.query !== query || historySearch.index < 0 ? (backwards ? matches.length - 1 : 0)
     : (historySearch.index + (backwards ? -1 : 1) + matches.length) % matches.length;
   historySearch = { query, index };
@@ -2164,7 +2182,8 @@ $('#history-search').addEventListener('keydown', event => {
 });
 $('#history-copy').addEventListener('click', () => {
   const view = historyView(); if (!view) return;
-  void navigator.clipboard.writeText(historyText(view)).then(() => notice('Salida copiada.'), e => notice(message(e), true));
+  const partial = historyTrimmed(view) ? ` (las últimas ${view.term.buffer.active.length.toLocaleString('es')} líneas que muestra la vista)` : '';
+  void navigator.clipboard.writeText(historyText(view)).then(() => notice(`Salida copiada${partial}.`), e => notice(message(e), true));
 });
 $('#history-new').addEventListener('click', () => { const s = historyView()?.session; if (s?.cwd) openNew(s.cwd); });
 $('#history-continue').addEventListener('click', () => { const s = historyView()?.session; if (s) void action(async () => { await continueConversation(s.id, panes[focusedPane]); }); });
