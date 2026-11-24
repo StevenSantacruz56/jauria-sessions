@@ -20,6 +20,12 @@ export function nativeNoticeContent(kind: NativeNoticeKind): { title: string; bo
   const title = kind === 'needs' ? 'Jauría · Necesita tu atención' : kind === 'finished' ? 'Jauría · Actividad finalizada' : 'Jauría · Aviso de sesión';
   return { title, body: 'Abre Jauría y revisa los avisos.' };
 }
+/**
+ * What the person reads after enabling. Jauría cannot know whether macOS allows,
+ * hides (Focus, app in front) or silences its notices: say what Jauría will do and
+ * where to check, nothing more.
+ */
+export const nativeEnabledText = 'Jauría enviará avisos de macOS mientras esté abierta. Jauría no puede comprobar si macOS los muestra: si no ves ninguno, revisa Ajustes del Sistema → Notificaciones → Jauría.';
 /** No permission checks or prompts until the user clicks Enable. No delivery receipt. */
 export class NativeAttention {
   enabled = false;
@@ -40,7 +46,8 @@ export class NativeAttention {
       if (epoch !== this.epoch) return;
       this.enabled = granted;
       this.delivered = new Set(items.flatMap(item => item.keys));
-      this.feedback(granted ? 'Activadas en esta apertura. Entrega sujeta a macOS; el permiso informado por el plugin no confirma la configuración del sistema.' : 'Permiso no concedido. Los avisos dentro de Jauría siguen disponibles.');
+      // The desktop plugin always answers «granted» on macOS: never claim that macOS allows or shows them.
+      this.feedback(granted ? nativeEnabledText : 'Permiso no concedido. Los avisos dentro de Jauría siguen disponibles.');
     } catch {
       if (epoch !== this.epoch) return;
       this.enabled = false; this.feedback('No se pudo activar la notificación nativa. Los avisos dentro de Jauría siguen disponibles.');

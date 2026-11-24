@@ -56,3 +56,12 @@ test('the notice copy is fixed per category: no title, path or terminal text can
     assert.doesNotMatch(content, /secret|\/Users|session|Claude|Codex/);
   }
 });
+test('enabling never claims that macOS allows or shows the notices (H10)', async () => {
+  const said: string[] = [];
+  const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: () => {} }, () => true, text => { said.push(text); }, 1);
+  await n.enableFromClick([]);
+  assert.equal(said.length, 1);
+  assert.doesNotMatch(said[0], /^Activadas|permiso concedido/i);
+  assert.match(said[0], /no puede comprobar/);
+  assert.match(said[0], /Ajustes del Sistema → Notificaciones/);
+});
