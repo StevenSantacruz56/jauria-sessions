@@ -88,6 +88,27 @@ try {
         assert.ok((await rect(page, '.workspace-navigation'))!.height >= 58, 'two agent rows remain');
       });
 
+      await t.test('Escape or a lost pointer capture during a split drag puts the previous share back, saved and live (Codex 4, 5)', async () => {
+        const page = await open();
+        const box = (await page.locator('#sidebar-split').boundingBox())!;
+        const x = box.x + box.width / 2, y = box.y + box.height / 2;
+        await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, y + 60); await page.mouse.move(x, y + 120);
+        assert.notEqual(await page.locator('#sidebar-split').getAttribute('aria-valuenow'), '34', 'the share moves live');
+        await page.keyboard.press('Escape'); await page.mouse.up();
+        assert.equal(await page.locator('#sidebar-split').getAttribute('aria-valuenow'), '34', 'Escape restores the share');
+        assert.equal(await stored(page), null, 'a cancelled drag is not saved');
+        // Capture lost without pointercancel (the window loses it): no drag stays stuck.
+        await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, y + 80);
+        await page.locator('#sidebar-split').evaluate(n => { for (const id of [1, 2, 3]) if (n.hasPointerCapture(id)) n.releasePointerCapture(id); n.dispatchEvent(new PointerEvent('lostpointercapture', { pointerId: 1, bubbles: true })); });
+        await page.mouse.up();
+        assert.equal(await page.evaluate(() => document.querySelector('.workspace-shell')!.classList.contains('is-resizing')), false);
+        assert.equal(await page.locator('#sidebar-split').getAttribute('data-dragging'), null);
+        assert.equal(await page.locator('#sidebar-split').getAttribute('aria-valuenow'), '34');
+        // A new drag still works and is saved on release.
+        await drag(page, '#sidebar-split', 0, 100);
+        assert.notEqual(JSON.parse((await stored(page))!).projectsShare, 34);
+      });
+
       await t.test('keyboard on both separators: arrows, Home/End, Enter and double click restore; accessible values', async () => {
         const page = await open();
         const split = page.locator('#sidebar-split');

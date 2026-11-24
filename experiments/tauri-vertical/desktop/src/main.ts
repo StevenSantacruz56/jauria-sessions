@@ -1296,10 +1296,11 @@ function applySidebarLayout() {
   widthHandle.setAttribute('aria-valuenow', String(layout.width));
   widthHandle.setAttribute('aria-valuetext', `${layout.width} px${width !== layout.width && !overlay ? ` (${width} px en esta ventana)` : ''}`);
 }
-function setSidebarLayout(next: Partial<SidebarLayout>) {
+function setSidebarLayout(next: Partial<SidebarLayout>, persist = true) {
   layout = { ...layout, ...next };
   if (layout.projectsCollapsed && layout.agentsCollapsed) layout = { ...layout, ...('projectsCollapsed' in next ? { agentsCollapsed: false } : { projectsCollapsed: false }) };
-  try { saveSidebarLayout(localStorage, profileDataDir, layout); } catch { /* Optional view preference. */ } applySidebarLayout();
+  if (persist) try { saveSidebarLayout(localStorage, profileDataDir, layout); } catch { /* Optional view preference. */ }
+  applySidebarLayout();
 }
 function resetSidebar() { setSidebarLayout({ ...defaultSidebarLayout }); }
 function toggleSection(section: 'projects' | 'agents') {
@@ -1316,7 +1317,7 @@ function startSeparatorDrag(event: PointerEvent, handle: HTMLElement, kind: 'spl
   const shell = $('.workspace-shell'); const shellBox = shell.getBoundingClientRect();
   handle.setPointerCapture(event.pointerId); handle.dataset.dragging = 'true';
   shell.classList.add('is-resizing'); shell.dataset.resizing = kind;
-  let guide: HTMLElement | null = null; let width = layout.width;
+  let guide: HTMLElement | null = null; let width = layout.width; const initialShare = layout.projectsShare;
   if (kind === 'width') {
     guide = document.createElement('div'); guide.className = 'sidebar-width-guide'; guide.setAttribute('aria-hidden', 'true');
     guide.style.left = `${$('#sidebar').getBoundingClientRect().right - shellBox.left}px`; shell.append(guide);
@@ -1324,23 +1325,26 @@ function startSeparatorDrag(event: PointerEvent, handle: HTMLElement, kind: 'spl
   const move = (e: PointerEvent) => {
     if (kind === 'split') {
       const box = regions.getBoundingClientRect(); const room = Math.max(1, box.height - 8);
-      setSidebarLayout({ projectsShare: clampShare((e.clientY - box.top - 4) / room * 100) });
+      // Live, not saved: the share is saved once on release; a cancel puts the initial one back.
+      setSidebarLayout({ projectsShare: clampShare((e.clientY - box.top - 4) / room * 100) }, false);
     } else {
       width = clampWidth(Math.min(e.clientX - shellBox.left, maxSidebarWidth(window.innerWidth)));
       guide!.style.left = `${width}px`;
     }
   };
   const finish = (commit: boolean) => {
-    handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', cancel);
+    handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', cancel); handle.removeEventListener('lostpointercapture', cancel);
     window.removeEventListener('keydown', escape, true);
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
     delete handle.dataset.dragging; shell.classList.remove('is-resizing'); delete shell.dataset.resizing; guide?.remove(); resizing = null;
     // The only width change of a drag: terminals refit once (one resize each).
     if (commit && kind === 'width' && width !== layout.width) setSidebarLayout({ width });
+    if (kind === 'split') { if (commit) setSidebarLayout({}); else setSidebarLayout({ projectsShare: initialShare }, false); }
   };
   const up = () => finish(true); const cancel = () => finish(false);
   const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } };
-  handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', cancel);
+  // Losing the capture without pointercancel (another window, a system gesture) also cancels: no drag stays stuck.
+  handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', cancel); handle.addEventListener('lostpointercapture', cancel);
   window.addEventListener('keydown', escape, true);
   resizing = { pointer: event.pointerId, cancel };
 }
