@@ -243,7 +243,7 @@ try {
         await second.evaluate(() => (window as any).workbench.setStatus('open-0', 'failed'));
         await second.locator('.pane:nth-child(1) .pane-recovery').waitFor();
         await second.waitForTimeout(1500);
-        assert.match(await second.locator('.session-item[data-session-id="open-0"] .session-item-meta').textContent() ?? '', /El proceso terminó/);
+        assert.match(await second.locator('.session-item[data-session-id="open-0"] .session-item-meta').textContent() ?? '', /Sin ver.*Proceso falló/);
       });
 
       await t.test('a Terminada opens the Historial view: search, copy, back; zero resize entering and leaving', async () => {
