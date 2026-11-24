@@ -57,13 +57,33 @@ async function install(page:Page) {
   });
 }
 
+/**
+ * Input to paint, timed inside the page: from the key event to the xterm row that shows it. Waiting
+ * from Node adds the harness round trip and its polling, which a loaded CI runner stretches past any
+ * budget; the product's own latency is what the limit is about.
+ */
+const echoBudgetMs = 250;
+async function armEcho(page:Page,key:string){
+  await page.evaluate(k=>{
+    const w=window as any; w.echoMs=undefined; let started=0;
+    const rows=document.querySelector('.xterm-rows')!;
+    const down=(e:KeyboardEvent)=>{ if(e.key===k){ started=performance.now(); document.removeEventListener('keydown',down,true); } };
+    document.addEventListener('keydown',down,true);
+    const seen=()=>{ if(started&&rows.textContent?.includes(k)){ w.echoMs=performance.now()-started; observer.disconnect(); } };
+    const observer=new MutationObserver(seen); observer.observe(rows,{childList:true,subtree:true,characterData:true});
+  },key);
+}
+async function echoMs(page:Page){
+  await page.waitForFunction(()=>(window as any).echoMs!==undefined,undefined,{timeout:5000});
+  return page.evaluate(()=>(window as any).echoMs as number);
+}
 // Session picker in the pane heading (replaces the native select since 1.4).
 async function choose(page:Page,pane:number,id:string){
   await page.locator(`#session-${pane}`).click();
   await page.locator(`.pane:nth-child(${pane+1}) .session-picker [role="option"][data-session-id="${id}"]`).click();
 }
 try {
-  for(const engine of [chromium,webkit])await test(`${engine.name()}: slow background terminal cannot hold focused echo`,async()=>{
+  for(const engine of [chromium,webkit])await test(`${engine.name()}: slow background terminal cannot hold focused echo`,async t=>{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});
     const page=await browser.newPage({viewport:{width:1220,height:800}});
     try {
@@ -75,17 +95,21 @@ try {
       const initialScreen=await page.locator('.xterm-rows').textContent();
       assert.equal(initialScreen?.includes('a'),false,`foreground begins without echoed input: ${JSON.stringify(initialScreen)}`);
       await page.locator('.xterm-helper-textarea').focus();
+      await armEcho(page,'a');
       await page.keyboard.press('a');
       await page.waitForFunction(()=>(window as any).priorityFixture.inputs.some((input:any)=>input.id==='foreground'&&input.data==='a'));
-      await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent?.includes('a'),undefined,{timeout:250});
+      const focusedEcho=await echoMs(page); t.diagnostic(`${engine.name()} focused echo ${focusedEcho.toFixed(1)} ms`);
+      assert.ok(focusedEcho<=echoBudgetMs,`focused echo painted in ${focusedEcho.toFixed(1)} ms (limit ${echoBudgetMs})`);
       assert.equal(await page.evaluate(()=>(window as any).priorityFixture.waiting),true,'background response remains held while foreground echo paints');
       // A previously background session must become responsive immediately on selection.
       await choose(page,0,'background');
       assert.equal(await page.locator('.xterm-rows').textContent()?.then(text=>text?.includes('b')),false);
       await page.locator('.xterm-helper-textarea').focus();
+      await armEcho(page,'b');
       await page.keyboard.press('b');
       await page.waitForFunction(()=>(window as any).priorityFixture.inputs.some((input:any)=>input.id==='background'&&input.data==='b'));
-      await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent?.includes('b'),undefined,{timeout:250});
+      const selectedEcho=await echoMs(page); t.diagnostic(`${engine.name()} echo after selecting ${selectedEcho.toFixed(1)} ms`);
+      assert.ok(selectedEcho<=echoBudgetMs,`echo after selecting painted in ${selectedEcho.toFixed(1)} ms (limit ${echoBudgetMs})`);
       assert.equal(await page.evaluate(()=>(window as any).priorityFixture.waiting),true,'old background request is still held');
       await page.evaluate(()=>(window as any).priorityFixture.finishBackground());
       await page.waitForFunction(()=>document.querySelector('.pane-heading .session-state')?.textContent==='Terminada');
