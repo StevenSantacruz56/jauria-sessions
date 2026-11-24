@@ -113,7 +113,7 @@ export function mountSettings(options: Options): {
   if (options.terminalFont) {
     const f = options.terminalFont;
     font = select(Array.from({ length: f.max - f.min + 1 }, (_, i) => { const size = f.min + i; return [String(size), `${size} px`] as [string, string]; }));
-    fontHelp = help('');
+    fontHelp = help('', 'settings-row-help settings-wrap');
     appearance.append(row(labelled(font, 'Tamaño de letra del terminal', 'font', fontHelp), fontHelp, font));
   }
 
