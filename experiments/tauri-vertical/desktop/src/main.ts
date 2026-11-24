@@ -2112,6 +2112,8 @@ function syncHistoryView(newSessionBlocked: boolean) {
     const hadFocus = $('#history-view').contains(document.activeElement);
     stageView = 'terminal'; historyId = null;
     notice('Esa sesión ya no está en este perfil; se cerró su historial.');
+    // At once on a control that is always visible, then (once the panes are shown) on the terminal.
+    if (hadFocus) $('#open-command-palette').focus({ preventScroll: true });
     if (hadFocus) setTimeout(() => { if (disposed || stageView !== 'terminal') return; const active = activeView(); if (active) focusView(active); if (document.activeElement === document.body || !document.activeElement) ($<HTMLButtonElement>('#welcome-create').disabled || $('#welcome').hidden ? $('#open-command-palette') : $('#welcome-create')).focus(); });
   }
   const view = historyView();
