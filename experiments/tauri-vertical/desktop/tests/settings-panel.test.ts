@@ -135,7 +135,7 @@ for (const engine of [chromium, webkit]) {
       const toggle = page.getByRole('checkbox', { name: 'Acceso automático a Pulso' });
       assert.equal(await toggle.isChecked(), true);
       const text = await page.locator('.settings-pulso').innerText();
-      for (const phrase of [/sesión nueva de Claude Code o Codex que abras desde Jauría/, /leer y editar todos tus proyectos de Pulso/, /crear proyectos nuevos/, /No ve las tarjetas de Pendientes/,
+      for (const phrase of [/sesión nueva de Claude Code o Codex que abras desde Jauría/, /leer y editar todos tus proyectos de Pulso/, /crear proyectos nuevos/, /No ve los Pendientes/,
         /puede llegar al proveedor/, /se retira solo al terminar/, /archivos, comandos o red/, /fuera de Jauría/, /corta al momento el acceso automático de todas las sesiones, también de las abiertas/, /Activado: las sesiones nuevas reciben acceso/])
         assert.match(text, phrase);
       assert.match(await toggle.getAttribute('aria-describedby') ?? '', /scope/);

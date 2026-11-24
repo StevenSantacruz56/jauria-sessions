@@ -43,7 +43,7 @@ try {
         assert.match(await page.locator('.settings-dialog').innerText(), /se aplican y se guardan al momento/);
         assert.match(await page.locator('.settings-sessions').innerText(), /Cerrar la ventana no detiene las sesiones/);
         assert.match(await page.locator('.settings-sessions').innerText(), /Bajarlo no cierra las sesiones abiertas/);
-        assert.match(await page.locator('.settings-pulso').innerText(), /leer y editar todos tus proyectos de Pulso.*crear proyectos nuevos.*No ve las tarjetas de Pendientes/s);
+        assert.match(await page.locator('.settings-pulso').innerText(), /leer y editar todos tus proyectos de Pulso.*crear proyectos nuevos.*No ve los Pendientes/s);
         assert.deepEqual(await rect(page, '.pane:nth-child(1) .terminal-host'), host);
         await page.waitForTimeout(300); assert.equal(await resizeCount(page), resizes);
         assert.match(await page.locator('#welcome, .settings-dialog').allInnerTexts().then(t => t.join(' ')), /Cerrar la ventana no detiene las sesiones/);

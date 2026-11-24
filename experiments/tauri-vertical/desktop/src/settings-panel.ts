@@ -155,7 +155,7 @@ export function mountSettings(options: Options): {
   pulsoRow.append(node('span', 'Acceso automático a Pulso'), pulsoToggle);
   const pulsoState = help('', 'settings-row-help settings-pulso-state');
   // Permission warning: it may be clearer than before, never say less.
-  const pulsoScope = help('Si está activado, cada sesión nueva de Claude Code o Codex que abras desde Jauría puede leer y editar todos tus proyectos de Pulso (plan, fases y checkpoints) y crear proyectos nuevos. No ve las tarjetas de Pendientes. Lo que lea puede llegar al proveedor de ese agente.', 'settings-dialog-help settings-pulso-scope');
+  const pulsoScope = help('Si está activado, cada sesión nueva de Claude Code o Codex que abras desde Jauría puede leer y editar todos tus proyectos de Pulso (plan, fases y checkpoints) y crear proyectos nuevos. No ve los Pendientes. Lo que lea puede llegar al proveedor de ese agente.', 'settings-dialog-help settings-pulso-scope');
   const pulsoHow = help('Cada sesión recibe un permiso privado que se retira solo al terminar. No cambia lo que Claude Code o Codex pueden hacer con archivos, comandos o red, y no afecta a agentes que inicies fuera de Jauría. Al desactivarlo, se corta al momento el acceso automático de todas las sesiones, también de las abiertas; los accesos que des a mano abajo siguen hasta que los quites.', 'settings-dialog-help');
   pulsoState.id = `${pulsoToggle.id}-state`; pulsoScope.id = `${pulsoToggle.id}-scope`;
   pulsoToggle.setAttribute('aria-describedby', `${pulsoState.id} ${pulsoScope.id}`);
