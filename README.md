@@ -83,16 +83,20 @@ Una conversación ya abierta no carga el MCP añadido después de iniciarse. Par
 
 Cuando un programa emite explícitamente **OSC 7501**, la barra lateral, la pestaña y la cabecera del panel muestran su estado. Esta señal no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión, la sesión aparece como **progreso no informado**, aunque su proceso siga abierto; el replay no genera estados ni avisos. Desde 1.4, con un runner 1.4, el runner lee esas señales y conserva el estado, la duración del turno y lo que ya viste: sobreviven a cerrar la ventana y reconectar. Con un runner 1.3.x la reconexión reinicia este estado efímero.
 
-El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Desde 1.4, con un runner 1.4, la barra lateral y el tablero se actualizan en un segundo o menos cuando un agente edita Pulso, y cada tarjeta muestra en su pie la sesión vinculada y sus checkpoints; pulsarlo abre esa sesión. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md), [las reglas de estados de 1.3.1](docs/RELEASE_1.3.1.md) y [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
+El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Desde 1.4, con un runner 1.4, la barra lateral y el tablero se actualizan en un segundo o menos cuando un agente edita Pulso, y cada fase muestra en su pie la sesión vinculada y sus checkpoints; pulsarlo abre esa sesión. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md), [las reglas de estados de 1.3.1](docs/RELEASE_1.3.1.md) y [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
 
 La release publicada **1.3.3** incluye un DMG verificado para Apple Silicon en GitHub Releases ([pruebas y límites](docs/RELEASE_1.3.3.md)). Las pruebas y límites de 1.4.0 están en [sus notas](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); las pruebas anteriores de Pulso, en [la validación de 1.3.0](docs/PULSO_VALIDATION_1.3.0.md). Las capturas utilizan datos sintéticos.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pulso-1.4.0-oscuro.png">
-  <img src="docs/screenshots/pulso-1.4.0.png" alt="Tablero de Pulso en Jauria 1.4.0 con pestañas de tableros y pies de tarjeta con la sesión vinculada y sus checkpoints">
+  <img src="docs/screenshots/pulso-1.4.0.png" alt="Tablero de Pulso en Jauria 1.4.0: pestañas de tableros, Nuevo proyecto, Histórico con contador, Proyecto y Sesiones, y fases con la sesión vinculada y sus checkpoints">
 </picture>
 
 Tablero de ejemplo en Jauria 1.4.0. Captura sintética: no contiene sesiones ni tareas reales.
+
+![Histórico de proyectos de Pulso: uno terminado y otro archivado sin terminar, con «Ver tablero» y «Reabrir»](docs/screenshots/pulso-historico-1.4.0.png)
+
+*Histórico: cada proyecto archivado dice si se terminó o se archivó con fases abiertas; «Reabrir» lo devuelve a sus pestañas.*
 
 ## Sesiones e historial
 
@@ -127,7 +131,7 @@ Abre una sesión por herramienta y carpeta desde Nueva sesión. Configuración p
 
 ### ¿Necesito crear un proyecto para cada sesión?
 
-Puedes iniciar sesiones en cualquier carpeta, incluida tu carpeta personal, sin registrar un proyecto. Los proyectos de Pulso organizan planes y fases sin exigir Git ni crear worktrees.
+No. Puedes abrir sesiones en cualquier carpeta, incluida tu carpeta personal. En Nueva sesión, vincularla a un proyecto de Pulso es opcional. Los proyectos de Pulso organizan planes y fases sin exigir Git ni crear worktrees.
 
 ### ¿Jauria incluye el acceso a los modelos o aumenta sus cuotas?
 
@@ -143,7 +147,7 @@ El código propio está bajo GPL-3.0-only, con condiciones separadas para tercer
 
 ## Capturas
 
-Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles, sesiones ni rutas de usuario. La de Nueva sesión procede de una versión anterior con una demostración propia.
+Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles, sesiones ni rutas de usuario, y se regeneran con `node tests/capture-docs.ts` (ver [las notas de 1.4.0](docs/RELEASE_1.4.0.md#capturas)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/terminal-1.4.0-oscuro.png">
@@ -165,7 +169,11 @@ Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles,
 
 ![Ventana Nueva sesión de Jauria 1.4.0: herramienta, carpeta de trabajo, proyecto de Pulso opcional, nombre y plazas libres](docs/screenshots/nueva-sesion-1.4.0.png)
 
-*Nueva sesión (captura de una versión anterior): selección de herramienta, carpeta y nombre opcional.*
+*Nueva sesión: herramienta, carpeta de trabajo (personal, otra o reciente), proyecto de Pulso opcional y nombre; el pie dice las plazas libres.*
+
+![Uso y recursos en Jauria 1.4.0: cuotas de Claude Code y Codex, una fila por sesión, runner, interfaz y total](docs/screenshots/uso-recursos-1.4.0.png)
+
+*Uso y recursos: cuánto queda de cada cuota y qué usa cada sesión, el runner y la interfaz.*
 
 ## CPU, RAM y cuotas
 
