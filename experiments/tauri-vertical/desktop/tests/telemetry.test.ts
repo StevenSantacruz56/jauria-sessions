@@ -185,3 +185,24 @@ test('review: «other» processes are shown apart, never in Interfaz; the web en
   assert.match(resourceView(app('not_attributable'), () => null).webEngineNote!, /no se abre desde el Finder/);
   assert.match(resourceView(app('unsupported'), () => null).webEngineNote!, /no se pudo atribuir/);
 });
+
+test('honest total: without the web engine (any status but «included», or none from an older bridge) the total and the status bar say «parcial»', () => {
+  const snap = (webEngine?: string) => ({ resources: { processes: [row(10, 6, 0, { role: 'runner' })],
+    app: { ...(webEngine === undefined ? {} : { webEngine }), processes: [row(1, 100, 1, { role: 'app' }), row(2, 30, 1, { role: 'service' })] } } });
+  const included = resourceView(snap('included'), () => null);
+  assert.deepEqual([included.partial, included.total!.label, included.webEngineNote], [false, 'Total de Jauría', null]);
+  assert.equal(telemetrySummary(included, true), 'Jauría · CPU 2 % · RAM 136 MiB');
+  for (const [status, note] of [['none_found', /no se encontraron sus procesos/], ['not_attributable', /no se abre desde el Finder/],
+    ['unsupported', /no se pudo atribuir/], ['disabled', /esta versión de Jauría no lo mide/], [undefined, /no se pudo atribuir/]] as const) {
+    const view = resourceView(snap(status), () => null);
+    assert.equal(view.partial, true, String(status));
+    assert.equal(view.total!.label, 'Total de Jauría (parcial)');
+    assert.match(view.webEngineNote!, /^No incluye el motor web de la ventana: /);
+    assert.match(view.webEngineNote!, note);
+    assert.match(view.webEngineNote!, /El total es parcial\.$/);
+    assert.equal(telemetrySummary(view, true), 'Jauría · CPU 2 % · RAM 136 MiB (parcial)', 'same definition in the status bar');
+    // Other system services (Metal, audio…) still count in Interfaz.
+    assert.equal(view.window!.rss! / MiB, 130);
+  }
+  assert.equal(resourceView(null, () => null).partial, false, 'no data: nothing to call partial');
+});

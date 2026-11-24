@@ -144,16 +144,20 @@ export type ResourceView = {
   /** Processes macOS attributes to Jauría that are not the window (e.g. a job a session left behind). */
   others: ResourceLine | null;
   legacy: boolean;
-  /** The window's web engine is counted (at least one helper attributed by macOS). */
+  /** The window's web engine is counted: the bridge found at least one WebKit process (`webEngine: included`). */
   webEngine: boolean;
-  /** Why it is not, in plain words; null when counted or no window data. */
+  /** Why it is not, in plain words; null when counted or no data at all. */
   webEngineNote: string | null;
+  /** The total leaves something out: an unmeasured process or the web engine. Same flag for the table and the status bar. */
+  partial: boolean;
   missing: string | null; observedAt: number | null;
 };
 const WEB_ENGINE_NOTE: Record<string, string> = {
-  not_attributable: 'La interfaz no incluye el motor web de la ventana: macOS no permite atribuírselo a Jauría cuando no se abre desde el Finder.',
-  none_found: 'La interfaz no incluye el motor web de la ventana: no se encontraron sus procesos en esta lectura.',
+  not_attributable: 'No incluye el motor web de la ventana: macOS no permite atribuírselo a Jauría cuando no se abre desde el Finder. El total es parcial.',
+  none_found: 'No incluye el motor web de la ventana: no se encontraron sus procesos en esta lectura. El total es parcial.',
+  disabled: 'No incluye el motor web de la ventana: esta versión de Jauría no lo mide. El total es parcial.',
 };
+const WEB_ENGINE_UNKNOWN = 'No incluye el motor web de la ventana: no se pudo atribuir a Jauría. El total es parcial.';
 // Only limits that mean «a process of Jauría may be missing» are told; a
 // process that ended during the read is gone, not missing.
 const MISSING: Record<string, string> = {
@@ -208,11 +212,15 @@ export function resourceView(snapshot: TelemetrySnapshot | null, sessionTitle: (
   const unattributed = sum('Procesos de las sesiones (sin desglose)', 'unattributed', unattributedRows);
   const all = [...rows, ...appRows];
   const total = sum('Total de Jauría', 'total', all);
-  if (total && total.unmeasured) total.label = 'Total de Jauría (parcial)';
   const reason = [record(data.discovery), record(app.discovery)].map(d => d.partial === true ? string(d.reason) : null).find(r => r && MISSING[r]) ?? null;
+  // Only «included» (a WebKit process found) counts the web engine; anything
+  // else, including no status from an older bridge, leaves it out of the total.
   const engine = string(app.webEngine);
-  return { sessions, runner, window, total, unattributed, others, legacy, webEngine: engine === 'included',
-    webEngineNote: window && engine !== 'included' ? WEB_ENGINE_NOTE[engine ?? ''] ?? 'La interfaz no incluye el motor web de la ventana: no se pudo atribuir a Jauría.' : null,
+  const webEngine = engine === 'included';
+  const partial = !!total && (total.unmeasured > 0 || !webEngine);
+  if (total && partial) total.label = 'Total de Jauría (parcial)';
+  return { sessions, runner, window, total, unattributed, others, legacy, webEngine, partial,
+    webEngineNote: total && !webEngine ? WEB_ENGINE_NOTE[engine ?? ''] ?? WEB_ENGINE_UNKNOWN : null,
     missing: reason ? MISSING[reason] : null, observedAt: timestamp(data.timestampUnixMs ?? data.observedAt) };
 }
 export function formatResourceCpu(line: ResourceLine | null): string {
@@ -226,7 +234,7 @@ export function formatResourceRam(line: ResourceLine | null): string {
 export function telemetrySummary(view: ResourceView | null, connected: boolean): string {
   if (!connected) return 'Recursos sin conexión';
   const total = view?.total ?? null;
-  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu)} · RAM ${formatResourceRam(total)}${total?.unmeasured ? ' (parcial)' : ''}`;
+  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu)} · RAM ${formatResourceRam(total)}${view?.partial ? ' (parcial)' : ''}`;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
@@ -305,7 +313,7 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
   const footer = element('footer', 'dialog-footer telemetry-footer');
   const status = element('p', 'telemetry-status');
   status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  const closeButton = element('button', 'quiet', 'Cerrar'); closeButton.type = 'button';
+  const closeButton = element('button', 'secondary', 'Cerrar'); closeButton.type = 'button';
   footer.append(status, closeButton);
   dialog.append(heading, content, footer);
   document.body.append(dialog);

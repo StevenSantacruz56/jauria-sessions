@@ -196,7 +196,7 @@ export function mountSettings(options: Options): {
   const status = node('p', '', 'settings-dialog-status'); status.setAttribute('role', 'status');
   const footer = node('footer', '', 'dialog-footer');
   const messages = node('div', '', 'settings-dialog-messages');
-  const closeButton = node('button', 'Cerrar', 'quiet'); closeButton.type = 'button';
+  const closeButton = node('button', 'Cerrar', 'secondary'); closeButton.type = 'button';
   messages.append(error, retry, status);
   footer.append(messages, closeButton);
   sessions.append(warning);

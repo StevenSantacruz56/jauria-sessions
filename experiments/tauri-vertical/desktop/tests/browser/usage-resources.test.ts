@@ -70,7 +70,13 @@ try {
         await page.waitForFunction(() => !document.querySelector('#telemetry-dialog[open]'));
         assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-telemetry');
         await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
-        await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+        // «Cerrar» is a secondary button: a visible border, not bare text.
+        const close = page.locator('#telemetry-dialog').getByRole('button', { name: 'Cerrar', exact: true });
+        const look = await close.evaluate(node => { const s = getComputedStyle(node); return { cls: node.className, width: s.borderTopWidth, color: s.borderTopColor }; });
+        assert.equal(look.cls, 'secondary');
+        assert.notEqual(look.width, '0px');
+        assert.doesNotMatch(look.color, /rgba\(0, 0, 0, 0\)|transparent/);
+        await close.click();
         assert.equal(await page.locator('dialog[open]').count(), 0);
         assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-telemetry');
         assert.equal(await resizeCount(page), resizes);
@@ -138,14 +144,20 @@ try {
         assert.equal(await page.locator('.telemetry-table th', { hasText: 'CPU' }).getAttribute('title'), '100 % equivale a un núcleo completo; con varios núcleos puede pasar de 100 %.');
       });
 
-      await t.test('without an attributable web engine the window row says so in one plain line', async () => {
-        const page = await open();
-        await setTelemetry(page, {}, 'not_attributable');
-        await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
-        await page.waitForFunction(() => /motor web/.test(document.querySelector('#telemetry-dialog')?.textContent ?? ''));
-        assert.match(await dialogText(page), /La interfaz no incluye el motor web de la ventana/);
-        assert.doesNotMatch(await dialogText(page), /Puede faltar/);
-      });
+      for (const [status, why] of [['not_attributable', /no se abre desde el Finder/], ['none_found', /no se encontraron sus procesos/], ['disabled', /esta versión de Jauría no lo mide/]] as const) {
+        await t.test(`honest total (${status}): without the web engine the total and the status bar say «parcial» and one plain line says what is missing`, async () => {
+          const page = await open();
+          await setTelemetry(page, {}, status);
+          await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
+          await page.waitForFunction(() => /motor web/.test(document.querySelector('#telemetry-dialog')?.textContent ?? ''));
+          const text = await dialogText(page);
+          assert.match(text, /No incluye el motor web de la ventana: /);
+          assert.match(text, why);
+          assert.doesNotMatch(text, /Puede faltar/);
+          assert.equal(await page.locator('tr.telemetry-total').innerText().then(t => t.replace(/\s+/g, ' ')), 'Total de Jauría (parcial) 16,5 % 354 MiB');
+          assert.equal(await page.locator('#telemetry-summary').innerText(), 'Jauría · CPU 16,5 % · RAM 354 MiB (parcial)');
+        });
+      }
 
       await t.test('zero open sessions: «Ninguna sesión abierta», runner and window rows, no partial warning at rest', async () => {
         const page = await open({ open: 0, closed: 1, telemetry: { resources: { discovery: { partial: false }, processes: [{ pid: 77, available: true, rssBytes: 6 * MiB, cpuPercent: 0, cpuAvailable: true, role: 'runner' }],
