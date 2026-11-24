@@ -310,6 +310,77 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByRole('button', { name: 'Terminados', exact: true }).click(); await p.getByRole('dialog').getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
         await p.getByRole('button', { name: 'Proyecto p1', exact: true }).waitFor(); assert.equal(await run(p, 'return f.projects[0].archived'), false);
       });
+      await t.test('a pending Proyecto edit is sent when the panel is disposed or the window hides', async () => {
+        for (const how of ['dispose', 'hidden']) {
+          const p = await mounted(); await projectDetail(p);
+          await p.getByLabel('Plan (opcional) ·').fill(`Escrito justo antes de cerrar (${how})`);
+          assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="project_update").length'), 0, 'still inside the autosave pause');
+          if (how === 'dispose') await run(p, 'f.panel.dispose()');
+          else await p.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+          const writes = await run(p, 'return f.calls.filter(c=>c.op==="project_update").map(c=>c.args.plan)');
+          assert.deepEqual(writes, [`Escrito justo antes de cerrar (${how})`], how);
+        }
+      });
+      await t.test('a save that keeps failing can be discarded explicitly and unblocks the board', async () => {
+        const p = await mounted(); await projectDetail(p);
+        await run(p, 'f.failWrite=true'); const plan = p.getByLabel('Plan (opcional) ·'); await plan.fill('No llega al runner');
+        await p.getByRole('button', { name: 'Reintentar mismo cambio', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Liberar borrador', exact: true }).click();
+        assert.equal(await run(p, 'return f.calls.filter(c=>c.op==="project_update").length'), 1, 'release does not resend at once');
+        assert.match(await p.locator('.pulso-autosave-state').innerText(), /Sin guardar/);
+        await p.keyboard.press('Escape'); await p.getByRole('button', { name: 'Descartar mis cambios', exact: true }).waitFor();
+        assert.equal(await p.locator('dialog[open]').count(), 1); assert.equal(await plan.inputValue(), 'No llega al runner');
+        await p.getByRole('button', { name: 'Descartar mis cambios', exact: true }).click();
+        await p.getByText('Se perderá lo que no se guardó.', { exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Sí, descartar', exact: true }).click();
+        assert.match(await p.getByLabel('Plan (opcional) ·').inputValue(), /Plan completo/);
+        assert.equal(await p.getByRole('alert').isVisible(), false);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click(); await p.locator('dialog[open]').waitFor({ state: 'detached' });
+        await p.getByRole('button', { name: 'Pendientes', exact: true }).click(); await p.getByRole('button', { name: 'Abrir Fase solo', exact: true }).waitFor();
+        assert.equal(await run(p, 'return f.projects[0].plan'), '<script>window.compromised=true</script>\nPlan completo');
+      });
+      await t.test('archiving drops the pending undo so no phase of the archived project changes', async () => {
+        const p = await mounted(); await projectBoard(p);
+        await move(p, 'Fase i1', 'done'); await idle(p);
+        await p.getByRole('button', { name: 'Deshacer cambio de estado', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Dar por terminado', exact: true }).click(); await p.getByRole('button', { name: 'Sí, terminar', exact: true }).click(); await idle(p);
+        assert.equal(await p.getByRole('button', { name: 'Deshacer cambio de estado', exact: true }).count(), 0);
+        assert.equal(await run(p, 'return f.items.find(i=>i.id==="i1").status'), 'done');
+      });
+      for (const drawer of ['Proyecto', 'Sesiones', 'fase']) await t.test(`a project archived elsewhere closes its open ${drawer} drawer into the read-only board`, async () => {
+        const p = await mounted();
+        if (drawer === 'Proyecto') await projectDetail(p); else if (drawer === 'Sesiones') await sessionsDetail(p); else await itemDetail(p);
+        await run(p, 'f.projects[0].archived=true; f.projects[0].revision=5; f.revision++; return f.panel.refresh()');
+        await p.locator('dialog[open]').waitFor({ state: 'detached' });
+        await p.locator('.pulso-archived-badge').waitFor();
+        assert.deepEqual(await p.getByRole('button', { name: /Añadir fase|^Mover |^Proyecto$|^Sesiones$/ }).allInnerTexts(), []);
+        assert.match((await run(p, 'return f.notices')).join(' '), /se archivó desde otro sitio/);
+        assert.equal(await run(p, 'return f.calls.filter(c=>/^(project_update|item_update|link)$/.test(c.op)).length'), 0);
+      });
+      await t.test('a read-only board only views its main session: no continue and no link', async () => {
+        const p = await mounted('f.projects.push({...f.project("old"),title:"Proyecto viejo",archived:true});');
+        await p.getByRole('button', { name: 'Terminados', exact: true }).click();
+        await p.getByRole('dialog').getByRole('button', { name: 'Ver tablero', exact: true }).click(); await p.locator('.pulso-archived-badge').waitFor();
+        const toolbar = p.locator('.pulso-board-toolbar');
+        assert.equal(await toolbar.getByRole('button', { name: /Continuar|Abrir conversación|Empezar de nuevo/ }).count(), 0);
+        await toolbar.getByRole('button', { name: 'Ver sesión principal', exact: true }).click();
+        assert.deepEqual(await run(p, 'return [f.opened,f.resumed,f.created,f.calls.filter(c=>c.op==="link").length]'), [['ended'], [], [], 0]);
+      });
+      await t.test('leaving with a pending Proyecto edit saves it and continues in one gesture; a failure stays', async () => {
+        const p = await mounted(); await projectDetail(p);
+        await p.getByLabel('Nombre del proyecto', { exact: true }).fill('Antes de salir');
+        assert.equal(await run(p, 'return f.panel.draftBlocked()'), null, 'a pending autosave does not block navigation');
+        assert.equal(await run(p, 'return f.panel.saveThen(()=>{f.navigated=(f.navigated??0)+1})'), true);
+        await p.waitForFunction(() => (window as any).fixture.navigated === 1);
+        assert.equal(await run(p, 'return f.projects[0].title'), 'Antes de salir'); assert.equal(await p.locator('dialog[open]').count(), 0);
+        assert.equal(await run(p, 'return f.panel.saveThen(()=>{f.navigated++})'), false, 'nothing pending: the normal guard decides');
+        await p.getByRole('button', { name: 'Proyecto', exact: true }).click(); await p.getByLabel('Nombre del proyecto', { exact: true }).waitFor();
+        await run(p, 'f.failWrite=true'); await p.getByLabel('Nombre del proyecto', { exact: true }).fill('No se guarda');
+        assert.equal(await run(p, 'return f.panel.saveThen(()=>{f.navigated++})'), true);
+        await p.getByRole('button', { name: 'Reintentar mismo cambio', exact: true }).waitFor();
+        await p.getByText('No se guardó el proyecto. Sigues en el tablero.', { exact: true }).waitFor();
+        assert.equal(await run(p, 'return f.navigated'), 1); assert.equal(await p.locator('dialog[open]').count(), 1);
+      });
       await t.test('uncertain mutation keeps draft, freezes edits and manually reuses UUID/payload', async () => {
         const p = await mounted(); await itemDetail(p);
         await p.getByLabel('Notas', { exact: true }).fill('Mi borrador'); await run(p, 'f.failWrite=true');

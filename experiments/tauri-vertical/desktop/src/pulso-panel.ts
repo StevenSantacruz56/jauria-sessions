@@ -65,7 +65,7 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; menuAnchor(node: Node | null): HTMLElement | null; draftBlocked(): string | null;
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; saveThen(next: () => void): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; menuAnchor(node: Node | null): HTMLElement | null; draftBlocked(): string | null;
   statusChanged(revision: number | null): void; syncLive(): void; loadedPhases(): PulsoLoadedPhases | null; openPhase(id: string): Promise<void>; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
@@ -137,8 +137,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   let drawerKind:DrawerKind|null=null;
   /** Proyecto drawer autosave: writes what is typed and resolves true once nothing is left unsaved. */
   let flushProject:(()=>Promise<boolean>)|null=null;
-  /** Called after a failed write is released or its conflict reviewed (autosave resumes). */
-  let afterRelease:(()=>void)|null=null;
+  /** Called after a failed write is released (`review` false) or its conflict reviewed (true). */
+  let afterRelease:((review:boolean)=>void)|null=null;
   /** Add-phase openers of the rendered board, by column. */
   let addOpeners:Partial<Record<PulsoItem['status'],()=>void>>={};
   let intentionalCloses=0;let drawerFocus:HTMLElement|null=null;
@@ -161,7 +161,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     document.addEventListener('pointerdown',clearRecoveryFocus,true);document.addEventListener('keydown',clearRecoveryFocus,true);
   }
   let editBase: { revision: number } | null = null;
-  type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void> };
+  type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void>; discard?: () => void };
   let failed: Mutation | null = null;
   const bindings = new Map<string, ReturnType<NonNullable<PulsoPanelOptions['binding']>>>();
   function preserveDetailRender(render: () => void) {
@@ -226,8 +226,19 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       button('Consultar versión actual', () => inspectRevision(m)),
       button('Liberar borrador', () => {
         failed = null; errors.hidden = true;if(!drawer.open)renderLists();freeze();
-        say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');afterRelease?.();
+        say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');afterRelease?.(false);
       }));
+    // Autosave has no draft buttons: this is the way out when saving keeps failing.
+    const discard = m.discard;
+    if (discard) {
+      const ask: HTMLButtonElement = button('Descartar mis cambios', () => {
+        const box = el('div', '', 'pulso-confirm'); box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Descartar mis cambios');
+        const yes = button('Sí, descartar', () => { if (failed !== m) return; failed = null; errors.hidden = true; dirty = false; activeEditor = null; discard(); freeze(); }, 'primary');
+        box.append(el('span', 'Se perderá lo que no se guardó.'), yes, button('Cancelar', () => { box.replaceWith(ask); ask.focus({ preventScroll: true }); }, 'quiet'));
+        ask.replaceWith(box); yes.focus({ preventScroll: true });
+      });
+      errors.append(ask);
+    }
     freeze();
   }
   async function inspectRevision(m: Mutation) {
@@ -245,7 +256,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(!drawer.open)errors.append(button('Actualizar tablero',async()=>{failed=null;errors.hidden=true;try{await reloadBoard();if(epoch===selectionEpoch&&boardScope===null)rememberBoard();}catch{readError(()=>refresh());}freeze();}));
       if (drawer.open && editBase && m.args.expectedRevision !== undefined) errors.append(button('Revisé los cambios; conservar mi borrador', () => {
         if (editBase) editBase.revision = record.revision;
-        failed = null; errors.hidden = true; freeze(); say(afterRelease ? 'Se guardará tu versión sobre la actual.' : 'Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');afterRelease?.();
+        failed = null; errors.hidden = true; freeze(); say(afterRelease ? 'Se guardará tu versión sobre la actual.' : 'Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');afterRelease?.(true);
       }));
     } catch { say('No se pudo consultar la versión actual. Reintenta cuando vuelva la conexión.'); }
   }
@@ -303,7 +314,11 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(total>0&&complete===total){const finish:HTMLButtonElement=button('Dar por terminado',()=>confirmArchive(finish,project,true),'quiet pulso-finish-button');toolbar.append(finish);}
       toolbar.append(button('Proyecto',()=>openProjectDrawer(),'quiet pulso-plan-button'),button('Sesiones',()=>openSessionsDrawer(),'quiet pulso-plan-button'));
     }
-    if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Continuar sesión principal');toolbar.append(recovery);}
+    if(selectedProject?.mainSessionId&&readOnly){
+      // Archived: look only. A live session is focused, an ended one opens its history; nothing resumes or links.
+      const id=selectedProject.mainSessionId;if(options.sessions().some(s=>s.id===id)){const recovery=el('div','','pulso-project-recovery');recovery.append(button('Ver sesión principal',()=>openCardSession(id),'quiet'));toolbar.append(recovery);}
+    }
+    else if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Continuar sesión principal');toolbar.append(recovery);}
     closeMoveMenu(false);board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';addOpeners={};
     const noun=selectedProject?'fase':'pendiente';
     for(const status of statuses){
@@ -592,7 +607,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       state.textContent = 'Guardando…';
       inflight = (async () => {
         try { const data = await request('project_update', args); if (disposed) return; await apply(data); }
-        catch (error) { if (disposed) return; state.textContent = 'No se guardó. Tu texto sigue aquí.'; showFailure({ op: 'project_update', args, apply }, error); }
+        catch (error) {
+          if (disposed) return; state.textContent = 'No se guardó. Tu texto sigue aquí.';
+          showFailure({ op: 'project_update', args, apply, discard: () => { if (drawerKind === 'project' && selectedProject?.id === p.id) { renderProject(false); say('Cambios descartados.'); } } }, error);
+        }
         finally { inflight = null; }
       })();
       return inflight;
@@ -612,7 +630,11 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (timer !== undefined) clearTimeout(timer); timer = setTimeout(() => void save(), 800);
     });
     form.addEventListener('change', () => { if (dirty) void save(); });
-    flushProject = flush; afterRelease = () => { if (current() && pending()) { dirty = true; activeEditor = form; void save(); } };
+    // Released: the text waits for the next edit or close. Reviewed conflict: save it over the current version.
+    flushProject = flush; afterRelease = review => {
+      if (!current() || !pending()) return; dirty = true; activeEditor = form; freeze();
+      if (review) void save(); else state.textContent = 'Sin guardar. Se guardará al seguir escribiendo o al cerrar.';
+    };
     // Archive by hand, even with phases still open (Dar por terminado offers it when all are done).
     const archive = el('section', '', 'pulso-section');
     archive.append(el('h3', 'Archivar proyecto'), el('p', 'Sale de la barra lateral y de las pestañas, y queda en Terminados. Puedes reabrirlo cuando quieras.', 'pulso-muted'));
@@ -661,7 +683,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   async function archiveProject(project: PulsoProject) {
     await write('project_update', { id: project.id, expectedRevision: latestRevision(project), archived: true }, async () => {
       // The board falls back to Pendientes; the project leaves the tabs and the sidebar summary.
-      hideDrawer(); drawerKind = null; flushProject = null; afterRelease = null; selectedItem = null; selectionEpoch++;
+      hideDrawer(); drawerKind = null; flushProject = null; afterRelease = null; selectedItem = null; selectionEpoch++; undoSlot.replaceChildren();
       dirty = false; activeEditor = null; selectedProject = null; projects = await page<PulsoProject>('projects', 'projects', { archived: false });
       await reloadBoard(); rememberBoard(); options.notice(`«${project.title}» está en Terminados.`);
     });
@@ -953,6 +975,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
             ? projectRow?.revision===selectedProject?.revision ? selectedProject : (await request('project',{id:data.item.projectId})).project
             : null;
           if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='item')return;
+          if(project?.archived){archivedElsewhere(project);return;}
           const freshCheckpoints=data.checkpoints??[];
           const freshIds=new Set(freshCheckpoints.map((point:PulsoCheckpoint)=>point.id));
           const checkpoints=[...freshCheckpoints,...detailItemCheckpoints.filter(point=>!freshIds.has(point.id))];
@@ -970,12 +993,21 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         if(changed){
           const [data,links]=await Promise.all([request('project',{id:selectedProject.id}),request('links',{projectId:selectedProject.id})]);
           if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!==kind)return;
+          if(data.project?.archived){archivedElsewhere(data.project);return;}
           const nextKey=JSON.stringify([data.project,links.links??[]]);
           if(nextKey!==detailRecordKey||(sessionsChanged&&kind==='sessions')){selectedProject=data.project;projectLinks=links.links??[];preserveDetailRender(render);}
         }else if(kind==='sessions')preserveDetailRender(render);
       }
     }catch{if(available()&&gen===generation&&!failed)readError(()=>refresh());}})().finally(()=>{refreshing=null;});return refreshing;
   }
+  /** Another window or an agent archived the open project: no editable drawer stays on a read-only board. */
+  function archivedElsewhere(project:PulsoProject){
+    hideDrawer();drawerKind=null;selectedItem=null;flushProject=null;afterRelease=null;activeEditor=null;
+    selectedProject=project;undoSlot.replaceChildren();renderLists();
+    options.notice(`«${project.title}» se archivó desde otro sitio: está en Terminados, en solo lectura.`);
+  }
+  /** Send a pending Proyecto autosave now (closing, hiding the window). The request leaves synchronously. */
+  function flushNow(){if(!disposed&&dirty&&!failed&&flushProject)void flushProject();}
   function stop() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
   function schedule() {
     stop(); if (!available() || options.revisionFromStatus?.()) return;
@@ -1020,8 +1052,8 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     if(key===lastAuto.key&&Date.now()-lastAuto.at<2000)return;
     lastAuto={key,at:Date.now()};void refresh();
   }
-  function visibility() { stop(); if (available()) { void refresh(); schedule(); } }
-  document.addEventListener('visibilitychange', visibility);
+  function visibility() { if (document.hidden) flushNow(); stop(); if (available()) { void refresh(); schedule(); } }
+  document.addEventListener('visibilitychange', visibility); addEventListener('pagehide', flushNow);
   return {
     show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
     hide() {if(disposed)return;visible=false;closeMoveMenu(false);cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
@@ -1057,10 +1089,25 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     /** Command palette: close the card "…" menu before opening over the board. */
     closeMenus(){closeMoveMenu(false);},
     /** Command palette: why the tabs, phases and "+" are not usable now (null = usable). Same state as freeze(). */
-    draftBlocked(){if(disposed)return null;if(dirty||failed)return'Guarda o descarta el borrador de Pulso';if(busy)return'Pulso está guardando un cambio';return null;},
+    draftBlocked(){if(disposed)return null;if(dirty&&!failed&&drawerKind==='project'&&flushProject)return null;if(dirty||failed)return'Guarda o descarta el borrador de Pulso';if(busy)return'Pulso está guardando un cambio';return null;},
     /** Command palette: the "…" button that owns the open move menu holding `node`, if any. */
     menuAnchor(node){return moveMenu&&node&&moveMenu.node.contains(node)?moveMenu.anchor:null;},
-    prepareNavigation(){if(!visible)return true;if(dirty&&!failed&&!busy&&drawerKind==='project'){closeDrawer();return false;}if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
-    dispose() { if (disposed) return; disposed = true; visible = false;closeMoveMenu(false);outline.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
+    prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
+    /**
+     * A pending Proyecto autosave (no failure) does not block leaving: save it,
+     * close the drawer and run `next`. True when it took over; a failed save
+     * stays on the board with its error.
+     */
+    saveThen(next){
+      if(!visible||disposed||!dirty||failed||busy||drawerKind!=='project'||!flushProject)return false;
+      const flush=flushProject;say('Guardando el proyecto…');
+      void flush().then(ok=>{
+        if(disposed||!visible)return;
+        if(!ok||dirty||failed){say('No se guardó el proyecto. Sigues en el tablero.');return;}
+        hideDrawer();drawerKind=null;flushProject=null;afterRelease=null;activeEditor=null;drawerRestore=false;say('');next();
+      });
+      return true;
+    },
+    dispose() { if (disposed) return; flushNow(); removeEventListener('pagehide', flushNow); disposed = true; visible = false;closeMoveMenu(false);outline.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

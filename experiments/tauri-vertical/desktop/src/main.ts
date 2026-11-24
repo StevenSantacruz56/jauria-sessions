@@ -1947,9 +1947,15 @@ function focusInterruptControl(id: string) {
   button.focus();
   notice(`${views.get(id)?.session.title ?? 'Sesión'}: pulsa Intro o Espacio en Cancelar (Ctrl-C) para cancelar lo que está haciendo; la sesión sigue abierta.`);
 }
-/** In Pulso, a draft or a failed save keeps the board (same guard as «Terminal»). */
-function pulsoNavigationAllowed() {
-  if (stageView !== 'pulso' || !pulsoPanel || pulsoPanel.prepareNavigation()) return true;
+/**
+ * In Pulso, a draft or a failed save keeps the board (same guard as «Terminal»).
+ * A pending Proyecto autosave is saved first and `next` repeats the navigation
+ * once it succeeded (one gesture); a failed save stays with its error.
+ */
+function pulsoNavigationAllowed(next?: () => void) {
+  if (stageView !== 'pulso' || !pulsoPanel) return true;
+  if (next && pulsoPanel.saveThen(next)) return false;
+  if (pulsoPanel.prepareNavigation()) return true;
   notice('Guarda o descarta el borrador de Pulso antes de salir del tablero.'); return false;
 }
 function pulsoUnavailable(): string | null {
@@ -1972,9 +1978,9 @@ function commandContext(): AppCommandContext {
     focused: view ? { id: view.session.id, title: view.session.title, live: isLive(view.session), stopping: stopping.has(view.session.id) || stopFlights.has(view.session.id), structured: view.session.transport === 'app-server' } : null,
     actions: {
       togglePalette: () => palette?.toggle(), newSession: () => openNew(), searchSessions: focusSessionSearch, toggleSplit: () => setSplit(!split), focusOtherPane,
-      showPulso, leavePulso, newProject: () => { if (!pulsoNavigationAllowed()) return; showPulso(); pulsoPanel?.newProject(); },
+      showPulso, leavePulso, newProject: function newProjectAction() { if (!pulsoNavigationAllowed(newProjectAction)) return; showPulso(); pulsoPanel?.newProject(); },
       openSettings, markAlertsSeen, resetSidebar, toggleSection, createFixtures: smoke ? createFixtures : undefined,
-      openSession: id => { if (views.has(id) && pulsoNavigationAllowed()) selectSession(id); },
+      openSession: function openSessionAction(id) { if (views.has(id) && pulsoNavigationAllowed(() => openSessionAction(id))) selectSession(id); },
       toggleGrouping, showFilter, setTheme: applyTheme, rename: openRename, interrupt: focusInterruptControl,
       stop: id => { const target = views.get(id); if (target) openStopConfirmation(target); },
     },
@@ -2102,7 +2108,7 @@ let historyReturn: { index: number; id: string } | null = null;
 /** xterm keeps scrollback + rows lines: at that length older output was cut from the view (the runner keeps it). */
 function historyTrimmed(view: View) { return view.term.buffer.active.length >= (view.term.options.scrollback ?? 1000) + view.term.rows; }
 function showHistory(id: string) {
-  const session = views.get(id)?.session; if (!session || !pulsoNavigationAllowed()) return;
+  const session = views.get(id)?.session; if (!session || !pulsoNavigationAllowed(() => showHistory(id))) return;
   source.select(id, attentionSessions());
   historyId = id; stageView = 'history'; historySearch = { query: '', index: -1 };
   $<HTMLInputElement>('#history-search').value = ''; text('#history-search-count', '');
@@ -2222,6 +2228,7 @@ $('#history-view').addEventListener('keydown', event => {
 /** Same as the former «Volver a terminal»: a Pulso draft or failed save keeps the board. */
 function leavePulso() {
   if (stageView !== 'pulso') return;
+  if (pulsoPanel?.saveThen(leavePulso)) return;
   if (pulsoPanel && !pulsoPanel.prepareNavigation()) { notice('Guarda o descarta el borrador de Pulso antes de volver a la terminal.'); return; }
   stageView = 'terminal'; refresh();
   for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
@@ -2241,13 +2248,13 @@ $('#sidebar-project-list').addEventListener('click', event => {
 });
 /** Palette: openBoard keeps Pulso's draft guards; prepareNavigation also reports why the board stays. */
 function openBoardFromNavigation(board: string | null) {
-  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed()) return;
+  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed(() => openBoardFromNavigation(board))) return;
   showPulso();
   void pulsoPanel.openBoard(board).finally(() => { if (!disposed) refresh(); });
 }
 /** Palette «Fases»: a phase of the loaded board opens its drawer; Pulso's draft guards apply. */
 function openPhaseFromNavigation(id: string) {
-  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed()) return;
+  if (!pulsoPanel || pulsoUnavailable() || !pulsoNavigationAllowed(() => openPhaseFromNavigation(id))) return;
   showPulso();
   void pulsoPanel.openPhase(id).finally(() => { if (!disposed) refresh(); });
 }
