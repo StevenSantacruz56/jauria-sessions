@@ -212,6 +212,37 @@ function harness(options: Any = {}) {
     assert.equal(source.hiddenUnseen(), 0);
   });
 
+  test('hasMore: a mark_seen answer before the next status never raises the hidden count (H8)', async () => {
+    const { source, settle } = harness();
+    // 129 pending, 128 listed (here: 2 listed of 3).
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 's2', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 's3' }],
+      { hasMore: true, pendingSessions: 3, pendingAlerts: 3 }));
+    source.paint([]);
+    assert.equal(source.hiddenUnseen(), 1);
+    source.select('s1', [session('s1', 'exited')]);
+    await settle(); source.paint([]);
+    assert.equal(source.list([session('s1'), session('s2'), session('s3')]).filter((i: Any) => i.unseen).length, 1, 's1 is seen');
+    assert.equal(source.hiddenUnseen(), 1, 'still «y 1 más», not 2, until the next status');
+  });
+
+  test('a process end observed in the attended pane is marked seen; one in the background is not (H5)', async () => {
+    const { source, env, calls, settle } = harness();
+    source.ingestStatus(status([{ id: 's1', agent: agent({ state: 'working' }) }, { id: 's2', agent: agent({ state: 'working', epoch: 5 }) }]));
+    source.paint(['s1']);
+    // Both processes end; only s1 was on screen when it happened.
+    source.observeEnd('s1', 'running', 'exited'); source.observeEnd('s2', 'running', 'exited');
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { ended: { seq: 1 } } }) }, { id: 's2', agent: agent({ epoch: 5, alertSeq: 1, pending: { ended: { seq: 1 } } }) }]));
+    source.paint(['s1']); await settle();
+    assert.deepEqual(calls.at(-1)?.items, [{ id: 's1', epoch: 77, through: 1 }]);
+    assert.equal(calls.length, 1, 'the background end stays unseen');
+    // An end observed while not attended (or replayed at reconnect) is not marked either.
+    env.attended = 'nobody';
+    source.observeEnd('s3', 'running', 'stopped');
+    source.ingestStatus(status([{ id: 's3', agent: agent({ epoch: 9, alertSeq: 1, pending: { ended: { seq: 1 } } }) }]));
+    env.attended = 's3'; source.paint(['s3']); await settle();
+    assert.equal(calls.length, 1);
+  });
+
   test('hasMore: a record the next status omits is dropped, not kept as pending; the hidden count stays exact', () => {
     const { source } = harness();
     const pendingRecord = agent({ alertSeq: 1, pending: { finished: { seq: 1, frame: 2 } } });

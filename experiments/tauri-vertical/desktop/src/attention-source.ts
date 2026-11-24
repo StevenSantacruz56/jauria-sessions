@@ -19,6 +19,7 @@ import { SessionAttention, type Attention, type AttentionSession, type ExternalC
 export { SessionAttention };
 import { parseProgramStatus, ProgramStatusTracker, type ProgramState } from './program-status';
 import { agentActivity, sessionActivity, type ActivityKind } from './session-activity';
+import { isLiveStatus } from './session-lifecycle';
 
 export type DisplayState = Exclude<ProgramState, 'clear'>;
 export type AgentAlertKind = 'needs' | 'finished' | 'bell' | 'notify' | 'ended' | 'permission';
@@ -190,6 +191,10 @@ export class RunnerAttentionSource implements AttentionSource {
   private liveSince = new Set<string>();
   /** New alerts (above the native baseline) of records dropped by omission, offered to macOS for RETAIN_NATIVE_MS. */
   private retained = new Map<string, { keys: string[]; at: number }>();
+  /** Sessions whose process end this window observed while attended: their `ended` (no frame) was seen on screen. */
+  private endedOnScreen = new Set<string>();
+  /** Pending sessions `status` did not list, from that same status: a mark_seen answer never changes it (only the next status). */
+  private hidden = 0;
   private generation: string | null = null;
   private token = 0;
   private flying = false;
@@ -242,6 +247,10 @@ export class RunnerAttentionSource implements AttentionSource {
       if (this.summary.hasMore) for (const id of present) if (!listed.has(id)) this.unlistedAtConnect.add(id);
     }
     for (const id of [...this.unlistedAtConnect]) if (!present.has(id)) this.unlistedAtConnect.delete(id);
+    for (const id of [...this.endedOnScreen]) if (!present.has(id)) this.endedOnScreen.delete(id);
+    // Same snapshot as the totals: pending records kept from this status (listed, or refreshed by terminal_live).
+    const listedPending = [...this.agents.values()].filter(a => Object.keys(a.pending).length > 0).length;
+    this.hidden = this.summary.hasMore ? Math.max(0, this.summary.pendingSessions - listedPending) : 0;
     return changed;
   }
 
@@ -296,11 +305,7 @@ export class RunnerAttentionSource implements AttentionSource {
     return a.state === null ? null : 'idle';
   }
   since(id: string) { const a = this.agent(id); return !a ? null : a.state === 'working' ? a.turnStartedAt ?? a.changedAt : a.changedAt; }
-  hiddenUnseen() {
-    if (!this.summary.hasMore) return 0;
-    const listed = [...this.painted.values()].filter(a => Object.keys(a.pending).length > 0).length;
-    return Math.max(0, this.summary.pendingSessions - listed);
-  }
+  hiddenUnseen() { return this.hidden; }
   /** Agent alerts at or below the connection baseline never become a macOS notice. */
   nativeItems(items: readonly Attention[]): Attention[] {
     const fresh = (key: string) => {
@@ -347,10 +352,11 @@ export class RunnerAttentionSource implements AttentionSource {
       if (!a || !this.hooks.isAttended(id) || !this.hooks.canMark(id)) continue;
       const consumed = this.hooks.consumedFrame(id);
       const pending = this.pending(id, a);
-      const ready = (p: AgentAlert) => p.frame !== null && consumed !== null && consumed >= p.frame;
-      const blocked = pending.filter(([, p]) => !ready(p)).map(([, p]) => p.seq);
+      // A frame alert once xterm consumed its frame; a process end (no frame) once this window saw it happen here.
+      const ready = (kind: AgentAlertKind, p: AgentAlert) => p.frame !== null ? consumed !== null && consumed >= p.frame : kind === 'ended' && this.endedOnScreen.has(id);
+      const blocked = pending.filter(([kind, p]) => !ready(kind, p)).map(([, p]) => p.seq);
       const through = blocked.length ? Math.min(...blocked) - 1 : a.alertSeq;
-      const marked = pending.filter(([, p]) => ready(p) && p.seq <= through);
+      const marked = pending.filter(([kind, p]) => ready(kind, p) && p.seq <= through);
       if (marked.length) this.mark(id, a, through, marked);
     }
     void this.flush();
@@ -411,14 +417,17 @@ export class RunnerAttentionSource implements AttentionSource {
   }
   program() { return false; }
   signal() { /* The runner reads BEL/OSC; the client parser stays quiet. */ }
-  observeEnd() { /* `ended` comes from the runner. */ }
+  /** `ended` comes from the runner; this only notes an end that happened in the attended pane (seen there). */
+  observeEnd(id: string, previous: string, status: string) {
+    if (isLiveStatus(previous) && (status === 'exited' || status === 'stopped' || status === 'failed') && this.hooks.isAttended(id)) this.endedOnScreen.add(id);
+  }
   consumeActivity() { return false; }
   forget() { /* Records are the runner's. */ }
   reset() {
     this.token++; this.flying = false;
     this.agents.clear(); this.painted.clear(); this.optimistic.clear(); this.wanted.clear(); this.sent.clear();
     this.baseline.clear(); this.baselined = false; this.baselineFirstSight = false; this.generation = null; this.volatileSeen = false;
-    this.unlistedAtConnect.clear(); this.liveSince.clear(); this.retained.clear();
+    this.unlistedAtConnect.clear(); this.liveSince.clear(); this.retained.clear(); this.endedOnScreen.clear(); this.hidden = 0;
   }
 }
 

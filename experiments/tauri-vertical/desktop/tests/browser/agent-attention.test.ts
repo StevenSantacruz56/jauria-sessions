@@ -91,7 +91,16 @@ async function install(page: Page, options: Options) {
       listed() { return [...listing().listed]; },
       output(id: string, data: string) { const f = frames.get(id)!; f.push({ index: f.length + 1, kind: 'output', data: btoa(data) }); return f.length; },
       agentOf(id: string) { return structuredClone(agents.get(id)); },
+      /** The session's runner status (a process end: exited, stopped, failed). */
+      status(id: string, value: string) { sessions.find(s => s.id === id).status = value; touch(id); },
+      /** Hold the next mark_seen answer until releaseMark(); meanwhile alerts may arrive. */
+      holdMark() { holdMark = true; }, releaseMark() { holdMark = false; markRelease?.(); markRelease = undefined; },
+      get markWaiting() { return !!markRelease; },
+      /** document.visibilityState as macOS reports a hidden/minimised window. */
+      visibility(value: 'visible' | 'hidden') { visibility = value; document.dispatchEvent(new Event('visibilitychange')); },
     };
+    let holdMark = false, markRelease: (() => void) | undefined, visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' } },
@@ -126,6 +135,7 @@ async function install(page: Page, options: Options) {
           }
           if (op === 'mark_seen' && options.runner) {
             marks.push(structuredClone(args.items));
+            if (holdMark) await new Promise<void>(resolve => { markRelease = resolve; });
             const items = args.items.map((item: any) => {
               const a = agents.get(item.id); if (!a) return { id: item.id, agent: null }; touch(item.id);
               if (rejectNext || a.epoch !== item.epoch) {
@@ -328,6 +338,83 @@ try {
           });
         });
       }
+
+      const enableNative = async (page: Page) => {
+        await page.locator('#open-settings').click();
+        await page.locator('#enable-native-notifications').click();
+        await page.waitForFunction(() => document.querySelector('#enable-native-notifications')?.textContent?.startsWith('Desactivar'));
+        await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+      };
+      const unread = (page: Page) => page.evaluate(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread ?? '0');
+
+      await t.test('bell, title, Dock, rows and status bar agree with several kinds pending', async () => {
+        await fixture({ runner: true, closed: 2 }, async page => {
+          await open(page);
+          await fx(page, `f.agent('foreground',{state:'blocked'}); f.raise('foreground','needs',null);`);
+          // The attended foreground is not counted as new; the three others are.
+          await page.waitForFunction(() => document.querySelector('#status-needs-text')?.textContent === '1 te necesita');
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '3');
+          assert.equal(await page.locator('#session-alerts').getAttribute('data-total'), '4');
+          assert.equal(await page.title(), '(3) Avisos · Jauría');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 3, 'Dock = bell');
+          assert.equal(await page.locator('#status-finished-text').textContent(), '3 terminaron');
+          // Leaving the window: the foreground counts too, everywhere at once.
+          await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur'));`);
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '4');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 4);
+          assert.equal(await page.title(), '(4) Avisos · Jauría');
+        });
+      });
+
+      await t.test('a hidden window marks nothing seen and counts the alert; showing it marks the consumed frame', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await page.waitForTimeout(600);
+          await fx(page, `f.visibility('hidden'); f.raise('foreground','bell',f.output('foreground','\\u0007bell\\r\\n'));`);
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '2');
+          await page.waitForTimeout(1500);
+          assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.marks), [], 'nobody is looking');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.badges.at(-1)), 2);
+          await fx(page, `f.visibility('visible');`);
+          await page.waitForFunction(() => (window as any).agentFixture.marks.length === 1);
+          assert.equal(await unread(page), '1', 'only the background finish is left');
+        });
+      });
+
+      await t.test('an alert arriving while mark_seen is in flight stays unseen', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '1');
+          await fx(page, `f.holdMark();`);
+          await row(page, 'background').click();
+          await page.waitForFunction(() => (window as any).agentFixture.markWaiting);
+          await fx(page, `f.raise('background','notify',null);`);
+          await page.waitForTimeout(1200);
+          await fx(page, `f.releaseMark();`);
+          await row(page, 'foreground').click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '1');
+          assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.marks[0]), [{ id: 'background', epoch: 777, through: 1 }]);
+          assert.equal(await row(page, 'background').getAttribute('data-unseen'), 'true', 'the notify that raced the mark is still new');
+          assert.equal(await page.evaluate(() => (window as any).agentFixture.agentOf('background').seenSeq), 1);
+        });
+      });
+
+      await t.test('a process end seen on screen is not news later: no unread and no macOS notice after leaving', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await enableNative(page);
+          await page.waitForTimeout(600);
+          await fx(page, `f.status('foreground','exited'); f.agent('foreground',{state:null,turnOpen:false}); f.raise('foreground','ended',null);`);
+          await page.waitForFunction(() => document.querySelector('#session-list .session-item[data-session-id="foreground"]')?.getAttribute('data-activity') !== 'working');
+          await page.waitForTimeout(1500);
+          // The person saw it end in the focused pane: same rule as a consumed BEL.
+          await page.waitForFunction(() => (window as any).agentFixture.agentOf('foreground').seenSeq === 1);
+          await row(page, 'background').click();
+          await page.waitForTimeout(2000);
+          assert.equal(await unread(page), '0');
+          assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.notices), [], 'no «Actividad finalizada» for what was on screen');
+        });
+      });
 
       await t.test('degraded mode: a BEL behind the sidebar drawer at 760 px is an unread alert', async () => {
         await fixture({ runner: false, viewport: { width: 760, height: 640 } }, async page => {
