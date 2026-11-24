@@ -1,8 +1,10 @@
-//! Provider hooks (proposal) with a fake `claude` that behaves like Claude Code
-//! with hooks: it reads `--settings`, then runs the configured hook commands
-//! with a JSON payload on stdin, as Claude does for UserPromptSubmit,
-//! Notification (permission prompt), PostToolUse and Stop. Disposable HOME,
-//! data dir and socket. Never the real CLI, profile or runner.
+//! Provider hooks with a fake `claude` that behaves like Claude Code with
+//! hooks: it reads `--settings`, then runs the configured hook commands with a
+//! JSON payload on stdin, each in a session of its own without a controlling
+//! terminal and with piped stdio, as Claude Code 2.1 does (observed on the
+//! installed app: its hook children have tty `??` and `/dev/tty` fails with
+//! ENXIO). Disposable HOME, data dir and socket. Never the real CLI, profile
+//! or runner.
 use serde_json::{Value, json};
 use std::{fs, io::{BufRead, BufReader, Read, Write}, os::unix::{fs::PermissionsExt, net::UnixStream}, path::PathBuf,
     process::{Child, Command, Stdio}, thread, time::{Duration, Instant}};
@@ -20,11 +22,24 @@ import json, subprocess, sys, time
 hooks = json.load(open(sys.argv[1])).get("hooks")
 if not hooks:
     print("NOHOOKS", flush=True); sys.exit(0)
+import os
+home = os.environ["HOME"]
+given = os.environ.get("JAURIA_SESSION_TTY", "")
+open(os.path.join(home, "tty-env"), "w").write("ttys" if given.startswith("/dev/ttys") else "missing")
+env = dict(os.environ)
+if os.path.exists(os.path.join(home, "no-tty-env")):
+    env.pop("JAURIA_SESSION_TTY", None)   # fallback: only the ancestors' terminal is left
+if os.path.exists(os.path.join(home, "bogus-tty")):
+    env["JAURIA_SESSION_TTY"] = os.path.join(home, "bogus")   # tampered: a regular file
 def fire(event, payload):
+    # Like Claude Code: each hook in a session of its own, without a controlling
+    # terminal (/dev/tty fails there), stdin/stdout/stderr through pipes.
     for group in hooks.get(event, []):
         for hook in group["hooks"]:
-            subprocess.run(["/bin/sh", "-c", hook["command"]], input=json.dumps(payload).encode(), timeout=5)
-import os
+            done = subprocess.run(["/bin/sh", "-c", hook["command"]], input=json.dumps(payload).encode(), timeout=5,
+                start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            if done.returncode != 0 or done.stdout or done.stderr:
+                open(os.path.join(home, "hook-noise"), "a").write(event + "\n")
 fire("UserPromptSubmit", {"hook_event_name": "UserPromptSubmit", "prompt": "SECRET-PROMPT"})
 time.sleep(0.2)
 if os.path.exists(os.path.join(os.environ["HOME"], "api-error")):
@@ -138,6 +153,41 @@ fn claude_hooks_declare_turn_and_permission_through_the_pty() {
     // The settings keep the quota statusLine next to the hooks.
     let settings: Value = serde_json::from_str(&fs::read_to_string(f.path("home/settings.json")).unwrap()).unwrap();
     assert!(settings["statusLine"].is_object() && settings["hooks"]["Stop"].is_array());
+    // The runner gave the session its PTY path; the hooks (no controlling terminal) stayed silent and exited 0.
+    assert_eq!(fs::read_to_string(f.path("home/tty-env")).unwrap(), "ttys");
+    assert!(!f.path("home/hook-noise").exists(), "a hook failed or printed");
+}
+
+/// Fallback: without JAURIA_SESSION_TTY (a session started otherwise), the
+/// hook finds the PTY as the controlling terminal of its nearest ancestor.
+#[test]
+fn without_the_variable_the_hook_finds_the_ancestor_terminal() {
+    let f = Fixture::new();
+    fs::write(f.path("home/no-tty-env"), "").unwrap();
+    f.rpc("start", json!({"id":"anc","title":"anc","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));
+    f.wait_output("anc", "FAKE_DONE");
+    let end = Instant::now() + Duration::from_secs(5);
+    while !f.agent("anc")["pending"]["finished"].is_object() {
+        assert!(Instant::now() < end, "no finished through the ancestor's terminal: {}", f.agent("anc"));
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A tampered variable (a regular file, not this user's tty) is never written;
+/// the hook still reaches the session through its ancestor.
+#[test]
+fn a_tampered_variable_is_not_written() {
+    let f = Fixture::new();
+    fs::write(f.path("home/bogus-tty"), "").unwrap();
+    fs::write(f.path("home/bogus"), "").unwrap();
+    f.rpc("start", json!({"id":"bog","title":"bog","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));
+    f.wait_output("bog", "FAKE_DONE");
+    let end = Instant::now() + Duration::from_secs(5);
+    while !f.agent("bog")["pending"]["finished"].is_object() {
+        assert!(Instant::now() < end, "no finished: {}", f.agent("bog"));
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(fs::read(f.path("home/bogus")).unwrap(), b"", "the tampered path was written");
 }
 
 #[test]

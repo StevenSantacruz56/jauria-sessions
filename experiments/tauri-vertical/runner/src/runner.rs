@@ -747,6 +747,13 @@ impl Runner {
             if let Some(notify)=crate::provider_signals::codex_notify(&std::env::current_exe()?,&home,&cwd)? {cmd.arg("-c");cmd.arg(notify);}
         }
         let pair = native_pty_system().openpty(size).context("open PTY")?;
+        // Provider hooks (Claude Code, Codex notify) run without a controlling terminal:
+        // they find this session's PTY through the environment they inherit.
+        if matches!(kind,"claude"|"codex") {
+            if let Some(name)=pair.master.tty_name().and_then(|p|p.to_str().map(str::to_owned)).filter(|p|crate::provider_signals::session_tty_path(p)) {
+                cmd.env(crate::provider_signals::TTY_ENV,name);
+            }
+        }
         let reader = pair.master.try_clone_reader().context("clone PTY reader")?;
         let writer = pair.master.take_writer().context("take PTY writer")?;
         let fd = pair.master.as_raw_fd().context("Unix PTY fd required")?;

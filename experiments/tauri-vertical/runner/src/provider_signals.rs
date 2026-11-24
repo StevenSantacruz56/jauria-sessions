@@ -5,8 +5,9 @@
 //! Jauría cannot tell «finished its turn» or «waiting for your permission»
 //! from their PTY output. Each session Jauría launches gets per-invocation
 //! hooks that run `aw-runner --attention-hook <state>`, which writes one OSC
-//! 7501 sequence to the session's controlling terminal (`/dev/tty`, i.e. the
-//! PTY the runner already reads). The existing scanner turns it into state and
+//! 7501 sequence to the session's PTY (the one the runner already reads),
+//! found through `JAURIA_SESSION_TTY` or an ancestor's terminal: Claude Code
+//! runs hooks without a controlling terminal, so `/dev/tty` is only a last resort. The existing scanner turns it into state and
 //! alerts: nothing new crosses the socket, and no content of the provider
 //! (prompt, tool, message) is read or forwarded.
 //!
@@ -23,6 +24,8 @@
 //!
 //! The hook never fails a session: it prints nothing, always exits 0, never
 //! waits for more than ~200 ms on stdin, and gives up silently without a tty.
+//! (Earlier builds wrote only to `/dev/tty`: no signal ever reached the runner
+//! from a real Claude Code, whose hooks have no controlling terminal.)
 //! Off switch: the file `provider-signals-off` in the profile directory.
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -47,20 +50,79 @@ pub fn sequence(state: &str) -> Option<&'static [u8]> {
     })
 }
 
+/// The session's PTY (its slave device), set by the runner in the environment
+/// of every Claude Code / Codex session it starts. Hooks inherit it.
+pub const TTY_ENV: &str = "JAURIA_SESSION_TTY";
+
 /// `aw-runner --attention-hook <state> [ignored provider arguments…]`.
 /// Silent, bounded and always successful for the caller: errors are swallowed.
+///
+/// Claude Code runs its hooks in a session of their own without a controlling
+/// terminal (`/dev/tty` fails with ENXIO there), so the PTY is found, in order:
+/// 1. `JAURIA_SESSION_TTY`, validated (`/dev/ttys<digits>`, a character
+///    device owned by this user, checked on the open descriptor);
+/// 2. the controlling terminal of the nearest ancestor that has one (Claude
+///    itself), walking up at most 16 parents with `proc_pidinfo`;
+/// 3. `/dev/tty`.
 pub fn hook(state: Option<&str>) {
     drain_stdin(Duration::from_millis(200));
     let Some(bytes) = state.and_then(sequence) else { return };
-    let _ = write_tty(bytes);
+    let _ = write_session_tty(bytes, std::env::var_os(TTY_ENV).as_deref());
 }
 
-fn write_tty(bytes: &[u8]) -> Result<()> {
+fn write_session_tty(bytes: &[u8], from_env: Option<&std::ffi::OsStr>) -> Result<()> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(path) = from_env.and_then(|p| p.to_str()).filter(|p| session_tty_path(p)) { candidates.push(path.into()); }
+    if let Some(path) = ancestor_tty() { candidates.push(path); }
+    for path in candidates {
+        if let Ok(mut tty) = open_own_tty(&path) { tty.write_all(bytes)?; return Ok(()); }
+    }
     use std::os::unix::fs::OpenOptionsExt;
     let mut tty = std::fs::OpenOptions::new().write(true)
         .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC).open("/dev/tty")?;
     tty.write_all(bytes)?;
     Ok(())
+}
+
+/// `/dev/ttys` followed by 1 to 4 digits: the macOS pseudo-terminal slaves.
+pub fn session_tty_path(path: &str) -> bool {
+    path.strip_prefix("/dev/ttys").is_some_and(|n| (1..=4).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Opens for writing only, never as controlling terminal, without blocking, and
+/// keeps it only if the descriptor is a character device owned by this user.
+fn open_own_tty(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+    ensure!(path.to_str().is_some_and(session_tty_path), "not a session tty path");
+    let file = std::fs::OpenOptions::new().write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW).open(path)?;
+    let meta = file.metadata()?;
+    ensure!(meta.file_type().is_char_device() && meta.uid() == unsafe { libc::geteuid() }, "not this user's terminal");
+    ensure!(unsafe { libc::isatty(std::os::fd::AsRawFd::as_raw_fd(&file)) } == 1, "not a terminal");
+    Ok(file)
+}
+
+unsafe extern "C" { fn devname(dev: libc::dev_t, kind: libc::mode_t) -> *const libc::c_char; }
+
+/// The controlling terminal of the nearest ancestor that has one.
+fn ancestor_tty() -> Option<std::path::PathBuf> {
+    let mut pid = unsafe { libc::getppid() };
+    for _ in 0..16 {
+        if pid <= 1 { return None; }
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let read = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+        if read != size { return None; }
+        if info.e_tdev != u32::MAX && info.e_tdev != 0 {
+            let name = unsafe { devname(info.e_tdev as libc::dev_t, libc::S_IFCHR) };
+            if name.is_null() { return None; }
+            let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_str().ok()?;
+            let path = format!("/dev/{name}");
+            return session_tty_path(&path).then(|| path.into());
+        }
+        pid = info.pbi_ppid as libc::pid_t;
+    }
+    None
 }
 
 /// Claude writes the hook's JSON on stdin and may fail the hook on a broken
@@ -144,6 +206,24 @@ fn user_has_notify(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_tty_from_the_environment_is_written_and_validated() {
+        let (mut master, mut slave) = (0, 0);
+        let mut name = [0 as libc::c_char; 128];
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, name.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        let path = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap().to_owned();
+        assert!(session_tty_path(&path), "{path}");
+        write_session_tty(sequence("blocked").unwrap(), Some(std::ffi::OsStr::new(&path))).unwrap();
+        let mut buffer = [0u8; 64];
+        let read = unsafe { libc::read(master, buffer.as_mut_ptr().cast(), buffer.len()) };
+        assert!(read > 0 && buffer[..read as usize].windows(13).any(|w| w == b"state=blocked"), "the PTY did not get the sequence");
+        unsafe { libc::close(master); libc::close(slave); }
+        // Only /dev/ttys<digits>; a regular file with that shape of name cannot pass open_own_tty either.
+        for bad in ["/dev/null", "/dev/tty", "/dev/ttys", "/dev/ttys12345", "/dev/ttys1/../null", "/tmp/ttys001", "/dev/ttysa01"] { assert!(!session_tty_path(bad), "{bad}"); }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        assert!(open_own_tty(file.path()).is_err());
+    }
 
     #[test]
     fn sequences_are_what_the_scanner_reads() {
