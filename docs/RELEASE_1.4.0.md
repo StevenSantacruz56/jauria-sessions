@@ -53,10 +53,10 @@ Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesi
 
 | Batería | Último resultado conocido en la rama |
 | --- | --- |
-| Escritorio, unidad (`node --test tests/*.test.ts`) | 168 pasadas, 0 fallidas, 5 salteadas (166 antes de `9587643`, que añadió dos pruebas) |
-| Navegador (`tests/browser/*.test.ts`, Chrome y WebKit) | 131 pasadas, 0 fallidas |
+| Escritorio, unidad (`node --test tests/*.test.ts`) | 185 pasadas, 0 fallidas, 5 salteadas |
+| Navegador (`tests/browser/*.test.ts`, Chrome y WebKit) | 243 pasadas, 0 fallidas |
 | `pulso-panel` (Chrome y WebKit) | 131 pasadas |
-| Configuración y permisos (`settings-panel`, `agent-permissions`) | 56 pasadas |
+| Configuración y permisos (`settings-panel`, `agent-permissions`) | 64 pasadas |
 | `attention-consistency` (Chrome + WebKit) | 9 + 9 pasadas |
 | `terminal-stream` (Chrome + WebKit) | 15 + 15 pasadas |
 | Runner (`cargo test --locked` y suites RPC) | 356 pasadas, 0 fallidas, 6 salteadas |
@@ -65,7 +65,7 @@ Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesi
 
 Las 6 pruebas salteadas del runner son mediciones (`listener_latency`, `pulso_latency`, ráfaga del PTY y escalas de Pulso) y la comprobación de vuelta atrás, que necesita el binario de la versión anterior; se activan a mano con `--ignored`.
 
-**Build de la entrega (23 de noviembre de 2026, commit `ad87506`).** `python3 scripts/build-macos.py` terminó sin fallos en un Mac Apple Silicon y produjo el bundle `Jauria.app` 1.4.0 sin firma. Ejecutó, sobre ese commit: Python 24 pasadas; escritorio, unidad 168 pasadas, 0 fallidas, 5 salteadas; navegador 131 pasadas, 0 fallidas; `pulso-panel` 131 pasadas; Configuración y permisos 56 pasadas; `attention-consistency` 9 + 9 pasadas; `terminal-stream` 15 + 15 pasadas; runner 356 pasadas, 0 fallidas, 6 salteadas; puente nativo 43 pasadas. No se generó DMG ni checksum: esta entrega no está empaquetada para distribución.
+**Build de la entrega (23 de noviembre de 2026, commit `964b2aa`).** `python3 scripts/build-macos.py` terminó sin fallos en un Mac Apple Silicon y produjo el bundle `Jauria.app` 1.4.0 sin firma. Ejecutó, sobre ese commit: Python 24 pasadas; escritorio, unidad 185 pasadas, 0 fallidas, 5 salteadas; navegador 243 pasadas, 0 fallidas; `pulso-panel` 131 pasadas; Configuración y permisos 64 pasadas; `attention-consistency` 9 + 9 pasadas; `terminal-stream` 15 + 15 pasadas; runner 356 pasadas, 0 fallidas, 6 salteadas; puente nativo 43 pasadas. Un build anterior de esta misma versión se hizo sobre `ad87506`, antes de la barra lateral ajustable, la Configuración nueva y el ciclo de vida de las sesiones. No se generó DMG ni checksum: esta entrega no está empaquetada para distribución.
 
 La versión de frontend, runner, puente y bundle es 1.4.0 (`python3 scripts/version.py --check`).
 
