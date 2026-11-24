@@ -352,6 +352,8 @@
 .pulso-detail h4 { margin: 14px 0 4px; font-size: 12px; font-weight: 600; }
 .pulso-form, .pulso-section { max-width: 74ch; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
 .pulso-detail > .pulso-form:first-of-type { margin-top: 16px; padding-top: 0; border-top: 0; }
+/* The first block of a drawer sits right under its header: the separator is only between blocks. */
+.pulso-detail > .pulso-form:first-child, .pulso-detail > .pulso-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .pulso-form > .pulso-muted, .pulso-section > .pulso-muted { margin-bottom: 12px; }
 .pulso-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-bottom: 12px; font-size: 12px; font-weight: 500; }
 .pulso-field :where(input, select, textarea) { width: 100%; min-width: 0; font-weight: 400; }

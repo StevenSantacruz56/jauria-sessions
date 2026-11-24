@@ -24,7 +24,7 @@ async function install(page: Page) {
     const w = window as any;
     const HOME = '/Users/tu-usuario';
     const sessions: any[] = [
-      { id: 'main', title: 'Planificar la entrega 1.4', kind: 'claude', cwd: HOME, status: 'running', rows: 24, cols: 80 },
+      { id: 'main', title: 'Planificar la entrega 1.4', kind: 'claude', cwd: `${HOME}/proyectos/entrega`, status: 'running', rows: 24, cols: 80 },
       { id: 'precios', title: 'Revisar la tabla de precios', kind: 'codex', cwd: `${HOME}/proyectos/precios`, status: 'running', rows: 24, cols: 80 },
       { id: 'tokens', title: 'Migrar tokens de color', kind: 'codex', cwd: `${HOME}/proyectos/tokens`, status: 'running', rows: 24, cols: 80 },
       { id: 'shell', title: 'Terminal', kind: 'terminal', cwd: HOME, status: 'running', rows: 24, cols: 80 },
