@@ -5,13 +5,26 @@ Pulso es el espacio de planificación dentro de Jauria 1.3.0. Cada proyecto repr
 ## Empezar desde una sesión
 
 1. Abre Claude Code o Codex como siempre, incluso desde tu carpeta personal y sin Git.
-2. Entra a Pulso y pulsa el **+** (Nuevo proyecto) junto a las pestañas de tableros, en la barra superior. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. La casilla conserva la sesión que nombra aunque cambies de terminal antes de crear el proyecto. Pulsa **Crear proyecto** para abrir su pestaña de tablero.
-3. Usa **Añadir fase** en Por hacer, En curso o En espera. Escribe el título y confirma **Añadir tarjeta**: se crea directamente en esa columna. Hecho no tiene captura inline.
-4. Arrastra el agarre de una tarjeta con el puntero hasta otra columna o abre su menú **…** (Mover a Por hacer, En curso, En espera o Hecho), también con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
-5. Pulsa el título de una tarjeta para ver el detalle derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la tarjeta no crea ni inicia un PTY.
-6. Abre **Plan y sesiones** en la barra del proyecto para editar el plan opcional, cambiar la sesión principal y vincular sesiones. **Configurar permisos…** abre el acceso manual de una sesión existente. La principal no cambia automáticamente cuando termina.
+2. Entra a Pulso y pulsa **Nuevo proyecto** junto a las pestañas de tableros, en la barra superior. Escribe **Nombre del proyecto**. Si hay sesión actual, **Usar «…» como sesión principal** aparece marcada; puedes desmarcarla. La casilla conserva la sesión que nombra aunque cambies de terminal antes de crear el proyecto. En su lugar puedes marcar **Empezar una sesión nueva para este proyecto** (las dos casillas se excluyen). Pulsa **Crear proyecto** para abrir su pestaña de tablero: la primera fase de Por hacer queda abierta para escribir. Con la casilla de sesión nueva se abre además el diálogo de siempre de **Nueva sesión**; la sesión que arranque desde él queda como **sesión principal** del proyecto (un `project_update` con `mainSessionId`, reintentado una vez releyendo la revisión; si falla, un aviso dice que la elijas en Sesiones). Si cancelas el diálogo, el proyecto queda creado sin sesión.
+3. Usa **Añadir fase**, justo debajo de la última fase de cualquier columna, también en Hecho. Escribe el título y confirma **Añadir fase**: se crea directamente en esa columna.
+4. Arrastra el agarre de una fase con el puntero hasta otra columna o abre su menú **…** (Mover a Por hacer, En curso, En espera o Hecho), también con el teclado. Ambas acciones cambian el estado y conservan el orden de fases. No hay reordenación dentro de una columna, columnas personalizadas ni traslado entre proyectos.
+5. Pulsa el título de una fase para ver el detalle derecho. Edita título, notas y estado; consulta **Último avance** y **Siguiente paso** cuando existe un checkpoint. **Guardar avance** está plegado hasta que quieras registrar continuidad. Abrir la fase no crea ni inicia un PTY.
+6. En la barra del proyecto, **Proyecto** abre el nombre y el plan opcional, y **Sesiones** la sesión principal, las sesiones vinculadas (abrir, continuar o ver historial) y **Vincular sesión**. La principal no cambia automáticamente cuando termina.
 
-La pestaña fija **Pendientes** muestra tarjetas independientes sin proyecto, incluidas las que están en Hecho. Usa **Añadir pendiente** en las tres primeras columnas. No necesita repositorio ni sesión.
+La pestaña fija **Pendientes** muestra pendientes independientes sin proyecto, incluidos los que están en Hecho. Usa **Añadir pendiente** bajo el último de cualquier columna. No necesita repositorio ni sesión. En los textos, un proyecto tiene **fases** y Pendientes tiene **pendientes**; la interfaz no habla de «tarjetas».
+
+### Proyecto y Sesiones (1.4.0)
+
+- **Proyecto** guarda solo, como Configuración: el nombre y el plan se escriben tras una pausa breve (menos de un segundo), al salir de un campo y antes de cerrar el cajón o salir del tablero. No hay «Guardar proyecto» ni «Descartar borrador». Cada guardado usa `project_update` con la `expectedRevision` del último guardado confirmado; un fallo deja el texto en su sitio, impide cerrar sin decidir y ofrece **Reintentar mismo cambio**, **Consultar versión actual** (con **Revisé los cambios; conservar mi borrador**, que vuelve a guardar tu texto sobre la revisión actual) o **Liberar borrador**. Un nombre vacío no se guarda.
+- **Sesiones** aplica la sesión principal al elegirla (`project_update` solo con `mainSessionId`). **Vincular sesión** es una acción: elegir una sesión en su lista no crea borrador ni bloquea la navegación.
+- Ninguno de los dos cajones, ni el detalle de una fase, muestra ya «Acceso de agentes»: el acceso automático está activo por defecto y el manual sigue en **Configuración → Pulso y agentes → Dar o quitar acceso a una sesión ya abierta**, donde también se elige el proyecto.
+
+### Dar por terminado y Terminados (1.4.0)
+
+- Cuando **todas** las fases del proyecto están en Hecho (y hay al menos una), la barra muestra **Dar por terminado**. Tras confirmar en la propia barra, archiva el proyecto con `project_update {archived:true}` (sin operaciones nuevas en el runner). Desde **Proyecto → Archivar proyecto** se puede archivar también con fases abiertas, con la misma confirmación.
+- Un proyecto archivado sale de las pestañas, de la barra lateral (`sidebar_summary` solo lista proyectos no archivados, así que sus fases dejan de contar y sus sesiones vuelven a «Sin proyecto») y de la herencia de vínculos al continuar una conversación. Sus fases nunca contaban en Pendientes (tienen proyecto). Fases, checkpoints y vínculos se conservan intactos.
+- **Terminados**, junto a las pestañas, lista los proyectos archivados (`projects {archived:true}`, páginas de 50) con «n de m fases hechas» (un `board` por proyecto, de cuatro en cuatro) y la fecha de su última modificación, que en la práctica es la de archivarlo. **Ver tablero** lo abre en solo lectura: sin añadir, mover ni abrir fases, con la etiqueta «Terminado». **Reabrir** lo desarchiva (`archived:false`) y vuelve a sus pestañas.
+- El runner no impide que un agente con permiso edite un proyecto archivado; la interfaz solo deja de ofrecer la edición.
 
 Crear un proyecto de Pulso no crea ramas ni worktrees. Jauria ya no tiene Repositorios ni tareas Git desde 1.4; los datos de esa función en un perfil anterior se conservan y se ignoran.
 
@@ -19,7 +32,7 @@ Crear un proyecto de Pulso no crea ramas ni worktrees. Jauria ya no tiene Reposi
 
 El endpoint `board` es exclusivo de la UI y obtiene un snapshot atómico bajo el mutex del servicio Pulso: revisión, las cuatro columnas, hasta 20 tarjetas iniciales por columna y sus contadores totales. No amplía el alcance del agente ni es una nueva operación disponible mediante su permiso CLI. `ifRevision` permite responder sin reconstruir columnas cuando no hay cambios.
 
-**Ver más tarjetas** usa `items` con `status`, `expectedSnapshotRevision` y páginas de hasta 50. El servicio comprueba revisión, cuenta y consulta bajo el mismo mutex. Rechaza una revisión obsoleta antes de usar el offset; consulta el tablero actual ante un conflicto para no mezclar páginas de revisiones diferentes. Los contadores incluyen las tarjetas aún no cargadas.
+**Ver más fases** (o **Ver más pendientes**) usa `items` con `status`, `expectedSnapshotRevision` y páginas de hasta 50. El servicio comprueba revisión, cuenta y consulta bajo el mismo mutex. Rechaza una revisión obsoleta antes de usar el offset; consulta el tablero actual ante un conflicto para no mezclar páginas de revisiones diferentes. Los contadores incluyen las fases aún no cargadas.
 
 Desde el runner 1.4 cada tarjeta de `board` añade dos claves (capacidad `pulsoBoardCardsVersion: 1` en `status`; `pulsoBoardVersion` sigue en 1 y no hay argumentos nuevos):
 

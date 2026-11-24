@@ -20,11 +20,11 @@ Since 1.4, Jauria no longer includes **Repositorios** or Git tasks (repository r
 
 **Pulso** gives each project a tab with four fixed columns: **Por hacer** (to do), **En curso** (in progress), **En espera** (waiting) and **Hecho** (done). The fixed **Pendientes** tab holds standalone cards, including completed ones.
 
-1. In Pulso, choose the **+** (Nuevo proyecto) next to the board tabs in the top bar, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked. Creating the project opens its board tab.
-2. Add phases inline with **Añadir fase** in the first three columns (**Añadir pendiente** for standalone cards).
+1. In Pulso, choose **Nuevo proyecto** next to the board tabs in the top bar, enter its name and select **Crear proyecto**. When a current session exists, the checkbox to use it as the main session starts checked; **Empezar una sesión nueva para este proyecto** instead opens Nueva sesión and makes that session the main one. Creating the project opens its board tab with the first phase ready to type.
+2. Add phases inline with **Añadir fase**, right below the last phase of any column (**Añadir pendiente** on Pendientes).
 3. Drag a card by its grip to another column, or open its **…** menu (Mover a Por hacer, En curso, En espera or Hecho), which also works from the keyboard. Moves change status while preserving phase order. Reordering within a column, custom columns and moves across projects are deferred.
 4. A card's title opens the right drawer; it does not start a PTY. Edit title, notes and status, read the latest checkpoint and next step, or expand **Guardar avance** to append an immutable checkpoint. History loads 10 at a time.
-5. **Plan y sesiones** in the project board toolbar opens the optional plan, main session, links and grants, keeping those controls off the board.
+5. In the project toolbar, **Proyecto** edits the name and optional plan (saved automatically) and **Sesiones** the main session and links. When every phase is in Hecho, **Dar por terminado** archives the project; **Terminados** lists archived projects, shows them read-only and reopens them.
 6. Since 1.4, with a 1.4 runner, each card's footer shows its linked session (live status, provider, name) and its checkpoint count; selecting it opens that session. The sidebar and the board refresh within about a second when an agent edits Pulso over MCP, without polling.
 
 Permissions, saved policies, revocation and macOS notices live in **Configuración**. Pulso remembers the last board per profile and offers a direct action to continue the project or focus its existing Claude continuation.
