@@ -7,7 +7,8 @@ La versión 1.4.0 rediseña la ventana alrededor de los proyectos y los agentes,
 - **Barra lateral con Proyectos y Agentes.** Los tableros de Pulso con su avance y, debajo, una fila por sesión con proveedor, duración e indicador de estado. Cada estado tiene su forma: anillo giratorio (trabajando), punto con halo (te necesita), marca (terminó), guion (en espera) y aro vacío (sin reporte). Los agentes se agrupan por proyecto o por estado.
 - **Barra superior con pestañas** (una por sesión abierta, más nueva sesión, búsqueda, Dividir y campana; el panel Información se retira y su contenido útil pasa a Configuración → Acerca de y diagnóstico y al menú «…» del panel), **paneles como tarjetas** con una **cabecera única** de 32 px y un **selector de sesión** con búsqueda. Una **barra de estado** resume quién te necesita, quién terminó y quién trabaja. Ya **no hay barra de avisos fija**: el aviso prioritario está en la cabecera del panel, en la campana y en la barra de estado, sin mover el terminal.
 - **Paleta de comandos** con `⌘⇧P`: sesiones que te necesitan, sesiones abiertas, proyectos y fases de Pulso, y acciones. Nunca escribe en un terminal ni concede permisos.
-- **Pulso:** pestañas de tableros en la barra superior, menú «…» → Mover en cada tarjeta, pie de tarjeta con la sesión vinculada y sus checkpoints, fases en la paleta, y una barra lateral y un tablero que se actualizan en un segundo o menos cuando un agente edita Pulso por MCP, sin sondeo.
+- **Pulso:** la barra superior separa «Terminal», las pestañas (solo tableros) y los botones **+ Nuevo proyecto** e **Histórico**; cada proyecto tiene **Proyecto** (nombre y plan, que se guardan solos) y **Sesiones** (principal y vinculadas). Menú «…» → Mover en cada fase, pie de fase con la sesión vinculada y sus checkpoints, **Añadir fase** bajo la última de cada columna y fases en la paleta. **Dar por terminado** archiva un proyecto con todas sus fases hechas (también se puede archivar sin terminar); el **Histórico** dice cuál se terminó y cuál se archivó con trabajo abierto, y el runner trata un proyecto archivado como solo lectura hasta reabrirlo. La barra lateral y el tablero se actualizan en un segundo o menos cuando un agente edita Pulso por MCP, sin sondeo.
+- **Nueva sesión:** Herramienta (con las marcas de Claude, OpenAI y terminal; una CLI no instalada queda deshabilitada), Carpeta de trabajo (carpeta personal, otra carpeta o una de las cinco recientes), Proyecto de Pulso opcional al que vincular la sesión y Nombre; el pie dice las plazas libres y, si no se puede abrir, el motivo. El botón es **Abrir sesión**.
 - **Estado de los agentes en el runner:** el estado declarado, la duración del turno y lo visto sobreviven a cerrar la ventana y reconectar. Un turno terminado sin ver se conserva aunque el agente vuelva a trabajar; «te necesita» dura mientras el agente lo declara. Solo cuenta como visto abrir la sesión, pulsar Marcar vistos o mirar el terminal cuando el aviso se pinta. Al abrir la ventana lo pendiente aparece en la campana, la barra de estado y el Dock, pero macOS no notifica lo atrasado.
 - **Ciclo de vida de las sesiones:** cuatro estados (Abierta, Sin confirmar, Interrumpida, Terminada); el selector y Dividir solo ofrecen sesiones con las que trabajar; tras una caída del runner las Interrumpidas aparecen arriba con **Continuar conversación** o **Empezar de nuevo aquí** en el propio panel, y la sesión nueva hereda el vínculo de Pulso de la original; las Terminadas se leen en una **vista Historial** propia, nunca en un panel; todo de la más reciente a la más antigua; «Interrumpir» pasa a **Cancelar (Ctrl-C)**.
 - **Uso y recursos** en un diálogo propio (pie de la barra lateral, total de la barra de estado o paleta): cuotas de Claude Code y Codex en lenguaje llano con su reinicio y su antigüedad, y lo que usa Jauría por sesión abierta, runner, interfaz (ahora con el motor web de la ventana) y en total. La barra de estado muestra ese mismo total. Desaparece el aviso «Inventario parcial» que salía siempre en reposo.
@@ -26,9 +27,13 @@ La versión 1.4.0 rediseña la ventana alrededor de los proyectos y los agentes,
 
 [La misma vista en tema oscuro](screenshots/actividad-1.4.0-aviso-oscuro.png).
 
-![Tablero de Pulso con pies de tarjeta: sesión vinculada, checkpoints y «Sesión no disponible»](screenshots/pulso-1.4.0.png)
+![Tablero de Pulso: pestañas de tableros, «Nuevo proyecto», «Histórico» con su contador, «Proyecto» y «Sesiones», fases con la sesión vinculada y sus checkpoints, y «+ Añadir fase» en cada columna](screenshots/pulso-1.4.0.png)
 
 [El tablero en tema oscuro](screenshots/pulso-1.4.0-oscuro.png).
+
+![Cajón Proyecto: nombre y plan que se guardan solos, y «Terminar o archivar»](screenshots/pulso-proyecto-1.4.0.png)
+
+![Histórico de proyectos: uno terminado y otro archivado sin terminar, con su avance, su fecha, «Ver tablero» y «Reabrir»](screenshots/pulso-historico-1.4.0.png)
 
 ![Paleta de comandos con sesiones, proyectos y acciones; las no disponibles muestran el motivo](screenshots/paleta-1.4.0.png)
 
@@ -36,21 +41,31 @@ La versión 1.4.0 rediseña la ventana alrededor de los proyectos y los agentes,
 
 ![Configuración 1.4.0 con filas compactas y acceso automático a Pulso](screenshots/configuracion-1.4.0.png)
 
-Las imágenes proceden del frontend real (CSS, xterm y la ventana completa) en Chrome con una frontera Tauri sintética: sin runner, perfiles, proveedores ni conversaciones reales. Las rutas `/Users/demo/…` y `/synthetic/…` son inventadas. Se generaron con `desktop/tests/capture-redesign.ts` (terminal, dos paneles, avisos y Configuración) y con las capturas opcionales de `tests/browser/pulso-revision.test.ts` y `tests/browser/command-palette.test.ts` (Pulso y paleta). No contienen chunks PNG de texto ni EXIF.
+![Nueva sesión: herramienta, carpeta de trabajo, proyecto de Pulso opcional, nombre, plazas libres y «Abrir sesión»](screenshots/nueva-sesion-1.4.0.png)
+
+![Uso y recursos: cuotas de Claude Code y Codex, una fila por sesión, runner, interfaz y total de Jauría](screenshots/uso-recursos-1.4.0.png)
+
+Las imágenes proceden del frontend real (CSS, xterm y la ventana completa) en Chrome con una frontera Tauri sintética: sin runner, perfiles, proveedores ni conversaciones reales. Los nombres y las rutas (`/Users/tu-usuario/…`) son inventados. Todas se regeneran con un solo comando, desde `experiments/tauri-vertical/desktop` (necesita Chrome y las dependencias de `npm ci`):
+
+```sh
+node tests/capture-docs.ts
+```
+
+Escribe en `docs/screenshots/` con los mismos nombres y tamaños (1220 × 800; Pulso 1280 × 820). Con `CAPTURE_DOCS_DIR=/ruta/absoluta` las deja en otra carpeta para revisarlas antes de sustituirlas. No contienen chunks PNG de texto ni EXIF.
 
 ## Compatibilidad y actualización desde 1.3.x
 
-Sigue [la guía de instalación](INSTALLATION.md#actualizar-una-instalación-existente): termina de forma controlada las sesiones administradas por Jauría, reemplaza la app y, si Información → Diagnóstico indica un runner anterior, usa **Reiniciar runner…** solo cuando no quede trabajo activo. Cerrar la ventana no termina el runner ni sus sesiones.
+Sigue [la guía de instalación](INSTALLATION.md#actualizar-una-instalación-existente): termina de forma controlada las sesiones administradas por Jauría, reemplaza la app y, si **Configuración → Acerca de y diagnóstico** indica un runner anterior, usa **Reiniciar runner…** solo cuando no quede trabajo activo. Cerrar la ventana no termina el runner ni sus sesiones.
 
 - **Perfil:** el esquema sigue en `user_version` 5. `runner.sqlite` añade la tabla `agent_attention`; `pulso.sqlite` no cambia. Las tablas de Repositorios se conservan con la misma definición.
-- **App 1.4 con el runner 1.3.x que sigue vivo:** funciona en modo degradado, como 1.3.3. Sesiones, Pulso, MCP, permisos e historial funcionan; el estado y lo visto viven solo en la ventana y se reinician al reconectar, el tablero consulta su revisión cada 2 s y las tarjetas no tienen pie. Lo nuevo del runner llega al reiniciarlo.
+- **App 1.4 con el runner 1.3.x que sigue vivo:** funciona en modo degradado, como 1.3.3. Sesiones, Pulso, MCP, permisos e historial funcionan; el estado y lo visto viven solo en la ventana y se reinician al reconectar, el tablero consulta su revisión cada 2 s y las fases no tienen pie. Lo nuevo del runner llega al reiniciarlo.
 - **App 1.3.x con runner 1.4:** conecta, no ofrece Repositorios y Diagnóstico muestra «runner anterior» por las capacidades retiradas (un aviso de más). Esta combinación está **deducida del código**; no se probó con la app 1.3.x.
 - **Vuelta atrás a 1.3.3:** el runner de v1.3.3 abre un perfil usado por 1.4, purga y compacta sin tocar `agent_attention`; se comprobó con su binario el 23 de noviembre de 2026 ([procedimiento](DEVELOPMENT.md#vuelta-atrás-a-la-versión-anterior-paso-de-la-lista-de-release)). Con datos antiguos de Repositorios, el runner 1.3.x modifica al abrir las tareas y verificaciones a medio hacer; ese caso no se probó.
 - Las sesiones iniciadas antes de actualizar no cambian de ejecutable ni de permisos. Para el MCP de Pulso en una sesión existente, consulta [la guía de Pulso](PULSO.md#acceso-de-claude-code-y-codex-a-pulso).
 
 ## Verificación de la entrega
 
-Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesign-1.4`, antes del build de la entrega**. `scripts/build-macos.py` vuelve a ejecutarlas sobre el commit final; solo esos resultados validan el paquete.
+Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesign-1.4`, antes del build de la entrega**. Los cambios posteriores (Pulso, Nueva sesión, avisos y Uso y recursos del 24 de noviembre) añadieron pruebas, así que estas cifras se quedan cortas hasta el build final. `scripts/build-macos.py` vuelve a ejecutarlas sobre el commit final; solo esos resultados validan el paquete.
 
 | Batería | Último resultado conocido en la rama |
 | --- | --- |
