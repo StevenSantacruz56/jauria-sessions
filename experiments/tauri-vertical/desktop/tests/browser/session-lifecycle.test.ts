@@ -229,6 +229,23 @@ try {
         assert.equal(await other.evaluate(() => (window as any).workbench.links.length), 1);
       });
 
+      await t.test('a terminal under its recovery or its open picker is not attended (Codex ronda 2, 4)', async () => {
+        const page = await open({ open: 2, closed: 0, projects: 1 });
+        await page.locator('.pane:nth-child(1) .xterm').click();
+        // The picker of the focused pane covers the terminal: a BEL there is a new alert.
+        await page.locator('#session-0').click(); await page.locator('.pane:nth-child(1) .session-picker-search').waitFor();
+        await page.evaluate(() => (window as any).workbench.out('open-0', '\u0007'));
+        await page.waitForFunction(() => document.querySelector('#session-alerts')?.getAttribute('data-unread') === '1', undefined, { timeout: 4000 });
+        await page.keyboard.press('Escape');
+        // The recovery overlay covers it too: the process end stays an alert, not consumed by looking.
+        const second = await open({ open: 2, closed: 0, projects: 1 });
+        await second.locator('.pane:nth-child(1) .xterm').click();
+        await second.evaluate(() => (window as any).workbench.setStatus('open-0', 'failed'));
+        await second.locator('.pane:nth-child(1) .pane-recovery').waitFor();
+        await second.waitForTimeout(1500);
+        assert.match(await second.locator('.session-item[data-session-id="open-0"] .session-item-meta').textContent() ?? '', /El proceso terminó/);
+      });
+
       await t.test('a Terminada opens the Historial view: search, copy, back; zero resize entering and leaving', async () => {
         const page = await open({ ...lifecycle, open: 2 });
         await page.locator('#toggle-split').click(); await page.waitForTimeout(400);

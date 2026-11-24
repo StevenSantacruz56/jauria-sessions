@@ -1709,12 +1709,22 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 document.addEventListener('close', refresh, true);
 /**
  * Whether something covers the terminal stage: any open <dialog> (palette,
- * Configuración, nueva sesión, renombrar, terminar, the Pulso drawer) or, in a
+ * Configuración, nueva sesión, renombrar, terminar, the Pulso drawer), the
+ * focused pane's recovery card, session picker or "…" menu, or, in a
  * window of 860 px or less, the sidebar drawer with its scrim. The scrim only
  * displays in that layout, so its computed style is the breakpoint.
  */
 function terminalCovered(): boolean {
   if (document.querySelector('dialog[open]')) return true;
+  // The focused pane's own floating layers: its recovery card (not folded by «Ver salida»), its open
+  // session picker or "…" menu. The alerts popover sits in the top bar and is not counted.
+  const pane = panes[focusedPane];
+  if (pane) {
+    // From the model, not the DOM: the first refresh after the status change has not painted the card yet.
+    const shown = pane.id ? views.get(pane.id)?.session : undefined;
+    if (shown && lifecycleOf(shown) === 'interrupted' && !recoveryFolded.has(shown.id)) return true;
+    if (pane.picker.isOpen || pane.root.querySelector('.pane-menu[open]')) return true;
+  }
   const scrim = $('#sidebar-scrim');
   return !scrim.hidden && $('.workspace-shell').classList.contains('sidebar-open') && getComputedStyle(scrim).display !== 'none';
 }
