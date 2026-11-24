@@ -93,6 +93,12 @@ async function install(page: Page, options: Options) {
       agentOf(id: string) { return structuredClone(agents.get(id)); },
       /** The session's runner status (a process end: exited, stopped, failed). */
       status(id: string, value: string) { sessions.find(s => s.id === id).status = value; touch(id); },
+      /** A process end as the runner reports it: status and detail.exitCode, plus the ended alert. */
+      end(id: string, value: string, code: number) {
+        const s = sessions.find(s => s.id === id); s.status = value; s.detail = { exitCode: code };
+        const a = agents.get(id); const seq = a.alertSeq + 1;
+        agents.set(id, { ...a, state: null, turnOpen: false, alertSeq: seq, pending: { ...a.pending, ended: { seq } } }); touch(id);
+      },
       /** Hold the next mark_seen answer until releaseMark(); meanwhile alerts may arrive. */
       holdMark() { holdMark = true; }, releaseMark() { holdMark = false; markRelease?.(); markRelease = undefined; },
       get markWaiting() { return !!markRelease; },
@@ -441,6 +447,29 @@ try {
           assert.equal(await page.evaluate(() => (window as any).agentFixture.marks.length), covered, 'covered: no automatic seen');
           await page.keyboard.press('Escape');
           await page.waitForFunction(n => (window as any).agentFixture.marks.length > n, covered);
+        });
+      });
+
+      await t.test('a process that failed (code 2) is «Proceso falló (código 2)», counts in «te necesita» and is a «Necesita tu atención» notice', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await enableNative(page);
+          // The background finish is seen first so only the end counts.
+          await row(page, 'background').click(); await row(page, 'foreground').click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('#session-alerts')?.dataset.unread === '0' || document.querySelector<HTMLElement>('#session-alerts')?.hidden);
+          await fx(page, `f.end('background','exited',2);`);
+          await page.waitForFunction(() => document.querySelector('#status-needs-text')?.textContent === '1 te necesita');
+          assert.equal(await page.locator('#status-finished').isHidden(), true, 'not «terminó»');
+          await page.locator('#session-alerts').click();
+          assert.match(await page.locator('#attention-list').textContent() ?? '', /Proceso falló \(código 2\)/);
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(() => (window as any).agentFixture.notices.length === 1, undefined, { timeout: 5000 });
+          assert.match(JSON.stringify(await page.evaluate(() => (window as any).agentFixture.notices[0])), /Necesita tu atención/);
+          assert.doesNotMatch(JSON.stringify(await page.evaluate(() => (window as any).agentFixture.notices[0])), /código|background/, 'the notice copy stays generic');
+          // A clean exit (code 0) that happens while nobody looks (window in the background) is «terminó».
+          await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.end('foreground','exited',0);`);
+          await page.waitForFunction(() => document.querySelector('#status-finished-text')?.textContent === '1 terminó');
+          assert.equal(await page.locator('#status-needs-text').textContent(), '1 te necesita', 'the failure still counts apart');
         });
       });
 

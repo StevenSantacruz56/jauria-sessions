@@ -172,6 +172,8 @@ fn process_end_with_any_exit_code_is_one_ended_alert() {
         app.type_line(id, &format!("exit {code}"));
         let row = app.wait_row(id, "ended", |r| r["agent"]["pending"]["ended"].is_object());
         assert_eq!(row["status"], "exited", "{id}");
+        // The client tells «Proceso falló (código N)» from «Proceso terminó» with this field of status.
+        assert_eq!(row["detail"]["exitCode"], code, "{id}: {row}");
         assert_eq!(pending(&row["agent"]), ["ended"]);
         assert!(row["agent"]["pending"]["ended"]["frame"].is_null(), "ended has no frame: never auto-seen");
     }

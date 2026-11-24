@@ -168,7 +168,9 @@ try {
     assert.match(a.list(sessions)[0].reason, /El proceso terminó/);
     const failing = [session('crash')]; a.list(failing); stopping.add('crash');
     a.observeEnd('crash', 'running', 'failed'); failing[0].status = 'failed';
-    assert.equal(a.list(failing).some((item: { reason: string }) => /El proceso terminó/.test(item.reason)), true);
+    const crash = a.list(failing).find((item: { id: string }) => item.id === 'crash');
+    assert.match(crash.reason, /Proceso falló/);
+    assert.equal(crash.urgent, true, 'a failed end is «Necesita tu atención» for macOS');
   });
   test('all app-server sessions queried, baseline quiet, truncated counts honored, failures preserve', async () => {
     const a = new SessionAttention(); const sessions = [session('visible', 'running', 'app-server'), session('hidden', 'running', 'app-server'), session()]; a.list(sessions);

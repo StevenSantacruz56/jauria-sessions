@@ -18,7 +18,7 @@
 import { SessionAttention, type Attention, type AttentionSession, type ExternalCause } from './attention';
 export { SessionAttention };
 import { parseProgramStatus, ProgramStatusTracker, type ProgramState } from './program-status';
-import { agentActivity, sessionActivity, type ActivityKind } from './session-activity';
+import { agentActivity, endReason, exitFailure, sessionActivity, type ActivityKind } from './session-activity';
 import { isLiveStatus } from './session-lifecycle';
 
 export type DisplayState = Exclude<ProgramState, 'clear'>;
@@ -294,9 +294,10 @@ export class RunnerAttentionSource implements AttentionSource {
       const terminal = kind === 'bell' || kind === 'notify';
       const reason = kind === 'permission' && this.base.pendingPermissions(s.id) > 0 ? ''
         : kind === 'permission' && p.generation !== undefined && s.codex && p.generation !== s.codex.generation ? `${reasons.permission(a)} · generación anterior, caducado`
+        : kind === 'ended' ? endReason(s)
         : terminal && alerted ? '' : reasons[kind](a);
       if (terminal) alerted = true;
-      result.push({ key: agentKey(s.id, kind, a.epoch, p.seq), reason, unseen: true });
+      result.push({ key: agentKey(s.id, kind, a.epoch, p.seq), reason, unseen: true, ...(kind === 'ended' && exitFailure(s).failed ? { urgent: true } : {}) });
     }
     return result;
   }

@@ -1,12 +1,14 @@
 import { statusLabel, type WorkspaceSession } from './workspace';
 import { interruptionDetail, isClosed, isLiveStatus, lifecycleIncident } from './session-lifecycle';
+import { endReason, exitFailure } from './session-activity';
 import type { ProgramState } from './program-status';
 export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean; detail?: { [key: string]: unknown } | null };
 type Session = AttentionSession;
 type Observation = { generation: number; count: number; keys: string[]; stale: boolean };
-export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[]; unseenKeys?: string[] };
+/** `urgent`: a new cause that needs the person although its key says «ended» (a failed process): macOS «Necesita tu atención». */
+export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[]; unseenKeys?: string[]; urgent?: boolean };
 /** A cause owned by another source (runner 1.4 E): its own unseen flag, never the window baseline. Full key, empty reason = no text. */
-export type ExternalCause = { key: string; reason: string; unseen: boolean };
+export type ExternalCause = { key: string; reason: string; unseen: boolean; urgent?: boolean };
 export type ExternalCauses = { causes(session: Session): ExternalCause[]; permissionsSeen?: boolean };
 
 /** Window-local observations. Acknowledgement never changes custody or permissions. */
@@ -76,8 +78,12 @@ export class SessionAttention {
       if (p?.count) add(`permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`, `${p.count} ${p.count === 1 ? 'permiso pendiente' : 'permisos pendientes'}${p.generation !== s.codex?.generation ? ' · generación anterior, caducado' : stale ? ' · sin confirmar' : ''}`);
       if (s.programState === 'blocked' || s.programState === 'error') add('program:needs', s.programState === 'error' ? 'El agente informó un error' : 'El agente solicita atención');
       if (s.programFinishedUnseen) add('program:done', 'El agente terminó su turno');
-      for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
-      for (const cause of external?.causes(s) ?? []) { keys.push(cause.key); outside.set(cause.key, cause.unseen); if (cause.reason) reasons.push(cause.reason); }
+      let urgent = false;
+      for (const kind of this.signals.get(s.id) ?? []) {
+        if (kind === 'ended' && exitFailure(s).failed) urgent = true;
+        add(`signal:${kind}`, kind === 'ended' ? endReason(s) : 'La sesión emitió una alerta');
+      }
+      for (const cause of external?.causes(s) ?? []) { keys.push(cause.key); outside.set(cause.key, cause.unseen); if (cause.reason) reasons.push(cause.reason); if (cause.urgent && cause.unseen) urgent = true; }
       for (const key of keys) next.add(key);
       // Initial lifecycle snapshot is quiet, but remains available in the list. Exception: with the
       // profile's memory of seen incidents, an interruption/failure not in it happened while no window
@@ -98,7 +104,7 @@ export class SessionAttention {
       // Uncertainty is per cause: a stale permission read only makes the row stale when nothing
       // else in it is new (a runner alert or a lifecycle incident stays a confirmed alert).
       const uncertain = (k: string) => k === `${s.id}:unconfirmed` || k.startsWith(`${s.id}:permissions:`);
-      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale: stale && unseenKeys.every(uncertain), keys, unseenKeys });
+      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale: stale && unseenKeys.every(uncertain), keys, unseenKeys, ...(urgent ? { urgent } : {}) });
     }
     for (const key of this.seen) if (!next.has(key)) this.seen.delete(key);
     if (this.baselineIncidents && sessions.length) {

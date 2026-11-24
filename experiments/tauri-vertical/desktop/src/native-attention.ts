@@ -9,8 +9,10 @@ type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(kind:
  * agent:needs and agent:permission (a request nobody saw) → needs;
  * agent:finished and agent:ended → finished; agent:bell/notify → notice.
  */
-export function noticeKind(items: readonly Pick<Attention, 'keys'>[]): NativeNoticeKind {
+export function noticeKind(items: readonly (Pick<Attention, 'keys'> & { urgent?: boolean })[]): NativeNoticeKind {
   const keys = items.flatMap(item => item.keys);
+  // A failed process end needs the person (its key still says «ended»).
+  if (items.some(item => item.urgent)) return 'needs';
   if (keys.some(key => /:(?:program:needs|permissions:|state:|unconfirmed|agent:(?:needs|permission):)/.test(key))) return 'needs';
   if (keys.some(key => /:(?:program:done|signal:ended|agent:(?:finished|ended):)/.test(key))) return 'finished';
   return 'notice';

@@ -41,6 +41,8 @@ test('runner agent keys map to the same three categories as window keys', async 
   // The strongest category of a batch wins, as with window keys.
   assert.equal(noticeKind([{ keys: ['a:agent:bell:1:1'] }, { keys: ['b:agent:finished:1:2'] }]), 'finished');
   assert.equal(noticeKind([{ keys: ['a:agent:ended:1:1', 'a:agent:needs:1:2'] }]), 'needs');
+  // A failed process end (urgent) is «Necesita tu atención», not «Actividad finalizada».
+  assert.equal(noticeKind([{ keys: ['a:agent:ended:1:1'], urgent: true }]), 'needs');
   // A session id that merely contains a kind word does not change the category.
   assert.equal(noticeKind([{ keys: ['agent-needs-1:agent:bell:1:1'] }]), 'notice');
 });

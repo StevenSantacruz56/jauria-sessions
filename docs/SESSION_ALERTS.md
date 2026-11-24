@@ -156,7 +156,7 @@ Comprobado con el runner real (`runner/tests/attention_review_rpc.rs`: sesiones 
 | OSC 7501 `working` → `done`/`idle` (PTY) | lector del runner | `finished`: «Turno terminado», «terminó» | solo visto (sobrevive a un turno nuevo y a `clear`) |
 | `turn/completed` `completed`/`failed` (Codex estructurado) | `codex_runtime.rs` | `finished` sin `frame` | visto; automático si llegó con su panel atendido |
 | Solicitud de permiso (Codex estructurado) | `codex_runtime.rs` | `permission`; el pendiente sale de `codex_state` | visto quita «sin ver»; el permiso, al responderlo en Codex |
-| Fin de proceso `exited`/`failed`/`stopped` (todas) | `process_ended` / `structured_ended` | `ended`: «Proceso terminó», «terminó». Código 0 y ≠0 dan lo mismo (`exited`) | visto; automático si ocurrió en el panel atendido. **Terminar** no lo genera |
+| Fin de proceso `exited`/`failed`/`stopped` (todas) | `process_ended` / `structured_ended` | `ended`. Código 0: «Proceso terminó», cuenta en «terminó», macOS «Actividad finalizada». `failed` o código ≠0: «Proceso falló (código N)», cuenta en «te necesita», macOS «Necesita tu atención» (el cliente lee solo `detail.exitCode` de `status`; el texto de macOS no lleva el código). `stopped` nunca es un fallo | visto; automático si ocurrió en el panel atendido. **Terminar** no lo genera |
 | `interrupted`/`failed` del ciclo de vida | ventana | causa local, «te necesita» | abrir, Marcar vistos, Descartar o continuar; ver arriba la memoria por perfil |
 | `needs_attention` | ventana | «Sin confirmar — ocupa plaza» | cuando cambia la custodia; ver no lo resuelve |
 
