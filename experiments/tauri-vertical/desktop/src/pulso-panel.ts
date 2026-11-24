@@ -1,3 +1,4 @@
+import { claimFloating, release } from './floating';
 import './pulso-panel.css';
 import { readLastBoard,saveLastBoard } from './board-preferences';
 import { programStateLabel, type ProgramState } from './program-status';
@@ -358,8 +359,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     options.openSession(id);
   }
   let moveMenu:{node:HTMLElement;anchor:HTMLButtonElement;dispose:()=>void}|null=null;
+  // Shared dismissal rule (floating.ts): opening the card menu closes any other floating control.
+  const moveFloating={contains:(node:Node)=>!!moveMenu&&(moveMenu.node.contains(node)||moveMenu.anchor.contains(node)),close:(restore:boolean)=>closeMoveMenu(restore)};
   function closeMoveMenu(focusAnchor:boolean){
-    const current=moveMenu;if(!current)return;moveMenu=null;current.dispose();current.node.remove();current.anchor.setAttribute('aria-expanded','false');
+    const current=moveMenu;if(!current)return;moveMenu=null;release(moveFloating);current.dispose();current.node.remove();current.anchor.setAttribute('aria-expanded','false');
     if(focusAnchor&&current.anchor.isConnected)current.anchor.focus({preventScroll:true});
   }
   function openMoveMenu(item:PulsoItem,anchor:HTMLButtonElement){
@@ -390,7 +393,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const away=()=>closeMoveMenu(false);
     document.addEventListener('pointerdown',outside,true);board.addEventListener('scroll',away,true);addEventListener('resize',away);
     moveMenu={node,anchor,dispose:()=>{document.removeEventListener('pointerdown',outside,true);board.removeEventListener('scroll',away,true);removeEventListener('resize',away);}};
-    anchor.setAttribute('aria-expanded','true');enabled()[0]?.focus({preventScroll:true});
+    claimFloating(moveFloating);anchor.setAttribute('aria-expanded','true');enabled()[0]?.focus({preventScroll:true});
   }
   function startDrag(event:PointerEvent,item:PulsoItem,card:HTMLElement,handle:HTMLElement){
     if(event.button!==0||busy||dirty||failed)return;event.preventDefault();dragging=true;handle.setPointerCapture(event.pointerId);let target:PulsoItem['status']|null=null;card.classList.add('is-dragging');

@@ -52,9 +52,13 @@ export type AlertsPopoverOptions = {
   onToggle?: () => void;
 };
 
+import { claimFloating, release } from './floating';
+
 export class AlertsPopover {
   private open = false;
   private renderedKey = '';
+  /** Shared dismissal rule (floating.ts): only one floating control open at a time. */
+  private readonly floating = { contains: (node: Node) => this.options.panel.contains(node) || this.options.button.contains(node), close: (restore: boolean) => this.close(restore) };
   private readonly outside = (event: PointerEvent) => {
     const target = event.target as Node;
     if (!this.options.panel.contains(target) && !this.options.button.contains(target)) this.close(false);
@@ -82,6 +86,7 @@ export class AlertsPopover {
     if (this.open) return;
     this.open = true; this.options.button.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', this.outside, true);
+    claimFloating(this.floating);
     this.options.onToggle?.();
   }
   /** The caller hides the panel on its next render; `focusButton` returns focus to the bell. */
@@ -89,6 +94,7 @@ export class AlertsPopover {
     if (!this.open) return;
     this.open = false; this.options.button.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', this.outside, true);
+    release(this.floating);
     if (focusButton && !this.options.button.hidden) this.options.button.focus({ preventScroll: true });
     this.options.onToggle?.();
   }

@@ -67,6 +67,8 @@ export type SessionPickerOptions = {
   onClose: (restore: boolean) => void;
 };
 
+import { claimFloating, release } from './floating';
+
 export class SessionPicker {
   readonly popup: HTMLDivElement;
   private readonly input: HTMLInputElement;
@@ -75,6 +77,8 @@ export class SessionPicker {
   private shown: PickerOption[] = [];
   private active = -1;
   private renderedKey = '';
+  /** Shared dismissal rule (floating.ts): only one floating control open at a time. */
+  private readonly floating = { contains: (node: Node) => this.popup.contains(node) || this.options.trigger.contains(node), close: (restore: boolean) => this.close(restore) };
   private readonly outside = (event: PointerEvent) => {
     const target = event.target as Node;
     if (!this.popup.contains(target) && !this.options.trigger.contains(target)) this.close(false);
@@ -122,6 +126,7 @@ export class SessionPicker {
     const selected = this.shown.findIndex(option => option.selected && !option.disabled);
     this.setActive(selected >= 0 ? selected : movePickerIndex(this.shown, -1, 'ArrowDown'));
     document.addEventListener('pointerdown', this.outside, true);
+    claimFloating(this.floating);
     this.input.focus({ preventScroll: true });
   }
 
@@ -130,6 +135,7 @@ export class SessionPicker {
     this.popup.hidden = true; this.options.trigger.setAttribute('aria-expanded', 'false');
     this.input.removeAttribute('aria-activedescendant');
     document.removeEventListener('pointerdown', this.outside, true);
+    release(this.floating);
     this.options.onClose(restore);
   }
 
@@ -141,6 +147,7 @@ export class SessionPicker {
   private choose(id: string) {
     this.popup.hidden = true; this.options.trigger.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', this.outside, true);
+    release(this.floating);
     this.options.onSelect(id || null);
   }
 
