@@ -105,6 +105,11 @@ for (const engine of [chromium, webkit]) {
       await toggle.click();
       await page.waitForFunction(() => !document.querySelector<HTMLElement>('.form-error')!.hidden);
       assert.equal(await toggle.isChecked(), false);
+      // Pulso access depends on the runner offering it, not on the file schema (an early 1.4.0 answered 3).
+      const v3 = await mounted('f.provider = true; f.settings = { ...f.settings, schemaVersion: 3, providerSignals: false };');
+      await v3.locator('#opener').click(); await ready(v3);
+      assert.equal(await v3.getByLabel('Acceso automático a Pulso').isDisabled(), false);
+      assert.equal(await v3.locator('.settings-pulso .settings-unavailable').isHidden(), true);
       // A runner without the setting: the toggle is disabled and the reason is shown.
       const old = await mounted('f.provider = true;');
       await old.locator('#opener').click(); await ready(old);

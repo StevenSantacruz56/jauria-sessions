@@ -50,6 +50,8 @@ let instance = 0;
 const themes = ['system', 'light', 'dark'];
 const themeValue = (value: string) => themes.includes(value) ? value : 'system';
 const themeLabel: Record<string, string> = { system: 'Sistema', light: 'Clara', dark: 'Oscura' };
+/** Automatic Pulso access is offered when the runner reports it (settingsVersion 2+), whatever the file schema. */
+const hasPulso = (settings: AppSettings | null | undefined) => typeof settings?.pulsoAutoAccess === 'boolean';
 const sessionsLabel = (n: number) => `${n} ${n === 1 ? 'sesión' : 'sesiones'}`;
 
 function checked(settings: AppSettings): AppSettings {
@@ -266,7 +268,7 @@ export function mountSettings(options: Options): {
       : readFailed ? 'No se pudo consultar el límite.' : 'Consultando el límite…';
     const auto = wantedPulso ?? current?.pulsoAutoAccess ?? false;
     pulsoToggle.checked = auto;
-    pulsoState.textContent = current?.schemaVersion === 2 ? (current.pulsoAutoAccess ? 'Activado: las sesiones nuevas reciben acceso.' : 'Desactivado: ninguna sesión lo recibe de forma automática.') : '';
+    pulsoState.textContent = hasPulso(current) ? (current!.pulsoAutoAccess ? 'Activado: las sesiones nuevas reciben acceso.' : 'Desactivado: ninguna sesión lo recibe de forma automática.') : '';
     warning.textContent = current?.warning ?? ''; warning.hidden = !current?.warning;
     if (!providerSaving) providerToggle.checked = current?.providerSignals === true;
   }
@@ -276,9 +278,9 @@ export function mountSettings(options: Options): {
     dialog.setAttribute('aria-busy', String(loading || saving || !!permissions?.isBusy));
     // Controls stay enabled while a save is in flight (changes queue); only a read or a lost runner disables them.
     limit.disabled = loading || !loaded || !editable;
-    pulsoToggle.disabled = loading || !loaded || !editable || current?.schemaVersion !== 2;
+    pulsoToggle.disabled = loading || !loaded || !editable || !hasPulso(current);
     compatibility.hidden = editable || !loaded;
-    pulsoCompatibility.hidden = !loaded || (editable && current?.schemaVersion === 2);
+    pulsoCompatibility.hidden = !loaded || (editable && hasPulso(current));
     providerToggle.disabled = loading || !loaded || !editable || providerSaving || typeof current?.providerSignals !== 'boolean';
     providerCompatibility.hidden = !loaded || !editable || typeof current?.providerSignals === 'boolean';
     closeButton.disabled = inFlight || !!permissions?.isBusy;
@@ -309,7 +311,7 @@ export function mountSettings(options: Options): {
     if (disposed || saving || loading || !current || !options.canEdit()) return;
     const base = current;
     const limitValue = wantedLimit ?? base.maxConcurrentSessions;
-    const pulsoValue = base.schemaVersion === 2 ? (wantedPulso ?? base.pulsoAutoAccess) : undefined;
+    const pulsoValue = hasPulso(base) ? (wantedPulso ?? base.pulsoAutoAccess) : undefined;
     if (limitValue === base.maxConcurrentSessions && (pulsoValue === undefined || pulsoValue === base.pulsoAutoAccess)) { wantedLimit = null; wantedPulso = null; sync(); return; }
     const sentLimit = limitSeq, sentPulso = pulsoSeq;
     const token = ++generation;
@@ -324,14 +326,14 @@ export function mountSettings(options: Options): {
       if (pulsoSeq === sentPulso) wantedPulso = null;
       options.onSaved(saved);
       if (disposed || token !== generation) return;
-      status.textContent = `Guardado: ${sessionsLabel(saved.maxConcurrentSessions)} a la vez${saved.schemaVersion === 2 ? `; acceso automático a Pulso ${saved.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}.`;
+      status.textContent = `Guardado: ${sessionsLabel(saved.maxConcurrentSessions)} a la vez${hasPulso(saved) ? `; acceso automático a Pulso ${saved.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}.`;
     } catch {
       if (disposed || token !== generation) return;
       // Only what this call sent goes back to the runner value; a change chosen
       // meanwhile stays wanted and is sent by the call that follows.
       if (limitSeq === sentLimit) wantedLimit = null;
       if (pulsoSeq === sentPulso) wantedPulso = null;
-      showError(`No se pudo guardar. Sigue el valor anterior: ${sessionsLabel(base.maxConcurrentSessions)} a la vez${base.schemaVersion === 2 ? `, acceso automático ${base.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}. Vuelve a elegir para reintentar.`);
+      showError(`No se pudo guardar. Sigue el valor anterior: ${sessionsLabel(base.maxConcurrentSessions)} a la vez${hasPulso(base) ? `, acceso automático ${base.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}. Vuelve a elegir para reintentar.`);
       status.textContent = '';
     } finally {
       if (!disposed && token === generation) {
@@ -375,7 +377,7 @@ export function mountSettings(options: Options): {
     wantedLimit = value; limitSeq++; void flush(); sync();
   });
   pulsoToggle.addEventListener('change', () => {
-    if (current?.schemaVersion !== 2) { paintRunner(); return; }
+    if (!hasPulso(current)) { paintRunner(); return; }
     wantedPulso = pulsoToggle.checked; pulsoSeq++; void flush(); sync();
   });
   providerToggle.addEventListener('change', () => {
