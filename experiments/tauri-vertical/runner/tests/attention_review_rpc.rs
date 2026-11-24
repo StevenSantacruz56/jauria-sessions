@@ -174,9 +174,15 @@ fn process_end_with_any_exit_code_is_one_ended_alert() {
         assert_eq!(row["status"], "exited", "{id}");
         // The client tells «Proceso falló (código N)» from «Proceso terminó» with this field of status.
         assert_eq!(row["detail"]["exitCode"], code, "{id}: {row}");
-        assert_eq!(pending(&row["agent"]), ["ended"]);
-        assert!(row["agent"]["pending"]["ended"]["frame"].is_null(), "ended has no frame: never auto-seen");
+        assert_eq!(row["detail"]["signaled"], false, "{id}");
     }
+    // Killed by a signal (not Terminar): signaled, so the client does not show portable_pty's code 1.
+    app.shell("sig9");
+    app.type_line("sig9", "kill -9 $$");
+    let row = app.wait_row("sig9", "ended", |r| r["agent"]["pending"]["ended"].is_object());
+    assert_eq!((row["status"].as_str(), row["detail"]["signaled"].as_bool()), (Some("exited"), Some(true)), "{row}");
+    assert_eq!(pending(&row["agent"]), ["ended"]);
+    assert!(row["agent"]["pending"]["ended"]["frame"].is_null(), "ended has no frame: never auto-seen");
 }
 
 /// H6: «Solicita atención» does not outlive the process that asked.

@@ -21,6 +21,10 @@ try {
     assert.equal(endReason(ended('exited', { waitResult: { exitCode: 2 } })), 'Proceso falló (código 2)');
     assert.equal(endReason(ended('failed', { reason: 'spawn PTY child: /private/secret' })), 'Proceso falló', 'only the code is shown, never the reason text');
     assert.deepEqual(exitFailure(ended('stopped', { exitCode: 143 })), { failed: false, code: 143 }, 'Terminar or shutdown');
+    // A death by signal: portable_pty says code 1, which is not the process's own code.
+    assert.equal(endReason(ended('exited', { exitCode: 1, signaled: true, wait: 'ExitStatus { code: 1, signal: Some("Killed") }' })), 'Proceso falló');
+    assert.equal(endReason(ended('exited', { exitCode: 1, signaled: false })), 'Proceso falló (código 1)');
+    assert.equal(exitFailure(ended('stopped', { exitCode: 1, signaled: true })).failed, false, 'Terminar by signal is no failure');
     assert.equal(exitFailure(ended('exited', {})).failed, false, 'unknown code: not a failure');
     const pending = { state: null, changedAt: null, turnStartedAt: null, lastTurnMs: null, turnInterrupted: false, pending: { ended: { seq: 1 } } };
     const failed = agentActivity(ended('exited', { exitCode: 1 }), { id: 's', keys: ['s:agent:ended:1:1'], reason: 'Proceso falló (código 1)', unseen: true, stale: false }, pending);

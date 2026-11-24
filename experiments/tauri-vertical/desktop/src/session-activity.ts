@@ -10,7 +10,11 @@ import { statusLabel, type WorkspaceSession } from './workspace';
  */
 export function exitFailure(session: { status: string; detail?: { [key: string]: unknown } | null }): { failed: boolean; code: number | null } {
   const detail = session.detail ?? {};
-  const raw = 'exitCode' in detail ? detail.exitCode : (detail.waitResult as { exitCode?: unknown } | undefined)?.exitCode;
+  const wait = (detail.waitResult ?? {}) as { exitCode?: unknown; signaled?: unknown };
+  const raw = 'exitCode' in detail ? detail.exitCode : wait.exitCode;
+  // A death by signal: the runner's code (1) is not the process's own, so it is a failure without a code.
+  const signaled = detail.signaled === true || wait.signaled === true;
+  if (signaled && session.status === 'exited') return { failed: true, code: null };
   const code = Number.isSafeInteger(raw) ? raw as number : null;
   return { failed: session.status === 'failed' || (session.status === 'exited' && code !== null && code !== 0), code };
 }

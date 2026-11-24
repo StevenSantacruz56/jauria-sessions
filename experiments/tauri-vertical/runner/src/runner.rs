@@ -818,7 +818,8 @@ impl Runner {
                     match child.wait() {
                     Ok(exit) => {
                         life.reaped = true;
-                        let detail=json!({"exitCode":exit.exit_code(),"wait":format!("{exit:?}")});
+                        // portable_pty reports a signal death as code 1: `signaled` says the code is not the process's own.
+                        let detail=json!({"exitCode":exit.exit_code(),"signaled":exit.signal().is_some(),"wait":format!("{exit:?}")});
                         match remaining {
                             Some(Ok(pids)) if !pids.is_empty() => ("needs_attention",json!({"waitResult":detail,"survivors":pids,"reason":"other process groups remain in the managed Unix session; no signals sent to discovered PIDs"})),
                             Some(Err(e)) => ("needs_attention",json!({"waitResult":detail,"inventoryError":e.to_string()})),
