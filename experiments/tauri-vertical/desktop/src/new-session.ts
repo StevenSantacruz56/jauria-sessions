@@ -48,6 +48,8 @@ const RECENT_LIMIT = 5;
 export function recentFoldersKey(profile: string | null): string | null {
   return profile && profile.length <= 4096 ? `jauria-new-session:recent-folders:${profile}` : null;
 }
+// Control characters (tab, line break…) are refused in this stored preference on purpose: such a
+// folder can still be chosen with «Elegir otra carpeta…» and opened, it just is not kept in Recientes.
 const validFolder = (value: unknown): value is string => typeof value === 'string' && value.startsWith('/') && value.length <= 4096 && !/[\u0000-\u001f]/.test(value);
 export function readRecentFolders(storage: Pick<Storage, 'getItem'>, profile: string | null): string[] {
   const key = recentFoldersKey(profile); if (!key) return [];

@@ -118,6 +118,57 @@ try {
         assert.equal(await page.locator('#session-capacity').innerText(), '3 de 3 plazas ocupadas · 0 disponibles');
       });
 
+      await t.test('a project archived while the dialog is open is refused beside the field, before any session opens', async () => {
+        const page = await open(); await openDialog(page);
+        await page.locator('#session-project').selectOption('p0'); await page.locator('input[name=provider][value=terminal]').check();
+        await wb(page, "w.archive('p0')");
+        await page.locator('#start-session').click();
+        await page.locator('#session-project-error').getByText('Ese proyecto ya no está abierto; elige otro o Sin proyecto.').waitFor();
+        assert.equal(await startCalls(page), 0); assert.equal(await page.locator('#session-project').inputValue(), '');
+        assert.equal(await page.locator('#new-session-dialog').evaluate(d => (d as HTMLDialogElement).open), true);
+      });
+      await t.test('while it opens every field is locked and the captured project and name are what is sent', async () => {
+        const page = await open(); await openDialog(page);
+        await page.locator('#session-project').selectOption('p0'); await page.locator('input[name=provider][value=terminal]').check();
+        await page.locator('#session-title').fill('Nombre A'); await wb(page, 'w.holdStart=true');
+        await page.locator('#start-session').click(); await page.waitForFunction(() => typeof (window as any).workbench.releaseStart === 'function');
+        assert.equal(await page.locator('#start-session').innerText(), 'Abriendo sesión…');
+        for (const id of ['#session-project', '#session-title', '#session-folder', 'input[name=provider][value=claude]', 'input[name=provider][value=terminal]']) assert.equal(await page.locator(id).isDisabled(), true, id);
+        await wb(page, 'w.releaseStart()'); await page.locator('#new-session-dialog[open]').waitFor({ state: 'detached' });
+        assert.equal((await lastSession(page)).title, 'Nombre A');
+        assert.deepEqual(await page.evaluate(() => (window as any).workbench.links.map((l: any) => l.projectId)), ['p0']);
+      });
+      await t.test('an older CLI check arriving last never marks an installed CLI as missing again', async () => {
+        const page = await open(); await openDialog(page);
+        await wb(page, 'w.holdProbe=true'); await page.getByRole('button', { name: 'Comprobar otra vez', exact: true }).click();
+        await page.waitForFunction(() => typeof (window as any).workbench.releaseProbe === 'function');
+        assert.equal(await page.locator('#recheck-tools').isDisabled(), true, 'no second check while one is running');
+        // The held (older) check saw Codex missing; meanwhile Codex is installed and a send checks again.
+        await wb(page, "w.setTools([{tool:'claude',available:true},{tool:'codex',available:true}])");
+        await page.locator('input[name=provider][value=claude]').check(); await page.locator('#start-session').click();
+        await page.waitForFunction(() => (window as any).workbench.probes >= 2);
+        await wb(page, 'w.releaseProbe()'); await page.locator('#new-session-dialog[open]').waitFor({ state: 'detached' });
+        await openDialog(page);
+        assert.equal(await page.locator('#new-codex-status').innerText(), 'CLI disponible');
+        assert.equal(await page.locator('input[name=provider][value=codex]').isDisabled(), false);
+      });
+      await t.test('a folder with a line break opens normally; it is just not kept in Recientes', async () => {
+        const page = await open(); await openDialog(page);
+        await wb(page, "w.nextDirectory='/synthetic-home/a\\nb'"); await page.getByRole('button', { name: 'Elegir otra carpeta…', exact: true }).click();
+        await page.locator('input[name=provider][value=terminal]').check(); await page.locator('#start-session').click();
+        await page.locator('#new-session-dialog[open]').waitFor({ state: 'detached' });
+        assert.equal((await lastSession(page)).cwd, '/synthetic-home/a\nb');
+        await openDialog(page); assert.equal(await page.locator('#session-folder optgroup[label="Recientes"]').count(), 0);
+      });
+      await t.test('Nueva sesión en esta carpeta fills the folder and opens there', async () => {
+        const page = await open(); await page.locator('.pane:nth-child(1) .pane-menu summary').click();
+        await page.locator('.pane:nth-child(1) [data-action="new-in-folder"]').click(); await page.locator('#new-session-dialog[open]').waitFor();
+        await page.waitForFunction(() => (document.querySelector('#session-folder') as HTMLSelectElement)?.value === '/synthetic/open-0');
+        assert.equal(await page.locator('#session-folder optgroup[label="Carpeta elegida"] option').innerText(), '/synthetic/open-0');
+        await page.locator('input[name=provider][value=terminal]').check(); await page.locator('#start-session').click();
+        await page.locator('#new-session-dialog[open]').waitFor({ state: 'detached' });
+        assert.equal((await lastSession(page)).cwd, '/synthetic/open-0');
+      });
       await t.test('keyboard: Enter sends a valid form once; Escape closes and returns focus to the opener', async () => {
         const page = await open(); await openDialog(page);
         await page.locator('input[name=provider][value=terminal]').check();

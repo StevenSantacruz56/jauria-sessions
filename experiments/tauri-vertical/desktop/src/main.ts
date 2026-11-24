@@ -97,6 +97,9 @@ const toolState: Record<'codex' | 'claude', ToolState> = { codex: 'checking', cl
 let lockedProject: { id: string; title: string } | null = null;
 let pendingLink: { sessionId: string; projectId: string; title: string; requestId: string } | null = null;
 let openingSession = false;
+// CLI checks: sequence of the newest one and its promise (older replies are ignored).
+let probeSeq = 0;
+let probeInFlight: Promise<void> | null = null;
 /** The dialog was opened with a tool already chosen (Empezar de nuevo aquí): a late CLI check does not switch it. */
 let newDialogPreset = false;
 let stageView: 'terminal' | 'pulso' | 'history' = 'terminal';
@@ -219,7 +222,7 @@ function openNew(cwd: string | null = null, preset?: { kind: string; title: stri
   $<HTMLInputElement>('#session-title').value = preset?.title ?? '';
   const provider = preset && ['codex', 'claude', 'terminal'].includes(preset.kind) ? document.querySelector<HTMLInputElement>(`input[name=provider][value=${preset.kind}]`) : null;
   if (provider) provider.checked = true; newDialogPreset = !!provider;
-  for (const id of ['#new-session-error', '#folder-error', '#session-link-retry']) $(id).hidden = true;
+  for (const id of ['#new-session-error', '#folder-error', '#session-link-retry', '#session-project-error']) $(id).hidden = true;
   renderFolderOptions(); renderProjectField();
   dialogReturn = document.activeElement as HTMLElement;
   closeSidebar(); newDialog.showModal(); refresh();
@@ -277,7 +280,9 @@ function renderProjectField() {
 /** Nueva sesión: tool states, capacity, the exact reason «Abrir sesión» is blocked, and the Claude same-folder warning. */
 function syncNewSessionDialog(occupied: number, sessions: Session[]) {
   const working = busyAction || openingSession;
+  // While a session opens every field is locked: what is sent is exactly what is shown.
   $<HTMLButtonElement>('#choose-directory').disabled = working || connecting; $<HTMLSelectElement>('#session-folder').disabled = working;
+  $<HTMLSelectElement>('#session-project').disabled = working; $<HTMLInputElement>('#session-title').disabled = working;
   const terminalSupported = runner?.normalTerminalVersion === 1;
   $<HTMLInputElement>('input[name=provider][value=terminal]').disabled = !terminalSupported || working;
   text('#new-terminal-status', connecting ? 'Conectando…' : !connected ? 'Sin conexión' : terminalSupported ? 'Shell zsh' : 'Requiere reiniciar runner');
@@ -291,7 +296,7 @@ function syncNewSessionDialog(occupied: number, sessions: Session[]) {
   const missing = (['codex', 'claude'] as const).filter(kind => toolState[kind] === 'missing');
   $('#provider-help').hidden = !missing.length;
   text('#provider-help-text', missing.length ? `${missing.map(kind => providerNames[kind]).join(' y ')} no ${missing.length > 1 ? 'están instalados' : 'está instalado'} en este Mac.` : '');
-  $<HTMLButtonElement>('#recheck-tools').disabled = missing.some(kind => toolState[kind] === 'checking');
+  $<HTMLButtonElement>('#recheck-tools').disabled = probeInFlight !== null;
   const provider = checkedProvider(), limit = sessionLimit();
   const reason = pendingLink || openingSession ? null : startBlockedReason({ connected, connecting, replaying, busy: busyAction, occupied, limit, folder: selectedDirectory, folderMissing, provider,
     tool: provider && provider !== 'terminal' ? toolState[provider] : 'available', terminalSupported });
@@ -1540,6 +1545,7 @@ $('#choose-directory').addEventListener('click', () => action(async () => {
   if (directory !== null) setSessionDirectory(directory);
 }));
 $('#session-folder').addEventListener('change', () => setSessionDirectory($<HTMLSelectElement>('#session-folder').value));
+$('#session-project').addEventListener('change', () => { $('#session-project-error').hidden = true; });
 $('#recheck-tools').addEventListener('click', () => void probeTools(true));
 $('#reconnect-from-dialog').addEventListener('click', () => void connect());
 newDialog.addEventListener('close', () => {
@@ -1565,14 +1571,24 @@ $('#new-session-form').addEventListener('submit', event => {
   if (pendingLink || openingSession || busyAction || $<HTMLButtonElement>('#start-session').disabled) return; // Enter only sends a valid form, once.
   const kind = checkedProvider(), folder = selectedDirectory;
   if (!kind || !folder) return;
+  // Captured at the click: the fields are locked until the open ends.
   const projectId = lockedProject ? '' : $<HTMLSelectElement>('#session-project').value;
-  const project = projectId ? sidebarProjects.snapshot.projects.find(p => p.id === projectId) ?? null : null;
-  openingSession = true; $('#new-session-error').hidden = true; announce('Abriendo sesión…');
+  const title = $<HTMLInputElement>('#session-title').value.trim() || providerLabel(kind);
+  openingSession = true; for (const id of ['#new-session-error', '#session-project-error']) $(id).hidden = true; announce('Abriendo sesión…');
   void action(async () => {
     try {
-      // The CLI may have been removed since the last check: confirm before starting.
-      if (kind !== 'terminal') { await probeTools(); if (toolState[kind] === 'missing') { refresh(); return; } }
-      const title = $<HTMLInputElement>('#session-title').value.trim() || providerLabel(kind);
+      // The CLI may have been removed since the last check: confirm before starting (the newest check wins).
+      if (kind !== 'terminal') { await probeTools(); while (probeInFlight) await probeInFlight; if (toolState[kind] === 'missing') { refresh(); return; } }
+      // The chosen project must still be open (another window or an agent may have archived it): never open unlinked in silence.
+      let project: { id: string; title: string } | null = null;
+      if (projectId) {
+        const current = await requestPulso('project', { id: projectId }).then((data: any) => data?.project as { id: string; title: string; archived?: boolean } | undefined).catch(() => undefined);
+        if (!current || current.archived) {
+          text('#session-project-error', 'Ese proyecto ya no está abierto; elige otro o Sin proyecto.'); $('#session-project-error').hidden = false;
+          loadSidebarProjects(); $<HTMLSelectElement>('#session-project').value = ''; renderProjectField(); return;
+        }
+        project = { id: current.id, title: current.title };
+      }
       let started: string;
       try { started = await start(`${kind}-${crypto.randomUUID()}`, kind, title, panes[focusedPane], folder); }
       catch (e) {
@@ -2170,11 +2186,19 @@ function createFixtures(which: 'both' | 1 | 2) {
     if (which !== 1) await start('fixture2', 'fixture', 'Fixture 2', panes[1]);
   });
 }
-async function probeTools(explicit = false) {
+/** CLI checks may overlap (startup, «Comprobar otra vez», sending): only the newest one is applied. */
+function probeTools(explicit = false): Promise<void> {
+  const seq = ++probeSeq;
+  const run = probeToolsOnce(seq, explicit).finally(() => { if (seq === probeSeq) { probeInFlight = null; if (!disposed) refresh(); } });
+  // Repaint after registering it (a microtask: the first check starts while the module is still loading).
+  probeInFlight = run; queueMicrotask(() => { if (!disposed) refresh(); }); return run;
+}
+async function probeToolsOnce(seq: number, explicit: boolean) {
   const button = $<HTMLButtonElement>('#probe'); button.disabled = true;
   if (explicit) { for (const kind of ['codex', 'claude'] as const) toolState[kind] = 'checking'; refresh(); }
   try {
     const tools = await invoke<{ tool: string; available: boolean; path?: string; version?: string }[]>('probe_tools');
+    if (seq !== probeSeq) return;
     // Versions only: paths stay out of the interface.
     text('#tools', ['claude', 'codex'].map(kind => { const tool = tools.find(t => t.tool === kind); return `${providerLabel(kind)}: ${tool?.available ? (tool.version ?? 'disponible').replace(/\s*\(.*\)\s*$/, '') : 'no encontrado'}`; }).join(' · '));
     for (const kind of ['codex', 'claude'] as const) {
@@ -2183,9 +2207,10 @@ async function probeTools(explicit = false) {
       text(`#welcome-${kind}`, `${providerLabel(kind)} · ${tool?.available ? 'CLI disponible' : 'CLI no instalada'}`);
     }
   } catch (e) {
+    if (seq !== probeSeq) return;
     for (const kind of ['codex', 'claude'] as const) { toolState[kind] = 'unknown'; text(`#welcome-${kind}`, `${providerLabel(kind)} · CLI sin verificar`); }
     text('#tools', `No se pudo comprobar: ${message(e)}`);
-  } finally { button.disabled = false; if (!disposed) { if (newDialog.open && !newDialogPreset && !openingSession) selectAvailableProvider(); refresh(); } }
+  } finally { if (seq === probeSeq) { button.disabled = false; if (!disposed && newDialog.open && !newDialogPreset && !openingSession) selectAvailableProvider(); } }
 }
 $('#probe').addEventListener('click', () => void probeTools(true));
 

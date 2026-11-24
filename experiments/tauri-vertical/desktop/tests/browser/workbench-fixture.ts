@@ -59,10 +59,15 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       remove(id: string) { const index = sessions.findIndex(s => s.id === id); if (index >= 0) sessions.splice(index, 1); }, get settings() { return settings; },
       setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart(error = 'No se pudo abrir la carpeta sintética.') { failNextStart = error; },
       /** Nueva sesión: CLI probe result, the folder «Elegir otra carpeta…» returns, links that fail. */
-      setTools(list: any[]) { tools = list; }, nextDirectory: null as string | null, failLinks: [...(options.failLinks ?? [])], stopMode(mode: typeof stopMode) { stopMode = mode; } };
+      setTools(list: any[]) { tools = list; }, archive(id: string) { (projects.find(p => p.id === id) as any).archived = true; }, nextDirectory: null as string | null, failLinks: [...(options.failLinks ?? [])], stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
       if (cmd === 'connect_runner') { native.push(cmd); return { dataDir: '/synthetic-profile', socket: '/synthetic.sock', status: status(), smoke: false }; }
-      if (cmd === 'probe_tools') { w.workbench.probes = (w.workbench.probes ?? 0) + 1; return structuredClone(tools); }
+      if (cmd === 'probe_tools') {
+        w.workbench.probes = (w.workbench.probes ?? 0) + 1; const result = structuredClone(tools);
+        // holdProbe: this reply (computed now) waits until w.workbench.releaseProbe() — an older check arriving last.
+        if (w.workbench.holdProbe) { w.workbench.holdProbe = false; await new Promise(resolve => { w.workbench.releaseProbe = resolve; }); }
+        return result;
+      }
       if (cmd === 'select_directory') return w.workbench.nextDirectory;
       if (cmd === 'home_directory') return '/synthetic-home';
       if (cmd.startsWith('plugin:')) return cmd === 'plugin:event|listen' ? 1 : cmd === 'plugin:notification|is_permission_granted' ? false : undefined;
@@ -74,6 +79,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       if (cmd === 'pulso_request') {
         calls.push(a.op);
         if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: !!options.summaryHasMore, pendingOpen: 2, links: structuredClone(options.pulsoLinks ?? []), linksTruncated: false } };
+        if (a.op === 'project') { const p = projects.find(p => p.id === a.args.id); return p ? { ok: true, result: { project: { id: p.id, title: p.title, plan: '', mainSessionId: p.mainSessionId, revision: 1, archived: !!(p as any).archived, createdAt: 1, updatedAt: 1 } } } : { ok: false, error: 'not found or not authorized' }; }
         if (a.op === 'link' && w.workbench.failLinks.includes(a.args.projectId ?? a.args.itemId)) return { ok: false, error: 'Pulso no confirmó el vínculo sintético.' };
         if (a.op === 'link') { links.push(structuredClone(a.args)); return { ok: true, result: { link: { id: `link-${links.length}`, ...a.args } } }; }
         if (a.op === 'revision') return { ok: true, result: { revision: 1 } };
@@ -110,6 +116,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
           if (stopMode === 'reject') return { ok: false, error: 'El runner rechazó la parada sintética.' };
           const s = sessions.find(s => s.id === a.args.id); s.status = stopMode; return { ok: true, result: structuredClone(s) };
         }
+        if (a.op === 'start' && w.workbench.holdStart) { w.workbench.holdStart = false; await new Promise(resolve => { w.workbench.releaseStart = resolve; }); }
         if (a.op === 'start') {
           if (failNextStart) { const error = failNextStart; failNextStart = false; return { ok: false, error }; }
           const s = { id: a.args.id, title: a.args.title, kind: a.args.kind, cwd: a.args.cwd ?? null, status: 'starting', rows: a.args.rows, cols: a.args.cols };
