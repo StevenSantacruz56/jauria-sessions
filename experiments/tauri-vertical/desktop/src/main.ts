@@ -144,6 +144,8 @@ let announcedAlerts = new Set<string>();
 let stopTarget: string | null = null;
 let stopGeneration:number|null=null;
 const stopping = new Set<string>();
+// A stop request still waiting for the runner's answer: one per session, even after «No se pudo confirmar».
+const stopFlights = new Map<string, object>();
 // One source feeds every surface: the runner's `agent` (1.4 E) or the 1.3 window-local model.
 const windowAttention = new WindowAttentionSource(attention);
 const runnerAttention = new RunnerAttentionSource(attention, { request: (op, args) => request(op, args), isAttended: id => isAttended(id), changed: () => { if (!disposed) refresh(); },
@@ -311,6 +313,7 @@ for (let i = 0; i < 2; i++) {
 }
 /** Terminar sesión always asks first (pane menu and command palette). */
 function openStopConfirmation(view: View) {
+  if (stopFlights.has(view.session.id)) return;
   stopTarget = view.session.id;stopGeneration=view.session.transport==='app-server'?view.session.codex?.generation??null:null;
   text('#stop-session-description', `${view.session.title} · ${providerLabel(view.session.kind)} · ${view.session.cwd ?? 'Sin carpeta'}`);
   stopDialog.showModal(); $<HTMLButtonElement>('#cancel-stop').focus();
@@ -562,7 +565,7 @@ function refresh() {
       if (kind === 'copy-id') { button.disabled = !view; return; }
       if (kind === 'new-in-folder') { button.disabled = !view?.session.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying; return; }
       if (kind === 'purge' || kind === 'compact') { button.hidden = !view || !finalStatus(view.session.status); button.disabled = !connected || busyAction || replaying; return; }
-      button.disabled = !connected || connecting || busyAction || replaying || (kind === 'shell' && occupied >= sessionLimit()) || (kind !== 'shell' && (!view || !isLive(view.session) || stopping.has(view.session.id))) || (['ping', 'size', 'flood'].includes(kind) && view?.session.kind !== 'fixture');
+      button.disabled = !connected || connecting || busyAction || replaying || (kind === 'shell' && occupied >= sessionLimit()) || (kind !== 'shell' && (!view || !isLive(view.session) || stopping.has(view.session.id))) || (kind === 'stop' && !!view && stopFlights.has(view.session.id)) || (['ping', 'size', 'flood'].includes(kind) && view?.session.kind !== 'fixture');
     });
   }
   const focusedView = activeView();
@@ -1105,7 +1108,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); stopUncertain.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); stopFlights.clear(); stopUncertain.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1187,10 +1190,12 @@ $('#confirm-stop').addEventListener('click', () => {
   const generation=stopGeneration;stopGeneration=null;
   stopTarget = null; stopDialog.close(); focusView(activeView());
   void action(async () => {
-    stopping.add(id); stopUncertain.delete(id); refresh();
+    const flight = {}; stopping.add(id); stopFlights.set(id, flight); stopUncertain.delete(id); refresh();
     // The pane heading says «Terminando…»; no floating notice over the terminal.
     announce(`Terminando ${title}…`);
     const work = request<Session>('stop', { id,...(generation!==null?{generation}:{}) }).then(async result => { updateStatus(await request<RunnerStatus>('status', {})); return result; });
+    // The barrier lasts until the runner answers this request, whatever the 12 s timer showed.
+    void work.finally(() => { if (stopFlights.get(id) === flight) stopFlights.delete(id); if (!disposed) refresh(); }).catch(() => {});
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), stopConfirmMs); });
     try {
@@ -1203,7 +1208,11 @@ $('#confirm-stop').addEventListener('click', () => {
         return;
       }
       stopConfirmed(id, title, result);
-    } catch (e) { notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true); }
+    } catch (e) {
+      // A refused stop leaves the session as it was: never «Terminando…» with the input disabled.
+      stopping.delete(id); refresh();
+      notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true);
+    }
     finally { clearTimeout(timer); }
   });
 });
@@ -1621,7 +1630,7 @@ function commandContext(): AppCommandContext {
     sidebarLayout: { isDefault: sameLayout(layout, defaultSidebarLayout), projectsCollapsed: layout.projectsCollapsed, agentsCollapsed: layout.agentsCollapsed }, smoke,
     grouping, filter: filter === 'closed' ? 'closed' : filter === 'open' || filter === 'activity' ? 'open' : 'other', theme: theme.value as Theme,
     renameSupported: runner?.sessionRenameVersion === 1,
-    focused: view ? { id: view.session.id, title: view.session.title, live: isLive(view.session), stopping: stopping.has(view.session.id), structured: view.session.transport === 'app-server' } : null,
+    focused: view ? { id: view.session.id, title: view.session.title, live: isLive(view.session), stopping: stopping.has(view.session.id) || stopFlights.has(view.session.id), structured: view.session.transport === 'app-server' } : null,
     actions: {
       togglePalette: () => palette?.toggle(), newSession: () => openNew(), searchSessions: focusSessionSearch, toggleSplit: () => setSplit(!split), focusOtherPane,
       showPulso, leavePulso, newProject: () => { if (!pulsoNavigationAllowed()) return; showPulso(); pulsoPanel?.newProject(); },

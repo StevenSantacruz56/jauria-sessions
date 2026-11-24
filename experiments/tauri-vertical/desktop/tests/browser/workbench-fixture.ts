@@ -30,7 +30,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true, pulsoSummaryVersion: 1, pulsoRevisionVersion: 1, pulsoRevision: 1,
       normalTerminalVersion: 1, sessionRenameVersion: 1, telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
       ...(options.settingsVersion === null ? {} : { settingsVersion: options.settingsVersion ?? 2, settings }), sessions, lastSeq: events.length });
-    let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' = 'stopped';
+    let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
     w.workbench = { out, resizes, inputs, calls, native, sessions, get settings() { return settings; },
       setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart() { failNextStart = true; }, stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
@@ -67,6 +67,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
         if (a.op === 'stop') {
           native.push(['stop', a.args.id]);
           if (stopMode === 'hang') return new Promise(() => {});
+          if (stopMode === 'reject') return { ok: false, error: 'El runner rechazó la parada sintética.' };
           const s = sessions.find(s => s.id === a.args.id); s.status = stopMode; return { ok: true, result: structuredClone(s) };
         }
         if (a.op === 'start') {

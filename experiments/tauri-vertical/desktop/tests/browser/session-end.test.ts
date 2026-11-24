@@ -110,6 +110,29 @@ try {
         await other.waitForFunction(() => document.querySelector('.pane:nth-child(1) .session-state')?.textContent === 'No se pudo confirmar el cierre', undefined, { timeout: 20000 });
         assert.equal(await other.locator('#notice').evaluate(n => n.classList.contains('error')), true);
       });
+
+      await t.test('a rejected stop leaves the session open and usable, never «Terminando…» (Codex 1)', async () => {
+        const page = await open(2);
+        await page.evaluate(() => (window as any).workbench.stopMode('reject'));
+        await terminate(page);
+        await page.locator('#notice.error').waitFor();
+        await page.waitForTimeout(300);
+        assert.notEqual(await page.locator('.pane:nth-child(1) .session-state').textContent(), 'Terminando…');
+        assert.equal(await page.evaluate(() => (document.querySelector('.pane:nth-child(1) .xterm') as any) && !(window as any).document.querySelector('.pane:nth-child(1) [data-action="stop"]').disabled), true, 'Terminar can be asked again');
+        await page.locator('.pane:nth-child(1) .xterm').click(); await page.keyboard.type('x');
+        await page.waitForFunction(() => (window as any).workbench.inputs.length > 0);
+      });
+
+      await t.test('an unanswered stop keeps one barrier: no second stop while the first is pending (Codex 3)', async () => {
+        const page = await open(2);
+        await page.evaluate(() => (window as any).workbench.stopMode('hang'));
+        await terminate(page);
+        await page.waitForFunction(() => document.querySelector('.pane:nth-child(1) .session-state')?.textContent === 'No se pudo confirmar el cierre', undefined, { timeout: 20000 });
+        await page.locator('.pane:nth-child(1) .pane-menu > summary').click();
+        assert.equal(await page.locator('.pane:nth-child(1) [data-action="stop"]').isDisabled(), true, 'Terminar waits for the first answer');
+        await page.keyboard.press('Escape');
+        assert.deepEqual(await page.evaluate(() => (window as any).workbench.native.filter((c: any) => c[0] === 'stop').length), 1);
+      });
     });
   }
 } finally { await server.close(); }
