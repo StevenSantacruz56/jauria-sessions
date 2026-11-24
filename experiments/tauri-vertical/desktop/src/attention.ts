@@ -1,7 +1,7 @@
 import { statusLabel, type WorkspaceSession } from './workspace';
 import { interruptionDetail, isClosed, isLiveStatus, lifecycleIncident } from './session-lifecycle';
 import type { ProgramState } from './program-status';
-export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
+export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean; detail?: { [key: string]: unknown } | null };
 type Session = AttentionSession;
 type Observation = { generation: number; count: number; keys: string[]; stale: boolean };
 export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[]; unseenKeys?: string[] };
@@ -46,7 +46,7 @@ export class SessionAttention {
       // the sidebar's Interrumpidas. Custody in doubt (needs_attention) stays until its source changes.
       const ended = s.status === 'interrupted' || s.status === 'failed';
       if (this.acknowledged.has(s.id) && this.acknowledged.get(s.id) !== s.status) this.acknowledged.delete(s.id);
-      if (lifecycleIncident(s.status) && !(ended && (this.retired(s.id) || this.acknowledged.get(s.id) === s.status))) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : ended ? `${statusLabel(s.status)} · ${interruptionDetail(s.status)}` : statusLabel(s.status));
+      if (lifecycleIncident(s.status) && !(ended && (this.retired(s.id) || this.acknowledged.get(s.id) === s.status))) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : ended ? `${statusLabel(s.status)} · ${interruptionDetail(s.status, s.detail)}` : statusLabel(s.status));
       const p = s.transport === 'app-server' ? this.permissions.get(s.id) : undefined;
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');

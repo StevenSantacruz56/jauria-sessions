@@ -43,11 +43,21 @@ export function lifecycleLabel(status: string): string {
   return status === 'starting' ? 'Abriendo' : categoryLabel(category(status));
 }
 
+/**
+ * A `failed` session that did run: the runner recorded its exit, or that the last output was lost.
+ * A failure before the process existed records neither.
+ */
+export type EndDetail = { [key: string]: unknown } | null | undefined;
+export function ranBeforeFailing(detail: EndDetail): boolean {
+  return !!detail && (typeof detail.exitCode === 'number' || detail.outputNotRetained === true);
+}
+
 /** Why an Interrumpida ended, in the person's words. Empty for the other categories. */
-export function interruptionDetail(status: string): string {
+export function interruptionDetail(status: string, detail?: EndDetail): string {
   switch (status) {
     case 'interrupted': return 'El runner se reinició y el proceso ya no existe';
-    case 'failed': return 'No llegó a iniciarse';
+    case 'failed': return !ranBeforeFailing(detail) ? 'No llegó a iniciarse'
+      : detail!.outputNotRetained === true ? 'Se detuvo y su último tramo de salida no quedó guardado' : 'Terminó con un error';
     case 'released': return 'Se liberó su plaza sin confirmar el cierre';
     default: return '';
   }
@@ -67,6 +77,7 @@ export type ContinuationSession = {
   status: string;
   transport?: string;
   pid?: number;
+  detail?: EndDetail;
   codex?: { nativeThreadId: string | null } | null;
 };
 /** What the recovery offers: continue the same conversation, or a new session in the same folder. */
@@ -79,19 +90,23 @@ export type Continuation = { action: 'continue' | 'restart'; note: string };
  * has the last word).
  */
 export function continuation(session: ContinuationSession, caps: { nativeResume: boolean }, binding: 'unknown' | 'none' | 'present' = 'unknown'): Continuation {
+  // The card already says why it ended; the note only says what the action does.
+  const fresh: Continuation = { action: 'restart', note: 'Se abre una sesión nueva en la misma carpeta.' };
+  // A failure after running is recovered like any other interruption of that kind of session.
+  const unstarted = session.status === 'failed' && !ranBeforeFailing(session.detail);
   if (session.transport === 'app-server') {
-    if (session.status === 'failed') return { action: 'restart', note: 'No llegó a iniciarse.' };
+    if (session.status === 'failed') return fresh;
     return session.codex?.nativeThreadId
       ? { action: 'continue', note: 'Continúa el mismo hilo de Codex.' }
       : { action: 'restart', note: 'Esta conversación de Codex no tiene turnos registrados para continuar.' };
   }
   if (session.kind === 'claude') {
-    if (session.status === 'failed' || session.pid === undefined || session.pid === null) return { action: 'restart', note: 'No llegó a iniciarse.' };
+    if (unstarted || session.pid === undefined || session.pid === null) return fresh;
     if (!caps.nativeResume) return { action: 'restart', note: 'Este runner no permite continuar conversaciones; reinícialo para hacerlo.' };
     if (binding === 'none') return { action: 'restart', note: 'No se registró la identidad de la conversación.' };
     return { action: 'continue', note: 'Abre una sesión nueva con la misma conversación de Claude Code.' };
   }
-  if (session.status === 'failed') return { action: 'restart', note: 'No llegó a iniciarse.' };
+  if (unstarted) return fresh;
   if (session.kind === 'codex') return { action: 'restart', note: 'Codex en terminal no permite continuar la conversación.' };
   return { action: 'restart', note: 'Una terminal no guarda la conversación; se abre otra en la misma carpeta.' };
 }

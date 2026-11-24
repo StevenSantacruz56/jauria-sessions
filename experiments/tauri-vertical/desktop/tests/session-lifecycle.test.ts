@@ -21,6 +21,10 @@ test('labels: four words, «Abriendo» while it starts, and the reason of an int
   for (const [status, label] of Object.entries(labels)) assert.equal(lifecycleLabel(status), label, status);
   assert.equal(interruptionDetail('interrupted'), 'El runner se reinició y el proceso ya no existe');
   assert.equal(interruptionDetail('failed'), 'No llegó a iniciarse');
+  assert.equal(interruptionDetail('failed', { reason: 'spawn' }), 'No llegó a iniciarse');
+  assert.equal(interruptionDetail('failed', { exitCode: 1 }), 'Terminó con un error', 'it ran: never «No llegó a iniciarse»');
+  assert.equal(interruptionDetail('failed', { exitCode: 1, outputNotRetained: true }), 'Se detuvo y su último tramo de salida no quedó guardado');
+  assert.equal(interruptionDetail('interrupted', { exitCode: 1 }), 'El runner se reinició y el proceso ya no existe');
   assert.match(interruptionDetail('released'), /plaza/);
   assert.equal(interruptionDetail('exited'), '');
 });
@@ -38,15 +42,21 @@ test('one recovery rule per provider (plan C.4)', () => {
   assert.equal(continuation(claude, caps).action, 'continue', 'Claude with a PID: continue (the runner checks the identity)');
   assert.equal(continuation(claude, caps, 'present').action, 'continue');
   assert.deepEqual(continuation(claude, caps, 'none'), { action: 'restart', note: 'No se registró la identidad de la conversación.' });
-  assert.deepEqual(continuation({ kind: 'claude', status: 'interrupted' }, caps), { action: 'restart', note: 'No llegó a iniciarse.' }, 'no PID: never started');
-  assert.equal(continuation({ ...claude, status: 'failed' }, caps).action, 'restart');
+  const fresh = { action: 'restart', note: 'Se abre una sesión nueva en la misma carpeta.' };
+  assert.deepEqual(continuation({ kind: 'claude', status: 'interrupted' }, caps), fresh, 'no PID: never started');
+  assert.deepEqual(continuation({ ...claude, status: 'failed' }, caps), fresh, 'failed with no recorded exit: never started');
+  // A failure after running (a recorded exit, or lost output) recovers like any interruption of its kind.
+  assert.equal(continuation({ ...claude, status: 'failed', detail: { exitCode: 1 } }, caps).action, 'continue');
+  assert.equal(continuation({ kind: 'codex', status: 'failed', pid: 1, detail: { exitCode: 1, outputNotRetained: true } }, caps).note, 'Codex en terminal no permite continuar la conversación.');
+  assert.deepEqual(continuation({ kind: 'codex', status: 'failed', transport: 'app-server', codex: { nativeThreadId: 't' }, detail: { exitCode: 1 } }, caps), fresh, 'structured Codex: a failure is never continued');
   assert.match(continuation(claude, { nativeResume: false }).note, /runner/);
   assert.equal(continuation(claude, { nativeResume: false }).action, 'restart', 'runner 1.3.x without native resume');
   assert.deepEqual(continuation({ kind: 'codex', status: 'interrupted', pid: 1 }, caps), { action: 'restart', note: 'Codex en terminal no permite continuar la conversación.' });
   assert.equal(continuation({ kind: 'codex', status: 'interrupted', transport: 'app-server', codex: { nativeThreadId: 't' } }, caps).action, 'continue', 'structured Codex with a thread');
   assert.equal(continuation({ kind: 'codex', status: 'interrupted', transport: 'app-server', codex: { nativeThreadId: null } }, caps).action, 'restart');
   assert.equal(continuation({ kind: 'terminal', status: 'interrupted', pid: 3 }, caps).action, 'restart');
-  assert.equal(continuation({ kind: 'terminal', status: 'failed' }, caps).note, 'No llegó a iniciarse.');
+  assert.deepEqual(continuation({ kind: 'terminal', status: 'failed' }, caps), fresh);
+  assert.notEqual(continuation({ kind: 'terminal', status: 'failed' }, caps).note.replace(/\.$/, ''), interruptionDetail('failed'), 'the note never repeats the reason shown above it');
 });
 
 test('most recent first: reverses the runner order without touching the input', () => {

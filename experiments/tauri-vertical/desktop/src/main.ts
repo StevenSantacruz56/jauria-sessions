@@ -915,7 +915,7 @@ function paintRecovery(pane: Pane, view: View | null) {
   const set = (selector: string, value: string) => { const node = box.querySelector(selector)!; if (node.textContent !== value) node.textContent = value; };
   if (box.dataset.folded !== String(folded)) box.dataset.folded = String(folded);
   set('.pane-recovery-title', `${session.title} · Interrumpida`);
-  set('.pane-recovery-detail', `${interruptionDetail(session.status)}. No puedes escribir en ella.`);
+  set('.pane-recovery-detail', `${interruptionDetail(session.status, session.detail)}. No puedes escribir en ella.`);
   set('.pane-recovery-note', plan.note);
   const primary = box.querySelector<HTMLButtonElement>('[data-recovery="primary"]')!;
   set('[data-recovery="primary"]', plan.action === 'continue' ? 'Continuar conversación' : 'Empezar de nuevo aquí');
