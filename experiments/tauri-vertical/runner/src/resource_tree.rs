@@ -47,6 +47,15 @@
 //! terminal's responsibility, so `helpersStatus` is then `not_attributable` and
 //! no helper is claimed. `unsupported` when the symbol is missing.
 //!
+//! Responsibility is inherited on fork, so a job a session left behind (its
+//! shell exited, it was reparented to launchd) is also "responsible = app".
+//! Only system XPC services count as helpers: their executable path, read with
+//! proc_pidpath for these launchd-parented candidates only and never exported,
+//! is under the system's `/System/Library/…/XPCServices/` (WebKit WebContent,
+//! GPU, Networking; Metal, audio…). The rest go to `others`: kernel-attributed
+//! to the app but not part of the window. `helpersStatus` is `included` only
+//! when at least one helper was found, else `none_found`.
+//!
 //! Standalone: only std, libc and serde_json; also usable via `#[path = "..."]`
 //! in the GUI bridge. No integration or manifest edits required here.
 
@@ -76,6 +85,16 @@ trait Source {
     /// The kernel's responsible PID; None when unknown or unsupported.
     fn responsible(&mut self, pid: u32) -> Option<u32>;
     fn responsibility_supported(&self) -> bool;
+    /// Whether the executable is a system XPC service; None when unreadable.
+    fn system_service(&mut self, pid: u32) -> Option<bool>;
+}
+
+/// System XPC service executables (also in the OS cryptex used by Rapid
+/// Security Responses). Compared only, never exported.
+fn is_system_service_path(path: &str) -> bool {
+    ["/System/Library/", "/System/Cryptexes/OS/System/Library/", "/System/Volumes/Preboot/Cryptexes/OS/System/Library/"]
+        .iter().any(|prefix| path.starts_with(prefix))
+        && path.contains(".xpc/Contents/MacOS/") && path.contains("/XPCServices/")
 }
 
 fn output(root: u32, selected: Vec<Process>, reason: Option<&'static str>) -> Value {
@@ -157,7 +176,7 @@ fn observe_root(root: u32, helpers: bool) -> Value {
 fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) -> Value {
     let fail = |reason| {
         let mut value = output(root, vec![], Some(reason));
-        if helpers { value["helpers"] = json!([]); value["helpersStatus"] = json!("unavailable"); }
+        if helpers { value["helpers"] = json!([]); value["others"] = json!([]); value["helpersStatus"] = json!("unavailable"); }
         value
     };
     if !valid_pid(root) {
@@ -242,13 +261,17 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) ->
         }
     }
     // A helper that exited or changed since the inventory is simply dropped.
+    // Only system XPC services are the window's; the rest (e.g. a job a
+    // session left behind) are reported apart, never as the web engine.
     let mut helper_pids = Vec::new();
+    let mut other_pids = Vec::new();
     for process in helper_candidates {
         if source.expired() {
             return fail("deadline");
         }
         if source.read(process.pid) == Ok(process) && source.responsible(process.pid) == Some(root) {
-            helper_pids.push(process.pid);
+            if source.system_service(process.pid) == Some(true) { helper_pids.push(process.pid); }
+            else { other_pids.push(process.pid); }
         }
     }
     if source.expired() {
@@ -263,7 +286,10 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) ->
     }
     let mut value = output(root, kept, reason);
     if let Some(status) = helper_status {
+        // «included» only when something was actually counted.
+        let status = if status == "included" && helper_pids.is_empty() { "none_found" } else { status };
         value["helpers"] = json!(helper_pids);
+        value["others"] = json!(other_pids);
         value["helpersStatus"] = json!(status);
     }
     value
@@ -426,6 +452,16 @@ impl Source for Kernel {
     fn responsibility_supported(&self) -> bool {
         responsibility_fn().is_some()
     }
+
+    fn system_service(&mut self, pid: u32) -> Option<bool> {
+        if !valid_pid(pid) { return None; }
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: writable buffer of exactly the size passed; returns bytes written.
+        let written = unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        if written <= 0 || written as usize > buffer.len() { return None; }
+        let path = std::str::from_utf8(&buffer[..written as usize]).ok()?;
+        Some(is_system_service_path(path))
+    }
 }
 
 #[cfg(test)]
@@ -443,6 +479,8 @@ mod tests {
         errors: HashMap<u32, &'static str>,
         /// Kernel responsibility; None models a missing symbol.
         responsible: Option<HashMap<u32, u32>>,
+        /// System XPC service executables; absent PIDs are not services.
+        services: HashSet<u32>,
     }
 
     fn p(pid: u32, ppid: u32) -> Process {
@@ -452,7 +490,7 @@ mod tests {
     fn fixture(processes: &[Process]) -> Fixture {
         Fixture { forest: processes.iter().map(|p| (p.pid, *p)).collect(),
             inventory: None, reads: HashMap::new(), change: None, expired: false,
-            expire_after_reads: None, errors: HashMap::new(), responsible: None }
+            expire_after_reads: None, errors: HashMap::new(), responsible: None, services: HashSet::new() }
     }
 
     impl Source for Fixture {
@@ -485,6 +523,20 @@ mod tests {
             self.responsible.as_ref()?.get(&pid).copied()
         }
         fn responsibility_supported(&self) -> bool { self.responsible.is_some() }
+        fn system_service(&mut self, pid: u32) -> Option<bool> { Some(self.services.contains(&pid)) }
+    }
+
+    #[test]
+    fn only_system_xpc_paths_are_window_services() {
+        for path in ["/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            "/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc/Contents/MacOS/MTLCompilerService",
+            "/System/Cryptexes/OS/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU"] {
+            assert!(is_system_service_path(path), "{path}");
+        }
+        for path in ["/bin/sleep", "/opt/homebrew/bin/node", "/Applications/Jauria.app/Contents/MacOS/aw-vertical-desktop",
+            "/Users/x/System/Library/Fake.xpc/Contents/MacOS/x", "/Applications/Other.app/Contents/XPCServices/A.xpc/Contents/MacOS/A"] {
+            assert!(!is_system_service_path(path), "{path}");
+        }
     }
 
     #[test]
@@ -525,16 +577,28 @@ mod tests {
         // 5: app launched by launchd (PID 1) and responsible for itself; 6: its
         // child; 10, 11: launchd-parented helpers attributed to the app; 12:
         // another app's helper; 13: app-attributed but already in the tree.
-        let processes = [p(5, 1), p(6, 5), p(10, 1), p(11, 1), p(12, 1), p(13, 6)];
+        // 14: a job a session left behind (reparented to launchd, responsible
+        // still the app by fork inheritance) but not a system XPC service.
+        let processes = [p(5, 1), p(6, 5), p(10, 1), p(11, 1), p(12, 1), p(13, 6), p(14, 1)];
         let mut f = fixture(&processes);
-        f.responsible = Some(HashMap::from([(5, 5), (6, 5), (10, 5), (11, 5), (12, 99), (13, 5)]));
+        f.responsible = Some(HashMap::from([(5, 5), (6, 5), (10, 5), (11, 5), (12, 99), (13, 5), (14, 5)]));
+        f.services = HashSet::from([10, 11, 12]);
         let value = observe_with(5, 7, &mut f, true);
         assert_eq!(value["pids"], json!([5, 6, 13]));
         assert_eq!(value["helpersStatus"], "included");
         assert_eq!(value["helpers"], json!([10, 11]));
+        assert_eq!(value["others"], json!([14]), "an orphan is never counted as the web engine");
         assert_eq!(value["partial"], false);
+        // Self-responsible root but no service found: not «included».
+        let mut f = fixture(&processes);
+        f.responsible = Some(HashMap::from([(5, 5), (14, 5)]));
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!(value["helpersStatus"], "none_found");
+        assert_eq!(value["helpers"], json!([]));
+        assert_eq!(value["others"], json!([14]));
         // A helper that changes before revalidation is dropped, silently.
         let mut f = fixture(&processes);
+        f.services = HashSet::from([10, 11]);
         f.responsible = Some(HashMap::from([(5, 5), (10, 5), (11, 5)]));
         f.change = Some((11, 2, None));
         assert_eq!(observe_with(5, 7, &mut f, true)["helpers"], json!([10]));
