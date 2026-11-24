@@ -727,8 +727,17 @@ impl Runner {
                 else {for override_value in mcp.codex_overrides()? {cmd.arg("-c");cmd.arg(override_value);}}
             }
         }
+        let signals=crate::provider_signals::enabled(&self.data_dir);
         if kind=="claude" {
-            cmd.arg("--settings");cmd.arg(crate::claude_quota::settings(&std::env::current_exe()?,&self.data_dir)?);
+            // One --settings for the invocation: the quota statusLine and, unless switched off,
+            // the turn/permission hooks (merged by Claude with the user's own settings and hooks).
+            let mut settings:Value=serde_json::from_str(&crate::claude_quota::settings(&std::env::current_exe()?,&self.data_dir)?)?;
+            if signals { settings["hooks"]=crate::provider_signals::claude_hooks(&std::env::current_exe()?)?; }
+            cmd.arg("--settings");cmd.arg(serde_json::to_string(&settings)?);
+        }
+        if kind=="codex" && signals {
+            let home=PathBuf::from(std::env::var_os("HOME").context("HOME required for native CLI access")?);
+            if let Some(notify)=crate::provider_signals::codex_notify(&std::env::current_exe()?,&home)? {cmd.arg("-c");cmd.arg(notify);}
         }
         let pair = native_pty_system().openpty(size).context("open PTY")?;
         let reader = pair.master.try_clone_reader().context("clone PTY reader")?;

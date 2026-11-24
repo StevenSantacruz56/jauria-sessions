@@ -15,6 +15,7 @@ mod pulso_client;
 mod pulso_mcp;
 mod pulso_mcp_config;
 mod native_sessions;
+mod provider_signals;
 
 fn main() {
     if let Err(error) = run() {
@@ -31,6 +32,11 @@ fn run() -> Result<()> {
     if args.first().is_some_and(|a| a == "--pulso-mcp") {
         anyhow::ensure!(args.len()==1,"--pulso-mcp no acepta argumentos");
         return pulso_mcp::run();
+    }
+    if args.first().is_some_and(|a| a == "--attention-hook") {
+        // Provider hook (Claude Code, Codex notify): silent and always successful.
+        provider_signals::hook(args.get(1).and_then(|a| a.to_str()));
+        return Ok(());
     }
     if args.first().is_some_and(|a|a=="--quota-hook") {
         anyhow::ensure!(args.len()==3 && args[1]=="--data-dir","invalid quota callback arguments");
