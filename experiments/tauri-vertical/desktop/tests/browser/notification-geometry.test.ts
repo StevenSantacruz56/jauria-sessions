@@ -128,7 +128,7 @@ try {
               await page.waitForFunction(() => (window as any).geometryFixture.resizes.length > 0);
               await page.evaluate(() => (window as any).geometryFixture.output(
                 Array.from({ length: 160 }, (_, i) => `synthetic Codex output ${i}\r\n`).join('')));
-              await page.waitForFunction(() => document.querySelector('#cursor')?.textContent?.includes(': 1'));
+              await page.waitForFunction(() => Number((document.querySelector('#workbench') as HTMLElement | null)?.dataset.renderedSeq ?? 0) >= 1);
               await settle(page);
               assert.equal(await page.locator('#attention-banner').isVisible(), false);
               assert.equal(await page.locator('#notice').isVisible(), false);
@@ -181,9 +181,9 @@ try {
               ]) {
                 const seq = await page.evaluate(data => {
                   const f = (window as any).geometryFixture; f.output(data.repeat(20));
-                  return Number(document.querySelector('#cursor')?.textContent?.split(':').at(-1)) + 1;
+                  return Number((document.querySelector('#workbench') as HTMLElement | null)?.dataset.renderedSeq ?? 0) + 1;
                 }, data);
-                await page.waitForFunction(seq => Number(document.querySelector('#cursor')?.textContent?.split(':').at(-1)) >= seq, seq);
+                await page.waitForFunction(seq => Number((document.querySelector('#workbench') as HTMLElement | null)?.dataset.renderedSeq ?? 0) >= seq, seq);
                 await check('raw redraw/progress remains quiet');
                 assert.equal(await page.locator('#attention-banner').isVisible(), false);
                 assert.equal(await page.locator('#session-alerts').isVisible(), false);
@@ -349,7 +349,7 @@ try {
               assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'long error does not widen page');
               assert.deepEqual(await page.evaluate(() => (window as any).geometryFixture.unexpected), []);
               assert.deepEqual(errors, []);
-            } catch (error) { console.error(error); console.error(await page.evaluate(()=>({cursor:document.querySelector("#cursor")?.textContent,connection:document.querySelector("#connection-state")?.textContent,notice:document.querySelector("#notice-text")?.textContent,unexpected:(window as any).geometryFixture?.unexpected})),errors); throw error; }
+            } catch (error) { console.error(error); console.error(await page.evaluate(()=>({cursor:(document.querySelector("#workbench") as HTMLElement|null)?.dataset.renderedSeq,connection:document.querySelector("#connection-state")?.textContent,notice:document.querySelector("#notice-text")?.textContent,unexpected:(window as any).geometryFixture?.unexpected})),errors); throw error; }
             finally { await page.close(); }
           });
         }

@@ -38,6 +38,9 @@ import { statusLabel, providerLabel, matchesSession, type SessionFilter } from '
 import { CommandPalette, type PaletteItem } from './command-palette';
 import { appCommands, newSessionUnavailable, paletteEntries, type AppCommandContext, type Theme } from './app-commands';
 import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcutAria, shortcutHint } from './shortcuts';
+import { claimFloating, release as releaseFloating } from './floating';
+import { clampShare, clampWidth, defaultSidebarLayout, effectiveSidebarWidth, maxSidebarWidth, projectsMaxHeight, projectsShare, readSidebarLayout, sameLayout, saveSidebarLayout, separatorKey, sidebarOverlayBelow, sidebarWidth, type SidebarLayout } from './sidebar-layout';
+import { readTerminalFont, saveTerminalFont, terminalFontSize } from './terminal-font';
 
 type Session = { agent?: unknown; programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = { agentAttentionVersion?: number; agentAttention?: object; settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -152,6 +155,12 @@ function scheduleProgramRefresh(){if(programRefresh!==undefined)return;programRe
 function programLabel(id:string){const state=source.display(id);return state?programStateLabel(state):'';}
 function attentionSessions(): Session[] { return source.sessions([...views.values()].map(v => v.session)); }
 const resizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const finalStatus = (status: string) => ['exited', 'stopped', 'failed', 'interrupted', 'released'].includes(status);
+// Terminar the person confirmed whose end the runner did not confirm (needs_attention or no answer in time).
+const stopUncertain = new Set<string>();
+const stopConfirmMs = 12000;
+// Most recently used sessions: the last tie-break when a pane needs another session.
+const lastUsed = new Map<string, number>(); let usedClock = 0;
 const newDialog = $<HTMLDialogElement>('#new-session-dialog');
 const alertsPopover = new AlertsPopover({ button: $<HTMLButtonElement>('#session-alerts'), panel: $('#attention-banner'), list: $('#attention-list'),
   onOpenSession: id => { if (views.has(id)) selectSession(id); }, onToggle: () => queueMicrotask(() => { if (!disposed) refresh(); }) });
@@ -166,9 +175,9 @@ const nativeAttention = new NativeAttention({
   text('#enable-native-notifications', nativeAttention.enabled ? 'Desactivar avisos de macOS' : 'Activar avisos de macOS…');
 });
 function activeView() { return panes[focusedPane]?.id ? views.get(panes[focusedPane].id!) : undefined; }
-function text(selector: string, value: string) { $(selector).textContent = value; }
+// Null-safe: the Configuración controls are moved into its dialog, which is removed on unload.
+function text(selector: string, value: string) { const node = document.querySelector(selector); if (node) node.textContent = value; }
 function closeSidebar() { $('.workspace-shell').classList.remove('sidebar-open'); $('#sidebar-scrim').hidden = true; $('#toggle-sidebar').setAttribute('aria-expanded', 'false'); }
-function setInspector(open: boolean) { $('#inspector').hidden = !open; $('#workspace-body').classList.toggle('has-inspector', open); $('#toggle-inspector').setAttribute('aria-pressed', String(open)); }
 function openNew(cwd: string | null = null) {
   if (busyAction || newDialog.open) return;
   const version = ++newDialogVersion;
@@ -192,7 +201,7 @@ function setSessionDirectory(directory: string) {
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
 function selectSession(id: string) {
-  source.select(id, attentionSessions());
+  source.select(id, attentionSessions()); lastUsed.set(id, ++usedClock);
   stageView = 'terminal';
   const target = panes[focusedPane];
   const other = panes.find(p => p !== target && p.id === id);
@@ -236,7 +245,31 @@ for (let i = 0; i < 2; i++) {
   panes.push(pane);
   root.addEventListener('pointerdown', () => { const consumed = pane.id ? source.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
   root.addEventListener('focusin', () => { const consumed = pane.id ? source.consumeActivity(pane.id) : false; if (focusedPane !== i || consumed) { focusedPane = i; refresh(); } });
+  const menu = root.querySelector<HTMLDetailsElement>('.pane-menu')!;
+  const menuSummary = menu.querySelector<HTMLElement>('summary')!;
+  // Shared dismissal rule (floating.ts): a press outside, Escape, Tab out or another floating control closes it.
+  const menuFloating = { contains: (node: Node) => menu.contains(node), close: (restore: boolean) => { if (!menu.open) return; menu.open = false; if (restore) menuSummary.focus({ preventScroll: true }); } };
+  // Claim on the opening click itself (the toggle event comes a task later), so a quick press elsewhere still closes it.
+  menuSummary.addEventListener('click', () => { if (!menu.open) claimFloating(menuFloating); });
+  menu.addEventListener('toggle', () => { if (menu.open) claimFloating(menuFloating); else releaseFloating(menuFloating); });
+  menu.addEventListener('keydown', event => { if (event.key === 'Escape' && menu.open) { event.preventDefault(); event.stopPropagation(); menuFloating.close(true); } });
   root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
+    const local = button.dataset.action!;
+    if (['close-pane', 'copy-cwd', 'copy-id', 'new-in-folder', 'purge', 'compact'].includes(local)) {
+      button.addEventListener('click', () => {
+        menu.open = false;
+        const view = pane.id ? views.get(pane.id) : undefined; if (!view) return;
+        if (local === 'close-pane') { leavePane(pane, view.session.id); return; }
+        if (local === 'new-in-folder') { openNew(view.session.cwd); return; }
+        if (local === 'copy-cwd' || local === 'copy-id') {
+          const value = local === 'copy-cwd' ? view.session.cwd : view.session.id; if (!value) return;
+          void navigator.clipboard.writeText(value).then(() => notice(local === 'copy-cwd' ? 'Carpeta copiada.' : 'Identificador copiado.'), e => notice(message(e), true));
+          return;
+        }
+        historyAction(local === 'purge' ? 'purge_history' : 'compact_history', view.session.id);
+      });
+      return;
+    }
     if (button.dataset.action === 'rename') {
       button.addEventListener('click', () => {
         root.querySelectorAll('details').forEach(d => d.open = false);
@@ -300,7 +333,37 @@ function syncNotice() {
     notice.dataset.persistent = 'true'; notice.classList.toggle('error', !!persistent);
   }
 }
-function notice(message: string, error = false) { $('#notice').dataset.persistent = 'false'; text('#notice-text', message); $('#notice').hidden = false; $('#notice').classList.toggle('error', error); syncNotice(); }
+/**
+ * The floating notice (bottom right, absolute: never part of a terminal's layout).
+ * - info: a short confirmation; leaves on its own after 5 s (later while the pointer or focus is on it).
+ * - progress: announces a condition; the code that ends the condition hides it.
+ * - error (`true`): stays until the person closes it (button or Escape) or the cause is resolved.
+ * A new message replaces the previous one; messages never stack. Every text is
+ * also announced by the polite live region of the notice; nothing takes focus.
+ */
+type NoticeKind = 'info' | 'progress' | 'error';
+const noticeTransientMs = 5000;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+function notice(message: string, kind: boolean | NoticeKind = false) {
+  const level: NoticeKind = kind === true ? 'error' : kind === false ? 'info' : kind;
+  const node = $('#notice'); node.dataset.persistent = 'false'; node.dataset.kind = level;
+  text('#notice-text', message); node.hidden = false; node.classList.toggle('error', level === 'error');
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+  noticeTimer = undefined;
+  if (level === 'info') {
+    const expire = () => {
+      noticeTimer = undefined;
+      if (node.hidden || node.dataset.kind !== 'info' || $('#notice-text').textContent !== message) return;
+      if (node.matches(':hover') || node.contains(document.activeElement)) { noticeTimer = setTimeout(expire, 1500); return; }
+      node.hidden = true; syncNotice();
+    };
+    noticeTimer = setTimeout(expire, noticeTransientMs);
+  }
+  syncNotice();
+}
+function dismissNotice() { if (noticeTimer !== undefined) clearTimeout(noticeTimer); noticeTimer = undefined; $('#notice').hidden = true; syncNotice(); }
+/** Polite announcement without any visible element (session start, ending). */
+function announce(value: string) { text('#app-announcer', value); }
 function message(e: unknown) { return e instanceof Error ? e.message : String(e); }
 async function request<T = unknown>(op: string, args: object): Promise<T> {
   const response = await invoke<{ ok: boolean; result: T; error?: string }>('runner_request', { op, args });
@@ -356,16 +419,22 @@ function refresh() {
   else if ($('#telemetry-summary').textContent === 'Recursos sin conexión') text('#telemetry-summary','CPU — · RAM —');
   text('#connection-state', connecting ? 'Conectando…' : connected ? 'Conectado' : 'Sin conexión');
   $('#connection-dot').dataset.state = connected ? 'running' : 'failed';
-  text('#runner-state', runner ? `${connected ? 'Runner activo' : 'Runner sin confirmar'}${runner.runnerVersion ? ` · v${runner.runnerVersion}` : ''} · PID ${runner.pid} · ${runner.sessions.length} sesiones` : 'Runner: sin consultar');
+  // Acerca de y diagnóstico (Configuración): the runner version next to the app's, and what to do when they differ.
+  text('#runner-state', runner ? `Servicio de sesiones (runner): ${runner.runnerVersion ?? 'versión anterior a 1.1, sin número'}${connected ? '' : ' · sin conexión'} · ${runner.sessions.length} ${runner.sessions.length === 1 ? 'sesión' : 'sesiones'} en este perfil` : 'Servicio de sesiones (runner): sin conexión');
   const capabilities=runner as RunnerStatus & {telemetryVersion?:number;codexVersion?:number;terminalSessionVersion?:number};
-  $('#runner-upgrade').hidden = !connected || (capabilities?.telemetryVersion === 1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===2 && runner?.sessionRenameVersion===1);
-  $<HTMLButtonElement>('#restart-runner').disabled = !connected || busyAction;
-  text('#cursor', `Eventos procesados: ${renderedSeq}`);
+  const olderCapabilities = !(capabilities?.telemetryVersion === 1 && capabilities?.codexVersion===1 && capabilities?.terminalSessionVersion===1 && runner?.normalTerminalVersion===1 && runner?.claudeNativeConfigVersion===1 && runner?.terminalStreamVersion===1 && runner?.nativePermissionsVersion===1 && runner?.settingsVersion===2 && runner?.sessionRenameVersion===1);
+  const versionMismatch = !!runner && runner.runnerVersion !== appVersion;
+  const upgrade = document.querySelector<HTMLElement>('#runner-upgrade'); if (upgrade) upgrade.hidden = !connected || (!versionMismatch && !olderCapabilities);
+  text('#runner-upgrade', versionMismatch
+    ? `Las versiones no coinciden: la app es ${appVersion} y el servicio de sesiones es ${runner?.runnerVersion ?? 'anterior'}. Tus sesiones siguen funcionando, pero las funciones nuevas necesitan reiniciarlo: termina el trabajo en curso y pulsa Reiniciar runner….`
+    : 'El servicio de sesiones es de una versión anterior. Para activar las funciones nuevas, reinícialo cuando puedas detener todo el trabajo del perfil.');
+  const restart = document.querySelector<HTMLButtonElement>('#restart-runner'); if (restart) restart.disabled = !connected || busyAction;
+  if ($('#workbench').dataset.renderedSeq !== String(renderedSeq)) $('#workbench').dataset.renderedSeq = String(renderedSeq);
   const retained=runner?.retention;
   const usage = historyUsage(retained);
   const level = usage >= .95 ? 95 : usage >= .8 ? 80 : 0;
   const historyWarnings = [...views.values()].filter(view => !isLocalHistoryLimit(streamMetadata(view.session)?.history) && ['limited','error','incomplete','unknown_tail'].includes(streamMetadata(view.session)?.history.state ?? '')).length;
-  text('#storage-usage',retained?`Historial: ${formatTelemetryBytes(retained.outputEncodedBytes)} codificados · ${retained.eventRows} eventos${retained.atCapacity?' · límite de guardado local alcanzado':level ? ` · uso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
+  text('#storage-usage',retained?`Historial guardado: ${formatTelemetryBytes(retained.outputEncodedBytes)} · ${retained.eventRows} eventos${retained.atCapacity?' · límite de guardado local alcanzado':level ? ` · uso ${level}%` : ''}${historyWarnings ? ` · ${historyWarnings} con historial limitado o sin guardar` : ''}. La cuota no representa espacio físico en disco.`:'Cuota de historial sin consultar.');
   $<HTMLButtonElement>('#connect').disabled = connecting || busyAction;
   const sessions = attentionSessions();
   const attended = activeView()?.session.id;
@@ -448,8 +517,6 @@ function refresh() {
   // Older runners: an agent that reports done/idle has often just written to
   // Pulso through MCP. With pulsoRevisionVersion the status revision says so.
   if (turnEnded(programSeen, sessions, source) && statusPulsoRevision() === null) loadSidebarProjects();
-  for (const id of ['create-both', 'create-1', 'create-2']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || connecting || replaying || occupied + (id === 'create-both' ? 2 : 1) > sessionLimit();
-  $('#fixtures').hidden = !smoke;
   const newSessionBlocked = newSessionUnavailable({ connected, busy: busyAction, replaying, occupied, limit: sessionLimit() }) !== null;
   for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = newSessionBlocked;
   for (const id of ['choose-directory', 'use-home-directory']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction || connecting;
@@ -467,10 +534,13 @@ function refresh() {
     const activity = view && (isLive(view.session) || alertById.has(view.session.id)) ? activityById.get(view.session.id) : undefined;
     paintPaneHeader(pane.root, {
       paneIndex: index, kind: view?.session.kind ?? null, title: view?.session.title ?? null, cwd: view?.session.cwd ?? null,
-      state: view ? (stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
+      state: view ? (stopUncertain.has(view.session.id) && !finalStatus(view.session.status) ? 'No se pudo confirmar el cierre' : stopping.has(view.session.id) && isLive(view.session) ? 'Terminando…' : isLive(view.session) && programLabel(view.session.id) ? programLabel(view.session.id) : statusLabel(view.session.status)) + (historySuffix(view) ? ` · ${historySuffix(view)}` : '') : 'Sin sesión',
       stateKey: view && isLive(view.session) ? source.display(view.session.id) ?? 'unreported' : view?.session.status ?? '',
       activity: activity?.kind ?? null, activityLabel: activity?.label ?? '',
       history: !view || isLive(view.session) ? '' : ['exited', 'stopped', 'released'].includes(view.session.status) ? 'Historial · solo lectura' : `${statusLabel(view.session.status)} · entrada deshabilitada`,
+      meta: view ? `${providerLabel(view.session.kind)} · ${statusLabel(view.session.status)}${view.session.transport === 'app-server' ? '' : ` · ${view.term.cols} × ${view.term.rows}`} · ${view.session.id}` : '',
+      note: view && isLocalHistoryLimit(streamMetadata(view.session)?.history)
+        ? `Historial local parcial. ${isLive(view.session) ? 'La sesión continúa normalmente. Se alcanzó el límite de guardado local; la salida nueva no se añade al historial de Jauría.' : 'Este límite solo afecta a la salida guardada por Jauría.'} No limita el uso ni afecta la cuota del proveedor.` : '',
     });
     pane.picker.refresh();
     (pane.root.querySelector('.fixture-controls') as HTMLElement).hidden = !smoke;
@@ -487,6 +557,11 @@ function refresh() {
         button.hidden = view?.session.status !== 'needs_attention';
         button.disabled = !connected || connecting || busyAction || replaying; return;
       }
+      if (kind === 'close-pane') { button.hidden = !view || isLive(view.session) || view.session.status === 'needs_attention'; button.disabled = false; return; }
+      if (kind === 'copy-cwd') { button.disabled = !view?.session.cwd; return; }
+      if (kind === 'copy-id') { button.disabled = !view; return; }
+      if (kind === 'new-in-folder') { button.disabled = !view?.session.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying; return; }
+      if (kind === 'purge' || kind === 'compact') { button.hidden = !view || !finalStatus(view.session.status); button.disabled = !connected || busyAction || replaying; return; }
       button.disabled = !connected || connecting || busyAction || replaying || (kind === 'shell' && occupied >= sessionLimit()) || (kind !== 'shell' && (!view || !isLive(view.session) || stopping.has(view.session.id))) || (['ping', 'size', 'flood'].includes(kind) && view?.session.kind !== 'fixture');
     });
   }
@@ -507,20 +582,6 @@ function refresh() {
   if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), stageView === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
   text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
   text('#workspace-breadcrumb', current?.cwd?.split('/').filter(Boolean).pop() ?? (current ? providerLabel(current.kind) : 'Sesiones locales'));
-  text('#inspector-provider', current ? providerLabel(current.kind) : '');
-  text('#inspector-title', current?.title ?? 'Sin sesión seleccionada');
-  text('#inspector-description', current ? 'El estado indica la disponibilidad del proceso; los permisos y las respuestas aparecen en la terminal.' : 'Selecciona una sesión para ver su carpeta y su estado.');
-  $('#purge-history').hidden = !current || !['exited','stopped','failed','interrupted','released'].includes(current.status);
-  $('#compact-history').hidden=$('#purge-history').hidden;
-  const selectedHistory = current ? streamMetadata(current)?.history : undefined;
-  const localHistory = $('#session-local-history');
-  localHistory.hidden = !isLocalHistoryLimit(selectedHistory);
-  localHistory.textContent = isLocalHistoryLimit(selectedHistory)
-    ? `Historial local parcial. ${current && isLive(current) ? 'La sesión continúa normalmente. Se alcanzó el límite de guardado local; la salida nueva no se añade al historial de Jauría.' : 'Este límite solo afecta a la salida guardada por Jauría.'} No limita el uso ni afecta la cuota del proveedor.` : '';
-  text('#inspector-state', current ? statusLabel(current.status) : '—');
-  text('#inspector-cwd', current?.cwd ?? '—'); text('#inspector-id', current?.id ?? '—');
-  $<HTMLButtonElement>('#copy-session-id').disabled = !current;
-  $<HTMLButtonElement>('#new-in-folder').disabled = !current?.cwd || !connected || busyAction || occupied >= sessionLimit() || replaying;
   $('#workspace-breadcrumb').hidden = planning;
   if (planning) text('#workspace-title', 'Pulso');
   const visibleSessions = sessions.filter(s => matches(s, filter, query));
@@ -637,7 +698,7 @@ function ensure(session: Session): View {
   // Open in a real document element, including sessions not selected in a pane.
   host.style.visibility = 'hidden'; host.style.position = 'absolute'; host.style.width = '550px'; host.style.height = '340px';
   document.body.append(host);
-  const term = new Terminal({ allowProposedApi: true, screenReaderMode: false, convertEol: false, scrollback: 8000, rows: session.rows || 24, cols: session.cols || 80, fontSize: 13, ...terminalTypography, cursorBlink: true, theme: terminalTheme });
+  const term = new Terminal({ allowProposedApi: true, screenReaderMode: false, convertEol: false, scrollback: 8000, rows: session.rows || 24, cols: session.cols || 80, fontSize: terminalFont, ...terminalTypography, cursorBlink: true, theme: terminalTheme });
   const fit = new FitAddon(); term.loadAddon(fit); if(session.transport!=='app-server')term.open(host);
   const keyboard = attachTerminalKeyboard(term);
   host.remove(); host.removeAttribute('style');
@@ -670,7 +731,7 @@ function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   runner = status;
   if ((source = status.agentAttentionVersion === 1 ? runnerAttention : windowAttention) === runnerAttention) runnerAttention.ingestStatus(status);
-  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') source.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);windowAttention.forget(session.id);}}
+  for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') source.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);windowAttention.forget(session.id);}if(finalStatus(session.status))stopUncertain.delete(session.id);}
   refresh();
   // Runner 1.4: Pulso changes arrive as a revision in status (sidebar and board).
   if (statusPulsoRevision() !== null) loadSidebarProjects();
@@ -712,7 +773,8 @@ async function start(id: string, kind: string, title: string, pane: Pane, cwd?: 
   requireSessionCapacity();
   const session = await request<Session>('start', { id, kind, title, rows: 24, cols: 80, ...(cwd ? { cwd } : {}) });
   presentSession(session, pane);
-  notice(`${title}: inicio solicitado. Esperando salida y estado reales.`);
+  // The pane heading already says «Abriendo» until the runner reports it running: no floating notice.
+  announce(`Abriendo ${title}…`);
 }
 function presentSession(session: Session, pane: Pane) {
   stageView = 'terminal';
@@ -720,7 +782,7 @@ function presentSession(session: Session, pane: Pane) {
   const view = ensure(session);
   const other = panes.find(p => p !== pane && p.id === id);
   if (other) assign(other, null);
-  assign(pane, id); focusedPane = panes.indexOf(pane);
+  assign(pane, id); focusedPane = panes.indexOf(pane); lastUsed.set(id, ++usedClock);
   if (focusedPane === 1) split = true;
   filter = openFilter(); refresh(); scheduleResize(view); focusView(view);
 }
@@ -1005,6 +1067,8 @@ async function poll(version: number) {
       // WebKit suspends requestAnimationFrame for an occluded desktop window.
       if (version !== loopVersion) return;
       renderedSeq = pageSeq;
+      // Processed-event cursor for test harnesses only (no visible text since Información was retired).
+      if (page.events.length) $('#workbench').dataset.renderedSeq = String(renderedSeq);
       if (smoke) {
         streamMetrics.pages++;streamMetrics.lastTransferMs=transferred-pageStarted;streamMetrics.lastParseMs=performance.now()-transferred;
         streamMetrics.lastPageMs=performance.now()-pageStarted;streamMetrics.maxParseMs=Math.max(streamMetrics.maxParseMs,streamMetrics.lastParseMs);
@@ -1016,7 +1080,6 @@ async function poll(version: number) {
       if (!page.hasMore && page.events.length) for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
       // Status/state transitions refresh the shell above. Output only changes
       // xterm and the event counter; rebuilding chrome every 12ms adds latency.
-      if (page.events.length) text('#cursor', `Eventos procesados: ${renderedSeq}`);
       await evidence();
       const yielding=performance.now();
       if (!page.hasMore && !nativeMore) await interactivePoll.wait(document.visibilityState === 'visible');
@@ -1042,7 +1105,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); stopUncertain.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1051,10 +1114,13 @@ async function connect() {
     if (groupingProfile !== profileDataDir) {
       groupingProfile = profileDataDir; sidebarProjects.reset(); sidebarAsked = null; sidebarRetryAt = 0; projectListKey = '';
       try { grouping = readAgentGrouping(localStorage, profileDataDir); } catch { grouping = 'project'; }
+      // Per-profile view preferences, applied before any terminal is fitted.
+      try { layout = readSidebarLayout(localStorage, profileDataDir); } catch { layout = { ...defaultSidebarLayout }; }
+      applySidebarLayout();
+      let font: number = terminalFontSize.default; try { font = readTerminalFont(localStorage, profileDataDir); } catch { /* default */ }
+      setTerminalFont(font, false);
       if (filter === 'open' || filter === 'activity') filter = openFilter();
     }
-    $('#layout').textContent = `Datos: ${config.dataDir}`;
-    $('#layout').title = `Socket: ${config.socket}`;
     updateStatus(config.status);
     if (previousSelection.some(Boolean)) {
       for (const pane of panes) assign(pane, null);
@@ -1069,7 +1135,7 @@ async function connect() {
     if (!split) assign(panes[1], null);
     $('#notice').hidden = replayThrough === 0; syncNotice();
     for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
-    if (replaying) notice('Conectado. Recuperando historial…');
+    if (replaying) notice('Conectado. Recuperando historial…', 'progress');
     const version = loopVersion;
     activeLoop = poll(version);
   } catch (e) { connected = false; notice(`No se pudo conectar: ${message(e)}`, true); }
@@ -1111,7 +1177,6 @@ $('#session-tabs').addEventListener('wheel', event => {
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || strip.scrollWidth <= strip.clientWidth) return;
   strip.scrollLeft += event.deltaY; event.preventDefault();
 }, { passive: false });
-$('#new-in-folder').addEventListener('click', () => openNew(activeView()?.session.cwd));
 for (const id of ['cancel-session', 'cancel-session-x']) $(`#${id}`).addEventListener('click', closeNew);
 newDialog.addEventListener('cancel', event => { if (busyAction) event.preventDefault(); });
 $('#cancel-stop').addEventListener('click', () => { stopTarget = null; stopDialog.close(); focusView(activeView()); });
@@ -1122,16 +1187,70 @@ $('#confirm-stop').addEventListener('click', () => {
   const generation=stopGeneration;stopGeneration=null;
   stopTarget = null; stopDialog.close(); focusView(activeView());
   void action(async () => {
-    stopping.add(id); refresh();
-    notice(`${title}: terminando… Esperando confirmación del proceso.`);
-    try { const result=await request<Session>('stop', { id,...(generation!==null?{generation}:{}) }); updateStatus(await request<RunnerStatus>('status', {})); notice(['exited','stopped','failed','interrupted','released'].includes(result.status)?`${title}: sesión detenida. El historial se conserva.`:`${title}: la detención requiere atención. La carpeta y su plaza siguen reservadas.`,result.status==='needs_attention'); }
-    catch (e) { notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true); }
+    stopping.add(id); stopUncertain.delete(id); refresh();
+    // The pane heading says «Terminando…»; no floating notice over the terminal.
+    announce(`Terminando ${title}…`);
+    const work = request<Session>('stop', { id,...(generation!==null?{generation}:{}) }).then(async result => { updateStatus(await request<RunnerStatus>('status', {})); return result; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), stopConfirmMs); });
+    try {
+      const result = await Promise.race([work, late]);
+      if (result === null) {
+        // Never «Terminando…» forever: say it could not be confirmed and keep listening for the answer.
+        stopping.delete(id); stopUncertain.add(id); refresh();
+        notice(`${title}: no se pudo confirmar el cierre. Pulsa Reconectar para ver su estado real; si el proceso ya no existe, usa Liberar carpeta en el menú «…» del panel.`, true);
+        void work.then(answer => { if (!disposed) stopConfirmed(id, title, answer); }).catch(() => {});
+        return;
+      }
+      stopConfirmed(id, title, result);
+    } catch (e) { notice(`${message(e)} Reconecta para confirmar el estado antes de continuar.`, true); }
+    finally { clearTimeout(timer); }
   });
 });
-$('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; syncNotice(); });
+/** The runner answered a Terminar the person confirmed. */
+function stopConfirmed(id: string, title: string, result: Session) {
+  if (finalStatus(result.status)) {
+    stopUncertain.delete(id);
+    for (const pane of panes) if (pane.id === id && (pane === panes[0] || split)) leavePane(pane, id);
+    notice(`${title}: terminada. Está en Historial, en solo lectura.`);
+  } else {
+    stopping.delete(id); stopUncertain.add(id); refresh();
+    notice(`${title}: no se pudo confirmar el cierre. La carpeta y su plaza siguen reservadas; comprueba los procesos y usa Liberar carpeta en el menú «…» del panel.`, true);
+  }
+}
+/**
+ * Takes an ended session out of one pane: the next open session not shown in
+ * the other pane, by priority (needs you → finished unseen → working → most
+ * recently used), else nothing (the welcome view or the pane's empty state).
+ * Keyboard focus goes to that terminal, else to Nueva sesión: never to body.
+ */
+function leavePane(pane: Pane, id: string) {
+  if (pane.id !== id) return;
+  const index = panes.indexOf(pane);
+  const shownElsewhere = panes.filter((other, i) => other !== pane && (i === 0 || split) && other.id).map(other => other.id);
+  const rank = (s: Session) => { const kind = currentActivity.get(s.id)?.kind; return kind === 'needs' || kind === 'notice' ? 0 : kind === 'finished' ? 1 : kind === 'working' ? 2 : 3; };
+  const next = [...views.values()].map(v => v.session).filter(s => s.id !== id && isLive(s) && !shownElsewhere.includes(s.id) && !stopping.has(s.id))
+    .sort((a, b) => rank(a) - rank(b) || (lastUsed.get(b.id) ?? 0) - (lastUsed.get(a.id) ?? 0))[0];
+  focusedPane = index;
+  if (next) { selectSession(next.id); return; }
+  assign(pane, null); refresh();
+  // Inside Terminar's action Nueva sesión is still disabled: focus it once the action ends (never body).
+  const place = () => {
+    const welcome = $<HTMLButtonElement>('#welcome-create');
+    if (!$('#welcome').hidden) (welcome.disabled ? $<HTMLButtonElement>('#open-command-palette') : welcome).focus();
+    else pane.trigger.focus();
+  };
+  place(); setTimeout(() => { if (!disposed && pane.id === null && (document.activeElement === document.body || document.activeElement?.id === 'open-command-palette')) place(); });
+}
+$('#dismiss-notice').addEventListener('click', dismissNotice);
+$('#notice').addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault(); event.stopPropagation();
+  const hadFocus = $('#notice').contains(document.activeElement);
+  dismissNotice();
+  if (hadFocus) { const view = activeView(); if (view && stageView === 'terminal') focusView(view); else $<HTMLButtonElement>('#open-command-palette').focus(); }
+});
 $('#toggle-split').addEventListener('click', () => setSplit(!split));
-$('#toggle-inspector').addEventListener('click', () => setInspector($('#inspector').hidden));
-$('#close-inspector').addEventListener('click', () => setInspector(false));
 $('#toggle-sidebar').addEventListener('click', () => {
   const open = $('.workspace-shell').classList.toggle('sidebar-open'); $('#sidebar-scrim').hidden = !open;
   $('#toggle-sidebar').setAttribute('aria-expanded', String(open));
@@ -1139,6 +1258,106 @@ $('#toggle-sidebar').addEventListener('click', () => {
   refresh();
 });
 $('#sidebar-scrim').addEventListener('click', () => { closeSidebar(); refresh(); });
+/*
+ * Sidebar layout (1.4.0). Proyectos and Agentes scroll on their own; the split
+ * sets how much Proyectos may take (it never grows past its content, never
+ * below two rows, and Agentes keeps its own minimum); the width handle sets the
+ * sidebar width. Both are remembered per profile (sidebar-layout.ts). The split
+ * only moves the sidebar. The width changes the terminals, so a drag moves a
+ * guide and applies the width once, on release: one `resize` per visible PTY.
+ */
+let layout: SidebarLayout = { ...defaultSidebarLayout };
+const regions = $('#sidebar-regions'), splitHandle = $('#sidebar-split'), widthHandle = $('#sidebar-width-handle');
+function applySidebarLayout() {
+  const shell = $('.workspace-shell');
+  const overlay = window.innerWidth <= sidebarOverlayBelow;
+  const width = overlay ? sidebarWidth.default : effectiveSidebarWidth(layout.width, window.innerWidth);
+  if (shell.style.getPropertyValue('--sidebar-width') !== `${width}px`) shell.style.setProperty('--sidebar-width', `${width}px`);
+  for (const [section, collapsed] of [['projects', layout.projectsCollapsed], ['agents', layout.agentsCollapsed]] as const) {
+    $(`#sidebar-${section}`).dataset.collapsed = String(collapsed);
+    $(`#sidebar-${section}-heading button`).setAttribute('aria-expanded', String(!collapsed));
+  }
+  regions.dataset.agentsCollapsed = String(layout.agentsCollapsed);
+  splitHandle.hidden = layout.projectsCollapsed || layout.agentsCollapsed;
+  regions.style.setProperty('--projects-max', layout.agentsCollapsed || layout.projectsCollapsed ? 'none' : `${projectsMaxHeight(regions.clientHeight, layout)}px`);
+  splitHandle.setAttribute('aria-valuenow', String(layout.projectsShare));
+  splitHandle.setAttribute('aria-valuetext', `Proyectos ocupa hasta el ${layout.projectsShare} % de la barra lateral`);
+  const max = maxSidebarWidth(window.innerWidth);
+  widthHandle.setAttribute('aria-valuemax', String(Math.min(sidebarWidth.max, Math.max(sidebarWidth.min, max))));
+  widthHandle.setAttribute('aria-valuenow', String(layout.width));
+  widthHandle.setAttribute('aria-valuetext', `${layout.width} px${width !== layout.width && !overlay ? ` (${width} px en esta ventana)` : ''}`);
+}
+function setSidebarLayout(next: Partial<SidebarLayout>) {
+  layout = { ...layout, ...next };
+  if (layout.projectsCollapsed && layout.agentsCollapsed) layout = { ...layout, ...('projectsCollapsed' in next ? { agentsCollapsed: false } : { projectsCollapsed: false }) };
+  try { saveSidebarLayout(localStorage, profileDataDir, layout); } catch { /* Optional view preference. */ } applySidebarLayout();
+}
+function resetSidebar() { setSidebarLayout({ ...defaultSidebarLayout }); }
+function toggleSection(section: 'projects' | 'agents') {
+  setSidebarLayout(section === 'projects' ? { projectsCollapsed: !layout.projectsCollapsed } : { agentsCollapsed: !layout.agentsCollapsed });
+}
+$('#sidebar-projects-heading button').addEventListener('click', () => toggleSection('projects'));
+$('#sidebar-agents-heading button').addEventListener('click', () => toggleSection('agents'));
+new ResizeObserver(() => applySidebarLayout()).observe(regions);
+window.addEventListener('resize', applySidebarLayout);
+let resizing: { pointer: number; cancel: () => void } | null = null;
+function startSeparatorDrag(event: PointerEvent, handle: HTMLElement, kind: 'split' | 'width') {
+  if (event.button !== 0 || resizing) return;
+  event.preventDefault(); handle.focus({ preventScroll: true });
+  const shell = $('.workspace-shell'); const shellBox = shell.getBoundingClientRect();
+  handle.setPointerCapture(event.pointerId); handle.dataset.dragging = 'true';
+  shell.classList.add('is-resizing'); shell.dataset.resizing = kind;
+  let guide: HTMLElement | null = null; let width = layout.width;
+  if (kind === 'width') {
+    guide = document.createElement('div'); guide.className = 'sidebar-width-guide'; guide.setAttribute('aria-hidden', 'true');
+    guide.style.left = `${$('#sidebar').getBoundingClientRect().right - shellBox.left}px`; shell.append(guide);
+  }
+  const move = (e: PointerEvent) => {
+    if (kind === 'split') {
+      const box = regions.getBoundingClientRect(); const room = Math.max(1, box.height - 8);
+      setSidebarLayout({ projectsShare: clampShare((e.clientY - box.top - 4) / room * 100) });
+    } else {
+      width = clampWidth(Math.min(e.clientX - shellBox.left, maxSidebarWidth(window.innerWidth)));
+      guide!.style.left = `${width}px`;
+    }
+  };
+  const finish = (commit: boolean) => {
+    handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', cancel);
+    window.removeEventListener('keydown', escape, true);
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    delete handle.dataset.dragging; shell.classList.remove('is-resizing'); delete shell.dataset.resizing; guide?.remove(); resizing = null;
+    // The only width change of a drag: terminals refit once (one resize each).
+    if (commit && kind === 'width' && width !== layout.width) setSidebarLayout({ width });
+  };
+  const up = () => finish(true); const cancel = () => finish(false);
+  const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } };
+  handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', cancel);
+  window.addEventListener('keydown', escape, true);
+  resizing = { pointer: event.pointerId, cancel };
+}
+splitHandle.addEventListener('pointerdown', event => startSeparatorDrag(event, splitHandle, 'split'));
+widthHandle.addEventListener('pointerdown', event => startSeparatorDrag(event, widthHandle, 'width'));
+splitHandle.addEventListener('dblclick', () => setSidebarLayout({ projectsShare: projectsShare.default }));
+widthHandle.addEventListener('dblclick', () => setSidebarLayout({ width: sidebarWidth.default }));
+splitHandle.addEventListener('keydown', event => {
+  const value = separatorKey(event.key, layout.projectsShare, projectsShare, ['ArrowDown'], ['ArrowUp']);
+  if (value === null) return; event.preventDefault(); setSidebarLayout({ projectsShare: value });
+});
+widthHandle.addEventListener('keydown', event => {
+  const value = separatorKey(event.key, layout.width, { ...sidebarWidth, max: Math.min(sidebarWidth.max, Math.max(sidebarWidth.min, maxSidebarWidth(window.innerWidth))) }, ['ArrowRight'], ['ArrowLeft']);
+  if (value === null) return; event.preventDefault(); setSidebarLayout({ width: value });
+});
+/** Terminal font (per profile): applied to every xterm; the visible ones refit once. */
+let terminalFont: number = terminalFontSize.default;
+function setTerminalFont(size: number, persist = true) {
+  terminalFont = size;
+  if (persist) try { saveTerminalFont(localStorage, profileDataDir, size); } catch { /* Optional view preference. */ }
+  for (const view of views.values()) {
+    if (view.term.options.fontSize === size) continue;
+    view.term.options.fontSize = size;
+    if (view.host.isConnected) scheduleResize(view);
+  }
+}
 $('#session-search').addEventListener('input', () => { query = $<HTMLInputElement>('#session-search').value; refresh(); });
 function setSearchOpen(open: boolean) {
   searchOpen = open || !!query;
@@ -1217,7 +1436,7 @@ function markAlertsSeen() { source.markAll(attentionSessions()); refresh(); }
 $('#see-attention').addEventListener('click', () => {
   markAlertsSeen();
   // Persistent causes keep the popover open on its next action.
-  (!$('#attention-banner').hidden ? $('#open-attention-session') : $('#session-alerts').hidden ? $('#toggle-inspector') : $('#session-alerts')).focus();
+  (!$('#attention-banner').hidden ? $('#open-attention-session') : $('#session-alerts').hidden ? $('#open-command-palette') : $('#session-alerts')).focus();
 });
 function showFilter(value: 'open' | 'closed') { filter = value === 'open' ? openFilter() : value; $('.workspace-navigation').scrollTop = 0; refresh(); }
 document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => {
@@ -1232,15 +1451,14 @@ function toggleGrouping() {
   $('.workspace-navigation').scrollTop = 0; refresh();
 }
 $('#agent-grouping').addEventListener('click', toggleGrouping);
-$('#copy-session-id').addEventListener('click', () => { const id = activeView()?.session.id; if (id) void navigator.clipboard.writeText(id).catch(e => notice(message(e), true)); });
-const theme = $<HTMLSelectElement>('#theme-select');
-try { theme.value = localStorage.getItem('aw-theme') ?? 'system'; } catch { /* appearance is optional */ }
+// Appearance: a local preference of this app (not per profile), applied at once.
+const theme = { value: 'system' };
+try { const saved = localStorage.getItem('aw-theme'); if (saved === 'light' || saved === 'dark' || saved === 'system') theme.value = saved; } catch { /* appearance is optional */ }
 document.documentElement.dataset.theme = theme.value;
 function applyTheme(value: string) {
-  theme.value = value; document.documentElement.dataset.theme = value;
-  try { localStorage.setItem('aw-theme', value); } catch { /* optional */ }
+  theme.value = ['light', 'dark'].includes(value) ? value : 'system'; document.documentElement.dataset.theme = theme.value;
+  try { localStorage.setItem('aw-theme', theme.value); } catch { /* optional */ }
 }
-theme.addEventListener('change', () => applyTheme(theme.value));
 async function requestPulso(op: string, args: Record<string, unknown>) {
   if (disposed || connecting || !connected || !runner?.pulsoAvailable || runner.pulsoVersion !== 1) throw new Error('Pulso no está disponible. Conecta un runner compatible.');
   const generation = runner.generation;
@@ -1254,10 +1472,11 @@ async function requestPulso(op: string, args: Record<string, unknown>) {
 }
 const settingsPanel = mountSettings({
   permissions: { request: requestPulso, sessions: () => [...views.values()].map(view => view.session), available: () => connected && !connecting && runner?.pulsoVersion === 1 && !!runner.pulsoAvailable },
-  notificationControls: $('#enable-native-notifications').closest<HTMLElement>('.settings-section')!,
-  hasAttention: () => !$('#attention-filter').hidden,
-  canOpenAttention: () => !pulsoPanel || pulsoPanel.prepareNavigation(),
-  onOpenAttention: showAttention,
+  notificationControls: $('#settings-notifications'),
+  aboutControls: $('#settings-about-controls'),
+  terminalFont: { ...terminalFontSize, get: () => terminalFont, set: size => setTerminalFont(size) },
+  grouping: { get: () => grouping, set: value => { if (value !== grouping) toggleGrouping(); } },
+  resetSidebar,
 
   async read() {
     if (!connected || connecting) throw new Error('Runner sin conexión.');
@@ -1396,16 +1615,17 @@ function commandContext(): AppCommandContext {
   const needsId = $('#status-needs').dataset.sessionId;
   return {
     connected, connecting, busy: busyAction, replaying, occupied: occupiedSessions(), limit: sessionLimit(), sessionCount: views.size, split,
-    planning: stageView === 'pulso', pulsoUnavailable: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null, inspectorOpen: !$('#inspector').hidden,
+    planning: stageView === 'pulso', pulsoUnavailable: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null,
     unseenAlerts: Number($('#session-alerts').dataset.unread ?? 0),
     needsTarget: needsId && views.has(needsId) ? { id: needsId, title: views.get(needsId)!.session.title } : null,
+    sidebarLayout: { isDefault: sameLayout(layout, defaultSidebarLayout), projectsCollapsed: layout.projectsCollapsed, agentsCollapsed: layout.agentsCollapsed }, smoke,
     grouping, filter: filter === 'closed' ? 'closed' : filter === 'open' || filter === 'activity' ? 'open' : 'other', theme: theme.value as Theme,
     renameSupported: runner?.sessionRenameVersion === 1,
     focused: view ? { id: view.session.id, title: view.session.title, live: isLive(view.session), stopping: stopping.has(view.session.id), structured: view.session.transport === 'app-server' } : null,
     actions: {
       togglePalette: () => palette?.toggle(), newSession: () => openNew(), searchSessions: focusSessionSearch, toggleSplit: () => setSplit(!split), focusOtherPane,
       showPulso, leavePulso, newProject: () => { if (!pulsoNavigationAllowed()) return; showPulso(); pulsoPanel?.newProject(); },
-      openSettings, toggleInspector: () => setInspector($('#inspector').hidden), markAlertsSeen,
+      openSettings, markAlertsSeen, resetSidebar, toggleSection, createFixtures: smoke ? createFixtures : undefined,
       openSession: id => { if (views.has(id) && pulsoNavigationAllowed()) selectSession(id); },
       toggleGrouping, showFilter, setTheme: applyTheme, rename: openRename, interrupt: focusInterruptControl,
       stop: id => { const target = views.get(id); if (target) openStopConfirmation(target); },
@@ -1471,27 +1691,31 @@ text('#open-command-palette-hint', shortcutHint('command-palette', mac));
 $('#open-command-palette').addEventListener('mousedown', event => event.preventDefault());
 $('#open-command-palette').addEventListener('click', () => palette?.open());
 $('#connect').addEventListener('click', () => void connect());
-$('#quit').addEventListener('click', () => void invoke('quit_ui').catch(e => notice(message(e), true)));
-$('#create-1').addEventListener('click', () => action(() => start('fixture1', 'fixture', 'Fixture 1', panes[0])));
-$('#create-2').addEventListener('click', () => action(() => start('fixture2', 'fixture', 'Fixture 2', panes[1])));
-$('#create-both').addEventListener('click', () => action(async () => { await start('fixture1', 'fixture', 'Fixture 1', panes[0]); await start('fixture2', 'fixture', 'Fixture 2', panes[1]); }));
+/** Smoke profiles only (AW_VERTICAL_SMOKE=1): test fixtures from the command palette, never in the production interface. */
+function createFixtures(which: 'both' | 1 | 2) {
+  void action(async () => {
+    if (which !== 2) await start('fixture1', 'fixture', 'Fixture 1', panes[0]);
+    if (which !== 1) await start('fixture2', 'fixture', 'Fixture 2', panes[1]);
+  });
+}
 async function probeTools(explicit = false) {
   const button = $<HTMLButtonElement>('#probe'); button.disabled = true;
   try {
     const tools = await invoke<{ tool: string; available: boolean; path?: string; version?: string }[]>('probe_tools');
-    text('#tools', tools.map(t => `${t.tool}: ${t.available ? t.version : 'No disponible'}${t.path ? `\n${t.path}` : ''}`).join('\n\n'));
+    // Versions only: paths stay out of the interface.
+    text('#tools', ['claude', 'codex'].map(kind => { const tool = tools.find(t => t.tool === kind); return `${providerLabel(kind)}: ${tool?.available ? (tool.version ?? 'disponible').replace(/\s*\(.*\)\s*$/, '') : 'no encontrado'}`; }).join(' · '));
     for (const kind of ['codex', 'claude']) {
       const tool = tools.find(t => t.tool === kind);
       const label = tool?.available ? 'CLI disponible' : 'CLI no disponible';
       text(`#welcome-${kind}`, `${providerLabel(kind)} · ${label}`); text(`#new-${kind}-status`, label);
     }
-    if (explicit) { setInspector(true); $<HTMLDetailsElement>('#diagnostics').open = true; }
   } catch (e) {
     for (const kind of ['codex', 'claude']) { text(`#welcome-${kind}`, `${providerLabel(kind)} · CLI sin verificar`); text(`#new-${kind}-status`, 'CLI sin verificar'); }
-    if (explicit) notice(message(e), true);
+    text('#tools', `No se pudo comprobar: ${message(e)}`);
   } finally { button.disabled = false; }
 }
 $('#probe').addEventListener('click', () => void probeTools(true));
+
 void probeTools();
 pulsoPanel = mountPulsoPanel({
   host: $('#pulso-panel-host'),
@@ -1526,7 +1750,7 @@ pulsoPanel = mountPulsoPanel({
     ensure(session); resumeAttempts.delete(sourceId); selectSession(session.id); return session.id;
   },
 });
-function showPulso() { stageView = 'pulso'; setInspector(false); closeSidebar(); refresh(); }
+function showPulso() { stageView = 'pulso'; closeSidebar(); refresh(); }
 /** Same as the former «Volver a terminal»: a Pulso draft or failed save keeps the board. */
 function leavePulso() {
   if (stageView !== 'pulso') return;
@@ -1584,20 +1808,17 @@ $('#export-diagnostic').addEventListener('click', () => action(async () => {
   text('#diagnostic-export-state',saved?'Diagnóstico guardado.':'Exportación cancelada.');
 }));
 
-$('#purge-history').addEventListener('click',()=>action(async()=>{
-  const id=activeView()?.session.id;if (!id) throw new Error('Selecciona un historial.');
-  const response=await invoke<{ok:boolean;error?:string}>('confirm_history',{op:'purge_history',args:{id}});
-  if (!response.ok) throw new Error(response.error??'No se pudo eliminar la salida.');
-  await connect();notice('Salida eliminada explícitamente. Se conservan estados y archivos.');
-}));
+/** Pane menu, closed sessions: both ask for a native confirmation first. */
+function historyAction(op: 'purge_history' | 'compact_history', id: string) {
+  void action(async () => {
+    const response = await invoke<{ok:boolean;error?:string}>('confirm_history', { op, args: { id } });
+    if (!response.ok) throw new Error(response.error ?? (op === 'purge_history' ? 'No se pudo eliminar la salida.' : 'No se pudo compactar el historial.'));
+    await connect();
+    notice(op === 'purge_history' ? 'Salida guardada eliminada. Se conservan el estado y los archivos.' : 'Eventos antiguos compactados. Se conservan los archivos y el último estado.');
+  });
+}
 
 $('#restart-runner').addEventListener('click',()=>action(async()=>{
-  if (await invoke<boolean>('restart_runner')) { await connect();notice('Runner reiniciado. Archivos e historial conservados.'); }
+  if (await invoke<boolean>('restart_runner')) { await connect();notice('Servicio de sesiones reiniciado. Archivos e historial conservados.'); }
 }));
 
-$('#compact-history').addEventListener('click',()=>action(async()=>{
-  const id=activeView()?.session.id;if (!id) throw new Error('Selecciona un historial.');
-  const response=await invoke<{ok:boolean;error?:string}>('confirm_history',{op:'compact_history',args:{id}});
-  if (!response.ok) throw new Error(response.error??'No se pudo compactar el historial.');
-  await connect();notice('Eventos antiguos compactados explícitamente. Archivos y último estado conservados.');
-}));

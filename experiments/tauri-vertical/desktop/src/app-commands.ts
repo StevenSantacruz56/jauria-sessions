@@ -29,7 +29,10 @@ export type AppCommandContext = {
   pulsoUnavailable: string | null;
   /** Why Pulso cannot change board, open a phase or create a project now (a draft, a failed save or a save in flight), as its own controls show. */
   pulsoDraft: string | null;
-  inspectorOpen: boolean;
+  /** The sidebar layout (sidebar-layout.ts): whether it is the default and which sections are folded. */
+  sidebarLayout: { isDefault: boolean; projectsCollapsed: boolean; agentsCollapsed: boolean };
+  /** Disposable smoke profile (AW_VERTICAL_SMOKE=1): fixture commands are listed. */
+  smoke: boolean;
   unseenAlerts: number;
   needsTarget: { id: string; title: string } | null;
   grouping: 'project' | 'state';
@@ -47,7 +50,10 @@ export type AppCommandContext = {
     leavePulso(): void;
     newProject(): void;
     openSettings(): void;
-    toggleInspector(): void;
+    resetSidebar(): void;
+    toggleSection(section: 'projects' | 'agents'): void;
+    /** Only in smoke profiles. */
+    createFixtures?: (which: 'both' | 1 | 2) => void;
     markAlertsSeen(): void;
     openSession(id: string): void;
     toggleGrouping(): void;
@@ -112,9 +118,13 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
       unavailable: () => c.filter === 'open' ? 'Ya se muestran las abiertas' : null, run: () => a.showFilter('open') },
     { id: 'filter-closed', label: 'Mostrar historial de sesiones', keywords: 'historial cerradas lista',
       unavailable: () => c.filter === 'closed' ? 'Ya se muestra el historial' : null, run: () => a.showFilter('closed') },
-    { id: 'inspector', label: c.inspectorOpen ? 'Ocultar Información' : 'Mostrar Información', keywords: 'inspector detalles diagnóstico', shortcut: 'inspector',
-      unavailable: () => null, run: a.toggleInspector },
-    { id: 'settings', label: 'Abrir Configuración', keywords: 'ajustes preferencias límite plazas permisos', shortcut: 'settings', confirmation: 'dialog',
+    { id: 'sidebar-reset', label: 'Restablecer tamaño de la barra lateral', keywords: 'ancho proyectos agentes reparto divisor plegar',
+      unavailable: () => c.sidebarLayout.isDefault ? 'Ya tiene el tamaño y las secciones iniciales' : null, run: a.resetSidebar },
+    { id: 'toggle-projects', label: c.sidebarLayout.projectsCollapsed ? 'Desplegar Proyectos en la barra lateral' : 'Plegar Proyectos en la barra lateral', keywords: 'barra lateral sección ocultar mostrar tableros',
+      unavailable: () => null, run: () => a.toggleSection('projects') },
+    { id: 'toggle-agents', label: c.sidebarLayout.agentsCollapsed ? 'Desplegar Agentes en la barra lateral' : 'Plegar Agentes en la barra lateral', keywords: 'barra lateral sección ocultar mostrar sesiones',
+      unavailable: () => null, run: () => a.toggleSection('agents') },
+    { id: 'settings', label: 'Abrir Configuración', keywords: 'ajustes preferencias límite plazas permisos diagnóstico versión runner acerca', shortcut: 'settings', confirmation: 'dialog',
       unavailable: () => null, run: a.openSettings },
     theme('system'), theme('light'), theme('dark'),
     { id: 'rename', label: focused ? `Cambiar nombre de ${focused.title}…` : 'Cambiar nombre de la sesión…', keywords: 'renombrar título', confirmation: 'dialog',
@@ -123,6 +133,10 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
       unavailable: () => focused?.structured ? 'Las conversaciones de Codex se detienen desde su panel' : sessionControl(c, true), run: () => { if (focused) a.interrupt(focused.id); } },
     { id: 'stop', label: focused ? `Terminar ${focused.title}…` : 'Terminar la sesión…', keywords: 'detener cerrar matar proceso', confirmation: 'dialog',
       unavailable: () => sessionControl(c, true), run: () => { if (focused) a.stop(focused.id); } },
+    // Disposable smoke profiles only: never listed in a normal profile.
+    ...(c.smoke && a.createFixtures ? ([['both', 'Fixtures de prueba: crear 2', 2], [1, 'Fixtures de prueba: crear fixture 1', 1], [2, 'Fixtures de prueba: crear fixture 2', 1]] as const).map(([which, label, needed]): AppCommand => ({
+      id: `fixtures-${which}`, label, keywords: 'smoke prueba fixture',
+      unavailable: () => newSessionUnavailable({ ...c, occupied: c.occupied + needed - 1 }), run: () => a.createFixtures!(which) })) : []),
   ];
 }
 

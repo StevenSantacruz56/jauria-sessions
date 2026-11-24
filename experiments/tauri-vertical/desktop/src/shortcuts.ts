@@ -5,17 +5,16 @@
  * it. Commands only call the app's existing functions; destructive or process
  * actions open their usual confirmation instead of acting.
  *
- * The existing shortcuts are unchanged: ⌘N, ⌘K, ⌘I and ⌘, use the Command key
+ * ⌘N, ⌘K and ⌘, use the Command key
  * only (any other modifier lets the key through to its target, e.g. the PTY).
  * The palette is ⌘⇧P on macOS and Ctrl+Shift+P elsewhere.
  */
-export type ShortcutId = 'new-session' | 'search-sessions' | 'inspector' | 'settings' | 'command-palette';
+export type ShortcutId = 'new-session' | 'search-sessions' | 'settings' | 'command-palette';
 
 type ShortcutSpec = { key: string; shift: boolean; mac: string; other: string; aria: { mac: string; other: string }; platformPrimary: boolean };
 const specs: Record<ShortcutId, ShortcutSpec> = {
   'new-session': { key: 'n', shift: false, mac: '⌘N', other: '⌘N', aria: { mac: 'Meta+N', other: 'Meta+N' }, platformPrimary: false },
   'search-sessions': { key: 'k', shift: false, mac: '⌘K', other: '⌘K', aria: { mac: 'Meta+K', other: 'Meta+K' }, platformPrimary: false },
-  inspector: { key: 'i', shift: false, mac: '⌘I', other: '⌘I', aria: { mac: 'Meta+I', other: 'Meta+I' }, platformPrimary: false },
   settings: { key: ',', shift: false, mac: '⌘,', other: '⌘,', aria: { mac: 'Meta+,', other: 'Meta+,' }, platformPrimary: false },
   // Only this one follows the platform's primary modifier; on macOS Ctrl+Shift+P stays a terminal key.
   'command-palette': { key: 'p', shift: true, mac: '⌘⇧P', other: 'Ctrl+Shift+P', aria: { mac: 'Meta+Shift+P', other: 'Control+Shift+P' }, platformPrimary: true },

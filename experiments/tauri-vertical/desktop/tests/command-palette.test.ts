@@ -73,7 +73,8 @@ test('groups are capped; the total keeps the real count', () => {
 test('shortcuts: existing Command-only chords and the platform palette chord', () => {
   assert.equal(m.matchShortcut(key('n', { metaKey: true }), true), 'new-session');
   assert.equal(m.matchShortcut(key('k', { metaKey: true }), true), 'search-sessions');
-  assert.equal(m.matchShortcut(key('i', { metaKey: true }), true), 'inspector');
+  // ⌘I (the retired Información panel) is no shortcut: it reaches its target.
+  assert.equal(m.matchShortcut(key('i', { metaKey: true }), true), null);
   assert.equal(m.matchShortcut(key(',', { metaKey: true }), true), 'settings');
   assert.equal(m.matchShortcut(key('P', { metaKey: true, shiftKey: true }), true), 'command-palette');
   assert.equal(m.matchShortcut(key('p', { metaKey: true, shiftKey: true }), true), 'command-palette');
@@ -91,10 +92,28 @@ test('shortcuts: existing Command-only chords and the platform palette chord', (
 function context(overrides: Record<string, unknown> = {}, log: string[] = []) {
   const actions = new Proxy({}, { get: (_t, name) => (...args: unknown[]) => log.push([String(name), ...args].join(':')) });
   return { connected: true, connecting: false, busy: false, replaying: false, occupied: 1, limit: 2, sessionCount: 2, split: false, planning: false,
-    pulsoUnavailable: null, pulsoDraft: null, inspectorOpen: false, unseenAlerts: 0, needsTarget: null, grouping: 'project', filter: 'open', theme: 'system', renameSupported: true,
+    pulsoUnavailable: null, pulsoDraft: null, sidebarLayout: { isDefault: true, projectsCollapsed: false, agentsCollapsed: false }, smoke: false, unseenAlerts: 0, needsTarget: null, grouping: 'project', filter: 'open', theme: 'system', renameSupported: true,
     focused: { id: 'live', title: 'Sesión viva', live: true, stopping: false, structured: false }, actions, ...overrides };
 }
 const command = (ctx: any, id: string) => m.appCommands(ctx).find((c: any) => c.id === id);
+
+test('registry: no Información entry; sidebar layout commands; fixtures only in smoke profiles', () => {
+  const ids = m.appCommands(context()).map((c: any) => c.id);
+  assert.equal(ids.includes('inspector'), false);
+  assert.equal(m.appCommands(context()).some((c: any) => c.shortcut === 'inspector' || /Información/.test(c.label)), false);
+  assert.equal(command(context(), 'sidebar-reset').unavailable(), 'Ya tiene el tamaño y las secciones iniciales');
+  const log: string[] = [];
+  const changed = context({ sidebarLayout: { isDefault: false, projectsCollapsed: true, agentsCollapsed: false } }, log);
+  assert.equal(command(changed, 'sidebar-reset').unavailable(), null); command(changed, 'sidebar-reset').run();
+  assert.equal(command(changed, 'toggle-projects').label, 'Desplegar Proyectos en la barra lateral'); command(changed, 'toggle-projects').run();
+  assert.equal(command(changed, 'toggle-agents').label, 'Plegar Agentes en la barra lateral');
+  assert.deepEqual(log, ['resetSidebar', 'toggleSection:projects']);
+  assert.equal(ids.some((id: string) => id.startsWith('fixtures-')), false, 'no fixtures outside smoke');
+  const smoke = m.appCommands(context({ smoke: true })).filter((c: any) => c.id.startsWith('fixtures-'));
+  assert.deepEqual(smoke.map((c: any) => c.id), ['fixtures-both', 'fixtures-1', 'fixtures-2']);
+  assert.equal(smoke[0].unavailable(), 'Sin plazas libres (2 de 2)', 'two fixtures need two free slots');
+  assert.equal(smoke[1].unavailable(), null);
+});
 
 test('registry: availability carries the reason and mirrors the existing controls', () => {
   assert.equal(command(context(), 'new-session').unavailable(), null);

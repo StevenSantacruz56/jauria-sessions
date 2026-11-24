@@ -107,7 +107,7 @@ try {
           assert.equal(await paletteOpen(page), true, 'still open: nothing matched, Enter did nothing');
           assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('command-palette-search')), true, 'Tab stays in the field of the modal');
           assert.equal(await page.locator('dialog[open]:not(.command-palette)').count(), 0, 'global shortcuts are ignored while the palette is open');
-          assert.equal(await page.locator('#inspector').isHidden(), true, '⌘I did not fire underneath');
+          assert.equal(await page.locator('#inspector').count(), 0, 'the Información panel is retired; ⌘I opens nothing');
           await page.waitForTimeout(300);
           assert.deepEqual(await hostRect(page), rect);
           await page.keyboard.press('Escape');

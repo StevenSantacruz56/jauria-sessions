@@ -159,9 +159,9 @@ try{
       await page.getByRole('button',{name:'Plan y sesiones',exact:true}).click();
       await page.getByRole('button',{name:'Configurar permisos…',exact:true}).click();
       const settings=page.getByRole('dialog',{name:'Configuración',exact:true}); await settings.waitFor();
-      const session=settings.getByLabel('Sesión que recibirá permiso',{exact:true}); await page.waitForFunction(()=>document.querySelector('.settings-permissions')?.getAttribute('aria-busy')==='false');
+      const session=settings.getByLabel('Sesión que recibe el acceso',{exact:true}); await page.waitForFunction(()=>document.querySelector('.settings-permissions')?.getAttribute('aria-busy')==='false');
       assert.equal(await session.inputValue(),''); assert.equal(await session.locator('option').count(),3,'two active sessions plus placeholder');
-      assert.equal(await settings.getByLabel('Alcance del permiso',{exact:true}).inputValue(),'plan');
+      assert.equal(await settings.getByLabel('Qué puede hacer',{exact:true}).inputValue(),'plan');
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>/^(grant|revoke|revoke_policy)$/.test(c.op))),[]);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
       const docsDir=process.env.PULSO_DOC_SCREENSHOT_DIR;
@@ -189,7 +189,7 @@ try{
       // permissions read. Hold only that page (limit 50) so a sidebar refresh of
       // 'projects' (limit 20) cannot take the hold instead.
       await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.holdNext='projects';f.holdWhen={limit:50,cursor:0};});
-      await settings.getByText('Acceso manual para sesiones existentes',{exact:true}).click();
+      await settings.getByText('Dar o quitar acceso a una sesión ya abierta',{exact:true}).click();
       await page.waitForFunction(()=>(window as any).pulsoFixture.held.length===1);
       await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.held[0].result.projects=[{id:'stale-project',title:'STALE SYNTHETIC RESPONSE'}];});
       // Exercise the shell's real reconnect handler while the modal read is held.
@@ -197,9 +197,9 @@ try{
       await page.waitForFunction(()=>(window as any).pulsoFixture.connections===2 && document.querySelector('#connection-state')?.textContent==='Conectado');
       await page.evaluate(()=>(window as any).pulsoFixture.held.splice(0).forEach((held:any)=>held.resolve()));
       await settings.getByText('No se pudieron consultar los permisos y proyectos. Reintenta la consulta.',{exact:true}).waitFor();
-      assert.equal(await settings.getByLabel('Alcance del permiso',{exact:true}).locator('option[value="stale-project"]').count(),0);
-      await settings.getByRole('button',{name:'Actualizar permisos y proyectos',exact:true}).click();
-      await settings.getByLabel('Alcance del permiso',{exact:true}).locator('option[value="plan"]').waitFor({state:'attached'});
+      assert.equal(await settings.getByLabel('Qué puede hacer',{exact:true}).locator('option[value="stale-project"]').count(),0);
+      await settings.getByRole('button',{name:'Volver a consultar',exact:true}).click();
+      await settings.getByLabel('Qué puede hacer',{exact:true}).locator('option[value="plan"]').waitFor({state:'attached'});
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>/^(grant|revoke|revoke_policy)$/.test(c.op))),[]);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
     } finally {await browser.close();}

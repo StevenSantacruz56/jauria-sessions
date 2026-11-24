@@ -288,8 +288,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           const before = await geometry(page);
           assert.equal(await page.locator('#open-diagnostics').count(), 0);
           await page.locator('#open-settings').click();
-          await page.getByLabel('Máximo de sesiones simultáneas').fill('4');
-          await page.getByRole('button', {name: 'Guardar', exact: true}).click();
+          await page.getByLabel('Máximo de sesiones simultáneas').selectOption('4');
           await page.waitForFunction(() => document.querySelector('#capacity')?.textContent?.includes('de 4'));
           await page.getByRole('button', {name: 'Cerrar', exact: true}).click();
           await pane.locator('.pane-menu > summary').click();
@@ -311,8 +310,11 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           assert.equal(await pane.locator('.session-state').textContent(), 'Abierta');
           assert.equal(await page.locator('#notice').isVisible(), false);
           await counts(page, 1, 0);
-          await page.locator('#toggle-inspector').click();
-          assert.match(await page.locator('#session-local-history').textContent() ?? '', /Historial local parcial.*continúa normalmente.*No limita/s);
+          // The local history note moved from the retired Información panel to the pane menu.
+          await pane.locator('.pane-menu > summary').click();
+          assert.match(await pane.locator('.pane-menu-note').textContent() ?? '', /Historial local parcial.*continúa normalmente.*No limita/s);
+          await page.keyboard.press('Escape');
+          assert.deepEqual(await geometry(page), before, 'the pane menu preserves fitted terminal geometry');
           if (process.env.JAURIA_QA_SCREENSHOTS) {
             const {mkdir} = await import('node:fs/promises');
             await mkdir(process.env.JAURIA_QA_SCREENSHOTS, {recursive: true});

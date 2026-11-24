@@ -164,11 +164,12 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--er
 .danger-button:hover:not(:disabled) { background: #992733; }
 button[aria-pressed="true"] { background: var(--selected); color: var(--selected-text); }
 kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim); white-space: nowrap; }
-:where(.session-list, .inspector-scroll, .welcome, .session-dialog, .workspace-navigation, .sidebar-project-list) { scrollbar-width: thin; scrollbar-color: var(--control-border) transparent; }
+:where(.session-list, .welcome, .session-dialog, .workspace-navigation, .sidebar-project-list) { scrollbar-width: thin; scrollbar-color: var(--control-border) transparent; }
 
-.workspace-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); height: 100%; min-height: 0; isolation: isolate; }
-.sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); }
-.brand { display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 0 8px 0 10px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.workspace-shell { display: grid; grid-template-columns: var(--sidebar-width, 264px) minmax(0, 1fr); height: 100%; min-height: 0; isolation: isolate; }
+.sidebar { position: relative; z-index: 9; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); }
+/* Fixed 46 px: before 1.4.0 the overflowing agent list shrank it to this height; now nothing overflows, so it is explicit. */
+.brand { display: flex; align-items: center; gap: 6px; flex: 0 0 46px; height: 46px; min-height: 46px; padding: 0 8px 0 10px; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .brand-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .brand-actions .icon-button { width: 26px; min-height: 26px; padding: 5px; }
 .brand-actions .icon { width: 15px; height: 15px; }
@@ -187,9 +188,7 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim)
 .sidebar-section-tools { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .project-more { color: var(--dim); font-size: 12px; }
 .sidebar-section-heading .icon { width: 14px; height: 14px; }
-.sidebar-projects { flex: 0 1 auto; max-height: 34%; }
 .sidebar-project-list { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 8px; }
-.sidebar-agents { flex: 1 1 auto; border-top: 1px solid var(--border); }
 .sidebar-row { display: flex; align-items: center; justify-content: flex-start; gap: 9px; width: 100%; height: 30px; min-height: 30px; flex: 0 0 auto; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-row); background: transparent; color: var(--text); font-size: 13px; font-weight: 400; text-align: left; }
 .sidebar-row:hover:not(:disabled) { background: var(--hover); }
 .sidebar-row[aria-current="true"], .sidebar-row[aria-current="true"]:hover:not(:disabled) { background: var(--selected); }
@@ -197,6 +196,42 @@ kbd { font-family: inherit; font-size: 11px; font-weight: 400; color: var(--dim)
 .sidebar-row-meta { flex: 0 0 auto; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 .project-initial { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; height: 18px; border-radius: var(--radius-control); background: var(--selected); color: var(--muted); font-size: 11px; font-weight: 600; line-height: 1; }
 .sidebar-hint { padding: 4px 8px 8px; color: var(--dim); font-size: 11px; line-height: 1.45; }
+
+/* Regions: Proyectos and Agentes each scroll on their own between the search
+   field and the footer. Their headings never scroll. Proyectos takes its
+   content up to --projects-max (computed from the remembered share, see
+   sidebar-layout.ts) and never shrinks below two rows while open; Agentes
+   takes the rest and keeps its own minimum. flex-shrink 0 on Proyectos: before
+   1.4.0 both sections shrank in proportion to their content, so a long agent
+   list squeezed Proyectos to its heading. */
+.sidebar-regions { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.sidebar-projects { flex: 0 0 auto; max-height: var(--projects-max, 34%); min-height: 0; overflow: hidden; }
+.sidebar-agents { flex: 1 1 0; min-height: 0; }
+.sidebar-agents-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.sidebar-regions[data-agents-collapsed="true"] .sidebar-agents { flex: 0 0 auto; }
+.sidebar-regions[data-agents-collapsed="true"] .sidebar-projects { flex: 1 1 auto; max-height: none; }
+.sidebar-section[data-collapsed="true"] > :not(.sidebar-section-heading) { display: none; }
+.sidebar-section-toggle { display: inline-flex; align-items: center; gap: 4px; min-width: 0; min-height: 24px; margin-left: -6px; padding: 0 6px 0 4px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--dim); font: inherit; font-size: 11px; font-weight: 500; }
+.sidebar-section-toggle:hover { background: var(--hover); color: var(--muted); }
+.sidebar-section-toggle .icon { width: 12px; height: 12px; transition: transform 150ms ease-out; }
+.sidebar-section-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.sidebar-section-count { color: var(--dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* Separators: an 8 px hit area with a 1 px line that takes the focus colour on hover, drag and keyboard focus. */
+.sidebar-split { position: relative; flex: 0 0 8px; height: 8px; margin: 0; cursor: row-resize; touch-action: none; outline: none; }
+.sidebar-split::before { content: ""; position: absolute; left: 0; right: 0; top: 3.5px; height: 1px; background: var(--border); }
+.sidebar-split:hover::before, .sidebar-split[data-dragging="true"]::before, .sidebar-split:focus-visible::before { top: 3px; height: 2px; background: var(--focus); }
+.sidebar-split:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.sidebar-split[hidden] { display: none; }
+.sidebar-split[hidden] + .sidebar-agents { border-top: 1px solid var(--border); }
+.sidebar-width-handle { position: absolute; top: 0; bottom: 0; right: -4px; z-index: 6; width: 8px; cursor: col-resize; touch-action: none; outline: none; }
+.sidebar-width-handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: 3.5px; width: 1px; background: transparent; }
+.sidebar-width-handle:hover::before, .sidebar-width-handle[data-dragging="true"]::before, .sidebar-width-handle:focus-visible::before { left: 3px; width: 2px; background: var(--focus); }
+.sidebar-width-handle:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+/* While the width is dragged only this guide moves; the grid (and every terminal) changes once, on release. */
+.sidebar-width-guide { position: absolute; top: 0; bottom: 0; z-index: 30; width: 2px; margin-left: -1px; background: var(--focus); pointer-events: none; }
+.workspace-shell.is-resizing, .workspace-shell.is-resizing * { cursor: inherit; user-select: none; -webkit-user-select: none; }
+.workspace-shell.is-resizing[data-resizing="width"] { cursor: col-resize; }
+.workspace-shell.is-resizing[data-resizing="split"] { cursor: row-resize; }
 
 /* One tab style: the active tab is raised with a 1px border, no underline. */
 .agent-controls { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; padding: 0 8px 6px; }
@@ -307,7 +342,6 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .notice.error .notice-symbol { color: inherit; }
 .notice .icon-button { width: 26px; min-height: 26px; padding: 5px; color: inherit; }
 .workspace-body { display: grid; grid-template-columns: minmax(0, 1fr); position: relative; flex: 1; min-width: 0; min-height: 0; }
-.workspace-body.has-inspector { grid-template-columns: minmax(0, 1fr) 280px; }
 .stage { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--canvas); }
 .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; width: 100%; height: 100%; overflow: auto; padding: 36px 24px; text-align: center; background: var(--surface); }
 .welcome-symbol { color: var(--muted); margin-bottom: 2px; }
@@ -381,6 +415,13 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .pane-menu-content { position: absolute; top: 34px; right: 6px; z-index: 12; width: 208px; max-height: calc(100% - 44px); overflow: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-row); background: var(--raised); color: var(--text); box-shadow: var(--shadow); white-space: normal; }
 .pane-menu-content button { justify-content: flex-start; width: 100%; background: transparent; border-color: transparent; text-align: left; font-size: 12px; }
 .pane-menu-content .danger { color: var(--error); }
+.pane-menu-info { display: flex; flex-direction: column; gap: 2px; padding: 5px 8px 7px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.pane-menu-folder { font: 11px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); overflow-wrap: anywhere; user-select: text; }
+.pane-menu-meta { color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
+.pane-menu-meta:empty { display: none; }
+.pane-menu-note { padding: 5px 8px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.pane-close { flex: 0 0 auto; height: 22px; min-height: 22px; padding: 0 8px; color: var(--terminal-text); border-color: var(--terminal-line); font-size: 11px; }
+.pane-close:hover:not(:disabled) { background: var(--terminal-hover); }
 .pane-menu-content .icon { width: 14px; height: 14px; }
 
 /* Session picker: floats inside the pane under its heading (absolute), so
@@ -420,33 +461,8 @@ h1 { font-size: 16px; line-height: 1.4; letter-spacing: -.02em; font-weight: 600
 .command-palette-empty { padding: 12px 8px; color: var(--muted); font-size: 12px; }
 .palette-trigger kbd { font-size: 11px; }
 
-.inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
-.inspector-heading { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; min-height: 45px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
-.inspector-heading h2 { font-size: 12px; font-weight: 600; }
-.inspector-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 16px; overscroll-behavior: contain; }
-.inspector-provider { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-bottom: 10px; }
-.inspector-provider:empty { display: none; }
-#inspector-title { font-size: 16px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
-#inspector-description { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.session-facts { margin: 24px 0 18px; }
-.session-facts > div + div { margin-top: 17px; }
-.session-facts dt { color: var(--dim); font-size: 11px; margin-bottom: 5px; }
-.session-facts dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; user-select: text; }
-.copyable { display: flex; align-items: center; gap: 6px; }
-.copyable > span { flex: 1; min-width: 0; }
-#inspector-id, #inspector-cwd { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-#new-in-folder { width: 100%; white-space: normal; font-size: 11px; }
-.settings-section { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0; padding-top: 18px; border-top: 1px solid var(--border); font-size: 12px; }
-.settings-section select { max-width: 130px; padding: 5px 8px; font-size: 11px; }
-#diagnostics, #fixtures { border-top: 1px solid var(--border); padding-top: 14px; color: var(--muted); font-size: 11px; }
-#diagnostics summary, #fixtures summary { cursor: pointer; padding: 4px 0; }
-#diagnostics summary .icon { margin-right: 5px; width: 14px; height: 14px; }
-.diagnostic-body { padding-top: 12px; }
-.diagnostic-body p, #fixtures p { margin: 8px 0; line-height: 1.6; overflow-wrap: anywhere; }
-.diagnostic-body button { font-size: 11px; margin-top: 6px; }
 pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--chrome); border-radius: var(--radius-control); font: 11px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: text; }
-.fixture-actions, .fixture-controls { display: flex; flex-wrap: wrap; gap: 5px; }
-#fixtures { margin-top: 18px; }
+.fixture-controls { display: flex; flex-wrap: wrap; gap: 5px; }
 
 .session-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--text); background: var(--surface); box-shadow: var(--shadow); overflow: auto; overscroll-behavior: contain; }
 .session-dialog::backdrop { background: var(--scrim); }
@@ -483,17 +499,13 @@ pre { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background:
 #stop-session-effects p + p { margin-top: 12px; }
 #stop-session-description { overflow-wrap: anywhere; }
 
-/* Inspector becomes a drawer before it can squeeze two terminals. */
-@media (max-width: 1279px) {
-  .workspace-body.has-inspector { grid-template-columns: minmax(0, 1fr); }
-  .workspace-body.has-inspector .inspector { position: absolute; inset: 0 0 0 auto; z-index: 5; width: 280px; max-width: 100%; box-shadow: -12px 0 32px rgb(0 0 0 / 16%); }
-}
 @media (max-width: 1049px) {
   .terminal-panes[data-split="true"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); }
 }
 /* A 760 × 560 window keeps its entire terminal width. */
 @media (max-width: 860px) {
   .workspace-shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar-width-handle { display: none; }
   .sidebar { position: absolute; inset: 0 auto 0 0; width: 264px; max-width: 100%; z-index: 21; visibility: hidden; pointer-events: none; transform: translateX(-100%); transition: transform 180ms ease-out, visibility 180ms; box-shadow: var(--shadow); }
   .workspace-shell.sidebar-open .sidebar { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .workspace-shell.sidebar-open .sidebar-scrim:not([hidden]) { display: block; position: absolute; inset: 0; z-index: 20; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: var(--scrim); }

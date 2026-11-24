@@ -15,11 +15,16 @@ export function paneMarkup(index: number) {
     + `<span class="session-directory">Sin carpeta de sesión</span>`
     + `<span class="pane-status"><span class="agent-indicator" aria-hidden="true"></span><span class="session-state">Sin sesión</span></span>`
     + `<span class="history-banner" hidden><span class="history-long"></span><span class="history-short">Solo lectura</span></span>`
+    + `<button type="button" data-action="close-pane" class="quiet pane-close" hidden aria-label="Quitar la sesión terminada de este panel" title="Quitar esta sesión del panel; sigue en Historial">Cerrar</button>`
     + `<button data-action="interrupt" data-label="Interrumpir" class="icon-button interrupt-button" aria-label="Interrumpir (Ctrl-C)" title="Interrumpir (Ctrl-C)">${icon('interrupt')}</button>`
     + `<details class="pane-menu"><summary aria-label="Acciones de la sesión" title="Acciones de la sesión">${icon('more')}</summary><div class="pane-menu-content">`
+    + `<div class="pane-menu-info"><span class="pane-menu-folder">Sin carpeta</span><span class="pane-menu-meta"></span></div>`
+    + `<button data-action="copy-cwd">Copiar carpeta</button><button data-action="copy-id">Copiar identificador</button>`
+    + `<button data-action="new-in-folder">Nueva sesión en esta carpeta…</button>`
     + `<button data-action="rename" hidden>Cambiar nombre…</button>`
     + `<button data-action="stop" data-label="Terminar" class="danger stop-button" disabled>${icon('stop')}Terminar sesión…</button>`
     + `<button data-action="release" hidden>Liberar carpeta…</button>`
+    + `<p class="pane-menu-note" hidden></p><button data-action="purge" hidden>Eliminar salida guardada…</button><button data-action="compact" hidden>Compactar eventos antiguos…</button>`
     + `<div class="fixture-controls" hidden><button data-action="shell">Shell de prueba</button><button data-action="ping">Ping</button><button data-action="size">Tamaño</button><button data-action="flood">Carga</button></div>`
     + `</div></details></div>`
     + `<div class="terminal-host"><div class="empty"><span>${icon('split')}</span><strong>Elige otra sesión</strong><p>Pulsa el nombre en la cabecera del panel para elegir una sesión y verla junto a la actual.</p></div></div>`;
@@ -35,6 +40,9 @@ export type PaneHeaderModel = {
   activityLabel: string;
   history: string;
   paneIndex: number;
+  /** Menu details: provider, state and identifier (for support), and the local history note. */
+  meta?: string;
+  note?: string;
 };
 
 const set = (el: Element, value: string) => { if (el.textContent !== value) el.textContent = value; };
@@ -60,6 +68,10 @@ export function paintPaneHeader(root: HTMLElement, model: PaneHeaderModel): void
   indicator.hidden = !model.activity;
   if (model.activity) paintAgentIndicator(indicator, model.activity, model.activityLabel);
   // Visible, fixed-height label; below 760 px only «Solo lectura» shows (CSS).
+  const folder = root.querySelector<HTMLElement>('.pane-menu-folder');
+  if (folder) { set(folder, model.cwd ?? 'Sin carpeta'); if (folder.title !== (model.cwd ?? '')) folder.title = model.cwd ?? ''; }
+  const meta = root.querySelector<HTMLElement>('.pane-menu-meta'); if (meta) set(meta, model.meta ?? '');
+  const note = root.querySelector<HTMLElement>('.pane-menu-note'); if (note) { note.hidden = !model.note; set(note, model.note ?? ''); }
   const history = root.querySelector<HTMLElement>('.history-banner')!;
   history.hidden = !model.history; set(history.querySelector('.history-long')!, model.history);
   if (history.title !== model.history) history.title = model.history;

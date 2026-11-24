@@ -26,8 +26,6 @@
 .settings-more { margin-top: 2px; }
 .settings-more > summary { width: max-content; padding: 2px 0; color: var(--muted); font-size: 12px; cursor: pointer; }
 .settings-more > .settings-dialog-help { margin-top: 4px; }
-.settings-dirty { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.settings-dirty::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--state-attention); }
 .settings-dialog-help, .settings-dialog-version, .settings-dialog-status, .settings-dialog-warning {
   margin-top: 8px;
   max-width: 72ch;
@@ -41,13 +39,13 @@
 .settings-dialog-status { margin-top: 0; }
 .settings-dialog-status:empty { display: none; }
 .settings-dialog .form-error + button { margin-top: 10px; }
-.settings-dialog .dialog-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: end; margin: 0; padding: 14px 24px 18px; }
+.settings-dialog .dialog-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin: 0; padding: 14px 24px 18px; }
 .settings-dialog-messages { min-width: 0; max-height: 7rem; overflow-y: auto; }
 .settings-dialog-messages .form-error { margin: 0 8px 0 0; }
 @media (max-width: 480px) {
   .settings-dialog .dialog-heading { padding: 18px 20px 14px; }
   .settings-dialog-content { padding: 16px 20px 20px; }
-  .settings-dialog .dialog-footer { grid-template-columns: minmax(0, 1fr) auto auto auto; padding: 12px 20px 16px; }
+  .settings-dialog .dialog-footer { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 20px 16px; }
   .settings-dialog-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .settings-dialog-row select { width: 100%; }
   .settings-dialog .dialog-footer > button { min-height: 40px; }
@@ -92,3 +90,21 @@
 @media (max-width: 480px) {
   .settings-permissions .settings-dialog-row select { width: 100%; }
 }
+
+/* 1.4.0: rows whose help may wrap, plain-label rows, the manual access block and Acerca de y diagnóstico. */
+.settings-row-label { font-size: 13px; font-weight: 500; }
+.settings-row-help.settings-wrap { white-space: normal; overflow: visible; }
+.settings-dialog-row > button { flex: 0 0 auto; }
+.settings-pulso-state { margin-top: -4px; }
+.settings-unavailable { color: var(--muted); }
+.settings-manual { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.settings-manual h4 { font-size: 12px; font-weight: 600; }
+.settings-manual > .settings-permissions-details { margin-top: 8px; }
+.settings-permissions-empty { color: var(--muted); }
+.settings-notifications .settings-dialog-help, .settings-about-controls .settings-dialog-help { margin-top: 4px; }
+.settings-about-controls .settings-dialog-row { align-items: flex-start; padding-top: 8px; }
+.settings-app-version { margin-top: 0; color: var(--text); font-weight: 500; }
+.settings-diagnostic-preview { max-height: 160px; margin: 8px 0 0; overflow: auto; }
+.settings-diagnostic-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.settings-diagnostic-actions .settings-dialog-help { margin-top: 0; }
+#runner-state { color: var(--text); }
