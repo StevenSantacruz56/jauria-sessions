@@ -744,7 +744,7 @@ impl Runner {
         }
         if kind=="codex" && signals {
             let home=PathBuf::from(std::env::var_os("HOME").context("HOME required for native CLI access")?);
-            if let Some(notify)=crate::provider_signals::codex_notify(&std::env::current_exe()?,&home)? {cmd.arg("-c");cmd.arg(notify);}
+            if let Some(notify)=crate::provider_signals::codex_notify(&std::env::current_exe()?,&home,&cwd)? {cmd.arg("-c");cmd.arg(notify);}
         }
         let pair = native_pty_system().openpty(size).context("open PTY")?;
         let reader = pair.master.try_clone_reader().context("clone PTY reader")?;

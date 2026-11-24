@@ -114,8 +114,9 @@ pub fn claude_hooks(executable: &Path) -> Result<Value> {
 
 /// Codex `-c` override, or None when the user already configured `notify`
 /// (Codex runs a single notify program: replacing theirs would break it).
-pub fn codex_notify(executable: &Path, home: &Path) -> Result<Option<String>> {
-    if user_has_notify(&home.join(".codex/config.toml")) { return Ok(None); }
+pub fn codex_notify(executable: &Path, home: &Path, cwd: &Path) -> Result<Option<String>> {
+    // The account config and a project config in the session's folder.
+    if user_has_notify(&home.join(".codex/config.toml")) || user_has_notify(&cwd.join(".codex/config.toml")) { return Ok(None); }
     let exe = executable.to_str().ok_or_else(|| anyhow::anyhow!("Ruta de hook no compatible."))?;
     ensure!(executable.is_absolute() && !exe.contains('\0'), "Ruta de hook no compatible.");
     Ok(Some(format!("notify={}", serde_json::to_string(&[exe, "--attention-hook", "turn"])?)))
@@ -123,19 +124,21 @@ pub fn codex_notify(executable: &Path, home: &Path) -> Result<Option<String>> {
 
 /// A top-level `notify` key in config.toml (before the first table header).
 /// Conservative: an unreadable file counts as configured (never override it).
+/// Whether a Codex config may set `notify`. The runner has no TOML parser (and
+/// adds no dependency for this), so the test is deliberately conservative:
+/// any appearance of the word `notify` (bare, "quoted", 'literal', dotted, in
+/// any table or comment), any unicode escape that could spell it, a file that
+/// is not UTF-8 or cannot be read all count as «the person has one» and Jauría
+/// leaves `notify` alone. Only a missing file, or one that never mentions it,
+/// lets Jauría add its own.
 fn user_has_notify(path: &Path) -> bool {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-    };
-    for line in text.lines() {
-        let line = line.trim_start();
-        if line.starts_with('[') { break; }
-        let key = line.split('=').next().unwrap_or("").trim().trim_matches('"');
-        if line.contains('=') && key == "notify" { return true; }
+    match std::fs::read(path) {
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Err(_) => true,
+            Ok(text) => text.contains("notify") || text.contains("\\u") || text.contains("\\U"),
+        },
     }
-    false
 }
 
 #[cfg(test)]
@@ -175,14 +178,31 @@ mod tests {
     #[test]
     fn codex_notify_respects_the_users_own() {
         let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         let exe = Path::new("/opt/jauria/aw-runner");
-        assert_eq!(codex_notify(exe, home.path()).unwrap().unwrap(), r#"notify=["/opt/jauria/aw-runner","--attention-hook","turn"]"#);
+        let ours = |home: &Path| codex_notify(exe, home, project.path()).unwrap();
+        assert_eq!(ours(home.path()).unwrap(), r#"notify=["/opt/jauria/aw-runner","--attention-hook","turn"]"#);
         std::fs::create_dir(home.path().join(".codex")).unwrap();
         let config = home.path().join(".codex/config.toml");
-        std::fs::write(&config, "model = \"o3\"\n[tui]\nnotify = true\n").unwrap();
-        assert!(codex_notify(exe, home.path()).unwrap().is_some(), "a notify inside a table is not the top-level one");
-        std::fs::write(&config, "# mine\nnotify = [\"terminal-notifier\"]\nmodel = \"o3\"\n").unwrap();
-        assert!(codex_notify(exe, home.path()).unwrap().is_none(), "the user's notify is kept");
+        std::fs::write(&config, "model = \"o3\"\n[tui]\nnotifications = true\n").unwrap();
+        assert!(ours(home.path()).is_some(), "a config that never says notify");
+        // Every TOML spelling of the key keeps the person's own program (Codex runs only one).
+        for text in ["notify = [\"terminal-notifier\"]\n", "\"notify\" = [\"x\"]\n", "'notify' = [\"/ruta/programa\"]\n",
+            "  notify=[\"x\"] # mine\n", "\"\\u006eotify\" = [\"x\"]\n", "[tui]\nnotify = true\n", "# notify = [\"x\"]\n"] {
+            std::fs::write(&config, text).unwrap();
+            assert!(ours(home.path()).is_none(), "{text:?}");
+        }
+        // Unreadable or not UTF-8: in doubt, leave it alone.
+        std::fs::write(&config, [0xff, 0xfe, b'x']).unwrap();
+        assert!(ours(home.path()).is_none());
+        std::fs::remove_file(&config).unwrap();
+        std::fs::create_dir(&config).unwrap();
+        assert!(ours(home.path()).is_none(), "a config that cannot be read");
+        std::fs::remove_dir(&config).unwrap();
+        // A project config in the session's folder counts too.
+        std::fs::create_dir(project.path().join(".codex")).unwrap();
+        std::fs::write(project.path().join(".codex/config.toml"), "'notify' = [\"x\"]\n").unwrap();
+        assert!(ours(home.path()).is_none());
     }
 
     #[test]
