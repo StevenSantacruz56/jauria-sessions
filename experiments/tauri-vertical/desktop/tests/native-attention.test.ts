@@ -58,6 +58,24 @@ test('the notice copy is fixed per category: no title, path or terminal text can
     assert.doesNotMatch(content, /secret|\/Users|session|Claude|Codex/);
   }
 });
+test('a click leads to the one session of a notice, or to the alerts list for a batch, through an opaque id', async () => {
+  const { clickedNotice } = await import('../src/native-attention.ts');
+  const sent: number[] = [];
+  const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: (_kind, id) => { sent.push(id); } }, () => true, () => {}, 1);
+  await n.enableFromClick([]);
+  n.update([item('s:agent:bell:7:1', { id: 'session-secret-1' })]); await tick();
+  n.update([item('a:agent:bell:7:1', { id: 'a' }), item('b:agent:finished:7:1', { id: 'b' })]); await tick();
+  assert.equal(sent.length, 2);
+  for (const id of sent) { assert.ok(Number.isSafeInteger(id) && id > 0 && id <= 0x7fffffff); assert.doesNotMatch(String(id), /secret/); }
+  assert.notEqual(sent[0], sent[1]);
+  assert.deepEqual(n.target(clickedNotice({ actionId: 'tap', notification: { id: sent[0] } })), { session: 'session-secret-1' });
+  assert.deepEqual(n.target(clickedNotice({ actionId: 'tap', notification: { id: sent[1] } })), { list: true });
+  // Only a click on the notice itself; unknown or forged ids lead nowhere.
+  assert.equal(clickedNotice({ actionId: 'dismiss', notification: { id: sent[0] } }), null);
+  assert.equal(n.target(clickedNotice({ actionId: 'tap', notification: { id: 12345 } })), null);
+  assert.equal(n.target(clickedNotice({ actionId: 'tap', notification: { id: 'session-secret-1' } })), null);
+  assert.equal(n.target(clickedNotice(null)), null);
+});
 test('enabling never claims that macOS allows or shows the notices (H10)', async () => {
   const said: string[] = [];
   const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: () => {} }, () => true, text => { said.push(text); }, 1);

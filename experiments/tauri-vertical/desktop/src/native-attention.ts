@@ -1,6 +1,6 @@
 import type { Attention } from './attention';
 export type NativeNoticeKind = 'needs' | 'finished' | 'notice';
-type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(kind: NativeNoticeKind): void };
+type Api = { granted(): Promise<boolean>; request(): Promise<string>; send(kind: NativeNoticeKind, id: number): void };
 
 /**
  * Category of a batch, from attention keys only. Window mode: program:needs,
@@ -74,9 +74,32 @@ export class NativeAttention {
       // One category-only notice per batch, no titles, paths, terminal output or permission details.
       const items = this.latest.filter(item => pending.has(item.id) && item.unseen && !item.stale && this.eligible(item.id) && item.keys.some(key => !this.delivered.has(key)));
       if (!items.length) return;
-      this.api.send(noticeKind(items));
+      // Click target behind an opaque number: one session, or the alerts list for a batch.
+      const sessions = new Set(items.map(item => item.id));
+      const id = this.nextId();
+      this.targets.set(id, sessions.size === 1 ? { session: items[0].id } : { list: true });
+      while (this.targets.size > 64) this.targets.delete(this.targets.keys().next().value!);
+      this.api.send(noticeKind(items), id);
       for (const item of items) for (const key of item.keys) this.delivered.add(key);
     } catch { if (epoch === this.epoch) { this.disable(); this.feedback('No se pudo solicitar el aviso nativo. Los avisos dentro de Jauría siguen disponibles.'); } }
   }
   disable() { this.enabled = false; this.epoch++; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.pending.clear(); }
+  /** Where a click on notice `id` leads; null for an unknown (old window, forged) id. */
+  target(id: unknown): NoticeTarget | null {
+    return typeof id === 'number' ? this.targets.get(id) ?? null : null;
+  }
+  private targets = new Map<number, NoticeTarget>();
+  /** Random positive 31-bit id (the plugin's notification id is an i32): carries no session data. */
+  private nextId(): number {
+    for (;;) {
+      const value = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
+      if (value > 0 && !this.targets.has(value)) return value;
+    }
+  }
+}
+export type NoticeTarget = { session: string } | { list: true };
+/** The plugin's `actionPerformed` payload: only a click on the notice itself (`tap`) opens something. */
+export function clickedNotice(event: unknown): number | null {
+  const e = event as { actionId?: unknown; notification?: { id?: unknown } } | null;
+  return e?.actionId === 'tap' && typeof e.notification?.id === 'number' ? e.notification.id : null;
 }

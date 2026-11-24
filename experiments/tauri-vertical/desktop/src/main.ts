@@ -1,8 +1,8 @@
 import { listen } from '@tauri-apps/api/event';
 import { appVersion } from './app-version';
 import { mountSettings, settingsArgs, type AppSettings } from './settings-panel';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { NativeAttention, nativeNoticeContent } from './native-attention';
+import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import { NativeAttention, clickedNotice, nativeNoticeContent } from './native-attention';
 import { attachTerminalAttention } from './terminal-attention';
 import { SessionAttention } from './attention';
 import { RunnerAttentionSource, WindowAttentionSource, turnEnded, type AttentionSource } from './attention-source';
@@ -201,7 +201,8 @@ let newDialogVersion = 0;
 let projectSessionTarget: ((sessionId: string) => void) | null = null;
 const nativeAttention = new NativeAttention({
   granted: isPermissionGranted, request: requestPermission,
-  send: kind => sendNotification(nativeNoticeContent(kind)),
+  // `id` is opaque (random): the click handler maps it back to a session or the alerts list.
+  send: (kind, id) => sendNotification({ ...nativeNoticeContent(kind), id }),
 }, id => connected && !replaying && !isAttended(id), value => {
   text('#native-notification-status', value);
   text('#enable-native-notifications', nativeAttention.enabled ? 'Desactivar avisos de macOS' : 'Activar avisos de macOS…');
@@ -1913,8 +1914,26 @@ $('#enable-native-notifications').addEventListener('click', async () => {
   }
   const button = $<HTMLButtonElement>('#enable-native-notifications'); button.disabled = true;
   await nativeAttention.enableFromClick(source.nativeItems(source.list(attentionSessions()))); button.disabled = false;
+  if (nativeAttention.enabled) listenNoticeClicks();
 });
-window.addEventListener('beforeunload', () => nativeAttention.disable(), { once: true });
+/**
+ * A click on a macOS notice (plugin `actionPerformed`, `tap`): bring Jauría to
+ * the front and open that session, or the alerts list for a batch. Registered
+ * once, after the person enables notices (the plugin only reports clicks on
+ * notices shown while a listener exists).
+ */
+let noticeClicks: Promise<{ unregister(): Promise<void> } | null> | null = null;
+function listenNoticeClicks() {
+  noticeClicks ??= onAction(event => {
+    const target = nativeAttention.target(clickedNotice(event));
+    if (!target || disposed) return;
+    const win = getCurrentWindow();
+    void win.unminimize().catch(() => {}).then(() => win.setFocus()).catch(() => {});
+    if ('session' in target && views.has(target.session)) selectSession(target.session);
+    else if (!alertsPopover.isOpen) { alertsPopover.show(); refresh(); }
+  }).catch(() => null);
+}
+window.addEventListener('beforeunload', () => { nativeAttention.disable(); void noticeClicks?.then(listener => listener?.unregister()).catch(() => {}); }, { once: true });
 window.addEventListener('beforeunload', () => { void dockBadge.dispose(); }, { once: true });
 $('#session-alerts').addEventListener('click', () => {
   alertsPopover.toggle(); refresh();

@@ -102,6 +102,8 @@ async function install(page: Page, options: Options) {
       /** Hold the next mark_seen answer until releaseMark(); meanwhile alerts may arrive. */
       holdMark() { holdMark = true; }, releaseMark() { holdMark = false; markRelease?.(); markRelease = undefined; },
       get markWaiting() { return !!markRelease; },
+      /** The plugin reporting a click (`tap`) on notice `n` (index in `notices`). */
+      clickNotice(n: number) { const options = notices[n][1]; this.clickChannel.onmessage({ actionId: 'tap', notification: { id: options.id, title: options.title } }); },
       /** document.visibilityState as macOS reports a hidden/minimised window. */
       visibility(value: 'visible' | 'hidden') { visibility = value; document.dispatchEvent(new Event('visibilitychange')); },
     };
@@ -116,6 +118,9 @@ async function install(page: Page, options: Options) {
         if (cmd === 'plugin:event|listen' || cmd === 'plugin:event|unlisten') return 1;
         if (cmd === 'plugin:window|set_badge_count') { badges.push(request.value); return; }
         if (cmd === 'plugin:notification|is_permission_granted') return true;
+        // Click on a macOS notice: the plugin's actionPerformed channel, and bringing the window forward.
+        if (cmd === 'plugin:notification|register_listener') { if (request.event === 'actionPerformed') w.agentFixture.clickChannel = request.handler; return; }
+        if (cmd === 'plugin:window|unminimize' || cmd === 'plugin:window|set_focus') { calls.push(cmd); return; }
         if (cmd === 'pulso_request' && options.pulso) {
           const { op } = request;
           const empty = { items: [], totalCount: 0, hasMore: false, nextCursor: 0 };
@@ -470,6 +475,27 @@ try {
           await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.end('foreground','exited',0);`);
           await page.waitForFunction(() => document.querySelector('#status-finished-text')?.textContent === '1 terminó');
           assert.equal(await page.locator('#status-needs-text').textContent(), '1 te necesita', 'the failure still counts apart');
+        });
+      });
+
+      await t.test('a click on a macOS notice brings Jauría forward and opens its session; a batch opens the alerts list', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await enableNative(page);
+          await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.raise('background','bell',f.output('background','\\u0007'));`);
+          await page.waitForFunction(() => (window as any).agentFixture.notices.length === 1, undefined, { timeout: 5000 });
+          const sent = await page.evaluate(() => (window as any).agentFixture.notices[0][1]);
+          assert.ok(Number.isSafeInteger(sent.id) && sent.id > 0, 'an opaque numeric id');
+          assert.doesNotMatch(JSON.stringify(sent), /background|foreground|synthetic/, 'no session data in the notice');
+          await fx(page, `f.focus(true); f.clickNotice(0);`);
+          await page.waitForFunction(() => document.querySelector('.pane-heading')?.textContent?.includes('Claude background'));
+          assert.ok((await page.evaluate(() => (window as any).agentFixture.calls)).includes('plugin:window|set_focus'));
+          // Two sessions in one batch: the click opens the alerts list.
+          await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.raise('foreground','notify',null); f.raise('background','notify',null);`);
+          await page.waitForFunction(() => (window as any).agentFixture.notices.length === 2, undefined, { timeout: 5000 });
+          await fx(page, `f.focus(true); f.clickNotice(1);`);
+          await page.waitForFunction(() => document.querySelector('#session-alerts')?.getAttribute('aria-expanded') === 'true');
+          assert.equal(await page.locator('#attention-banner').isVisible(), true);
         });
       });
 
