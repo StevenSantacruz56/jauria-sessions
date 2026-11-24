@@ -1,6 +1,6 @@
 # Continuidad de Jauría para Claude Code
 
-Este archivo es el punto de entrada para retomar el proyecto en otra sesión. Lee el estado actual de Git y de la instalación antes de actuar: los datos de esta sección se verificaron el **23 de noviembre de 2026** y pueden cambiar.
+Este archivo es el punto de entrada para retomar el proyecto en otra sesión. Lee el estado actual de Git y de la instalación antes de actuar: los datos de esta sección se verificaron el **24 de noviembre de 2026** y pueden cambiar.
 
 ## Estado de la entrega
 
@@ -9,7 +9,7 @@ Este archivo es el punto de entrada para retomar el proyecto en otra sesión. Le
 - **Rama `feat/redesign-1.4`: 1.4.0 preparada, sin publicar.** `VERSION` es **1.4.0** (subida con `scripts/version.py`), el CHANGELOG tiene la entrada `[1.4.0] - 2026-11-23` y las notas están en [docs/RELEASE_1.4.0.md](docs/RELEASE_1.4.0.md). La rama **no está fusionada en `main`, no tiene etiqueta `v1.4.0` ni release de GitHub**. La versión publicada sigue siendo **1.3.3** (commit `b296f6e`, etiqueta `v1.3.3`); su DMG y su checksum no cambian.
 - **Falta para publicar 1.4.0:** ejecutar `python3 scripts/build-macos.py` completo (con las suites de navegador) y anotar sus resultados donde indica el marcador `<!-- RESULTADOS DEL BUILD … -->` de las notas; validar en la app empaquetada lo que las pruebas sintéticas no cubren; empaquetar con `scripts/package-macos.py` un DMG, `SHA256SUMS` y recibo **propios de 1.4.0**; push de la rama, CI en verde con la lista de checks, fusión en `main`, etiqueta `v1.4.0` y release de GitHub con esos tres archivos. Al publicar, actualiza también la sección de descarga de [docs/INSTALLATION.md](docs/INSTALLATION.md) (hoy describe el DMG de 1.3.3) y la línea de versión de los README. Los enlaces `releases/tag/v1.4.0` del CHANGELOG no resuelven hasta entonces.
 - **Defecto en 1.3.3 publicada:** con su propio runner, **Configuración → Guardar** falla siempre («Argumento no permitido»): el bridge solo deja pasar `maxConcurrentSessions` y la app envía también `pulsoAutoAccess`. Corregido en 1.4.0 y recogido en su CHANGELOG y sus notas.
-- El trabajo de Pulso, MCP, configuración y avisos está implementado desde 1.3.3; 1.4.0 añade la interfaz nueva, la paleta, el pie de tarjeta de Pulso y el estado de los agentes en el runner, y retira Repositorios. La revisión de Herdr y sus límites están en [docs/HERDR_REVIEW.md](docs/HERDR_REVIEW.md), y las reglas de los avisos en [docs/SESSION_ALERTS.md](docs/SESSION_ALERTS.md).
+- El trabajo de Pulso, MCP, configuración y avisos está implementado desde 1.3.3. 1.4.0 añade la interfaz nueva (barra lateral Proyectos/Agentes, pestañas con las marcas de proveedor, barra de estado, botones en tres niveles), la paleta, la ventana **Nueva sesión** nueva (botón «Abrir sesión», carpetas recientes, proyecto de Pulso opcional), en Pulso los cajones **Proyecto** y **Sesiones**, el pie de fase, «Dar por terminado» y el **Histórico** (un proyecto archivado es de solo lectura también en el runner), el diálogo **Uso y recursos** (fila del pie de la barra lateral, total de la barra de estado y paleta) y el estado de los agentes en el runner; retira Repositorios. La revisión de Herdr y sus límites están en [docs/HERDR_REVIEW.md](docs/HERDR_REVIEW.md), y las reglas de los avisos en [docs/SESSION_ALERTS.md](docs/SESSION_ALERTS.md).
 - **App instalada:** no se sabe qué versión hay en `/Applications/Jauria.app` ni si su runner tiene sesiones vivas; compruébalo (versión del bundle, Configuración → Acerca de y diagnóstico, y procesos) antes de actualizar. Sigue [docs/INSTALLATION.md](docs/INSTALLATION.md#actualizar-una-instalación-existente) cuando las sesiones hayan terminado de forma controlada; cerrar la ventana no termina necesariamente el runner.
 
 ## Pulso y acceso de agentes
@@ -27,7 +27,12 @@ Cada sesión usa un permiso privado revocable; no publiques su archivo, ruta de 
 | Interfaz de Configuración y acceso manual | `experiments/tauri-vertical/desktop/src/settings-panel.ts`, `src/agent-permissions.ts`, `src/main.ts` |
 | Ajustes y ciclo de sesiones del runner | `experiments/tauri-vertical/runner/src/app_settings.rs`, `src/runner.rs` |
 | Admisión de sesiones (límite de plazas, un escritor por worktree) y esquema del perfil | `experiments/tauri-vertical/runner/src/runner.rs`, `src/runner_codex.rs`, `src/storage.rs`, `src/legacy_tasks.rs` |
-| Pulso, almacenamiento y MCP | `experiments/tauri-vertical/runner/src/pulso.rs`, `src/pulso_store.rs`, `src/pulso_mcp.rs`, `src/pulso_mcp_config.rs` |
+| Pulso, almacenamiento y MCP | `experiments/tauri-vertical/runner/src/pulso.rs`, `src/pulso_store.rs` (solo lectura de proyectos archivados, `archivedAt`), `src/pulso_mcp.rs`, `src/pulso_mcp_config.rs` |
+| Tablero de Pulso en la ventana (Proyecto, Sesiones, Histórico, fases) | `experiments/tauri-vertical/desktop/src/pulso-panel.ts`, `src/pulso-panel.css`, `tests/pulso-panel.test.ts`, `tests/browser/pulso-workbench.test.ts`, `tests/browser/pulso-revision.test.ts` |
+| Ventana Nueva sesión | `experiments/tauri-vertical/desktop/src/new-session.ts` (reglas: plazas, motivos, carpetas recientes), `src/ui.ts` (marcado), `src/main.ts` (`openNew`, envío), `tests/new-session.test.ts`, `tests/browser/new-session-dialog.test.ts` |
+| Uso y recursos (cuotas y CPU/RAM) | `experiments/tauri-vertical/desktop/src/telemetry.ts`, `src/telemetry.css`; runner `src/resource_tree.rs`, `src/resources.rs`, `src/quotas.rs`, `src/claude_quota.rs` |
+| Marcas de proveedor (Claude, OpenAI, terminal) | `experiments/tauri-vertical/desktop/public/brand/proveedores/` (SVG y licencia), `.provider-badge` en `src/style.css` |
+| Capturas de la documentación | `experiments/tauri-vertical/desktop/tests/capture-docs.ts` (todas las de 1.4.0 de `docs/screenshots/`) |
 | Integración Codex | `experiments/tauri-vertical/runner/src/runner_codex.rs`, `src/codex_runtime.rs`, `src/codex_transport.rs` |
 | Pruebas de Configuración | `experiments/tauri-vertical/desktop/tests/settings-panel.test.ts`, `tests/agent-permissions.test.ts` |
 | Atención (1.4 E): fuente runner/ventana, regla de «atendida», avisos nativos | `experiments/tauri-vertical/desktop/src/attention-source.ts`, `src/attention.ts`, `src/native-attention.ts`, `src/main.ts` (`isAttended`, `terminalCovered`) |
@@ -55,6 +60,8 @@ Para reconstruir y ejecutar la batería del proyecto en un Mac Apple Silicon con
 ```sh
 python3 scripts/build-macos.py
 ```
+
+Las capturas de 1.4.0 de `docs/screenshots/` se regeneran con un solo comando, desde `experiments/tauri-vertical/desktop` (Chrome y `npm ci`): `node tests/capture-docs.ts` (con `CAPTURE_DOCS_DIR=/ruta/absoluta` para dejarlas en otra carpeta y revisarlas antes). Usa datos sintéticos; revisa cada imagen antes de publicarla.
 
 El script ejecuta también todas las suites de navegador (Chrome instalado y Playwright WebKit: `npx playwright install webkit` en `experiments/tauri-vertical/desktop`); `--skip-browser-tests` las omite y lo deja escrito en la salida, pero no sirve para validar una entrega. El build de 1.3.3 y sus pruebas pasaron antes de publicar la release; también pasaron 56 pruebas de navegador de Configuración y permisos en Chromium y WebKit (con una frontera Tauri sintética, que por eso no detectó el fallo de Guardar). Si reconstruyes, verifica el artefacto **de esa nueva compilación** y su versión antes de sustituir una instalación. Los paquetes y checksums publicados son inmutables. Una nueva entrega de código necesita incrementar `VERSION`, actualizar documentación y producir sus propios artefactos; no reutilices el DMG ni el checksum de 1.3.3 para 1.4.0.
 
