@@ -120,6 +120,21 @@ try {
     a.see(a.list(sessions)); a.observeEnd('claude', 'running', 'exited'); assert.deepEqual(a.list(sessions), []);
     a.observeEnd('claude', 'running', 'interrupted'); assert.deepEqual(a.list(sessions), []);
   });
+  test('a stale permission read never silences a confirmed alert of the same row (H4)', async () => {
+    const a = new SessionAttention(); const sessions = [session('cx', 'running', 'app-server')]; a.list(sessions);
+    await a.poll(sessions, async () => { throw new Error('codex_state unavailable'); }, () => true);
+    const runner = { permissionsSeen: true, causes: () => [{ key: 'cx:agent:permission:7:1', reason: 'Solicitud de permiso sin ver', unseen: true }] };
+    const [item] = a.list(sessions, runner);
+    assert.equal(item.unseen, true);
+    assert.equal(item.stale, false, 'the runner-confirmed request counts in bell, Dock and macOS');
+    // Only the uncertain read itself: the row stays stale (not counted as new).
+    const [alone] = a.list(sessions);
+    assert.equal(alone.stale, true);
+    // A failure while codex_state is stale is a confirmed incident too.
+    sessions[0].status = 'failed';
+    const [failed] = a.list(sessions);
+    assert.equal(failed.unseen && !failed.stale, true);
+  });
   test('a Terminar the person confirmed is not «El proceso terminó»; other ends still alert', () => {
     const a = new SessionAttention(); const sessions = [session('mine'), session('other')]; a.list(sessions);
     const stopping = new Set(['mine']); a.stopRequested = (id: string) => stopping.has(id);

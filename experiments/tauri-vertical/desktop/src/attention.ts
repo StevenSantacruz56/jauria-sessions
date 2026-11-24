@@ -63,7 +63,10 @@ export class SessionAttention {
       // Initial lifecycle snapshot is quiet, but remains available in the list.
       if (!this.initialized.has(s.id)) { for (const key of keys) if (!outside.has(key)) this.seen.add(key); this.initialized.add(s.id); }
       const unseenKeys = keys.filter(k => outside.get(k) ?? !this.seen.has(k));
-      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale, keys, unseenKeys });
+      // Uncertainty is per cause: a stale permission read only makes the row stale when nothing
+      // else in it is new (a runner alert or a lifecycle incident stays a confirmed alert).
+      const uncertain = (k: string) => k === `${s.id}:unconfirmed` || k.startsWith(`${s.id}:permissions:`);
+      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale: stale && unseenKeys.every(uncertain), keys, unseenKeys });
     }
     for (const key of this.seen) if (!next.has(key)) this.seen.delete(key);
     return result;
