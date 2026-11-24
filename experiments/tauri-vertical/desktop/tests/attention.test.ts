@@ -120,6 +120,18 @@ try {
     a.see(a.list(sessions)); a.observeEnd('claude', 'running', 'exited'); assert.deepEqual(a.list(sessions), []);
     a.observeEnd('claude', 'running', 'interrupted'); assert.deepEqual(a.list(sessions), []);
   });
+  test('a Terminar the person confirmed is not «El proceso terminó»; other ends still alert', () => {
+    const a = new SessionAttention(); const sessions = [session('mine'), session('other')]; a.list(sessions);
+    const stopping = new Set(['mine']); a.stopRequested = (id: string) => stopping.has(id);
+    a.observeEnd('mine', 'running', 'stopped'); sessions[0].status = 'stopped';
+    assert.deepEqual(a.list(sessions), [], 'the person asked for it: no alert');
+    // Stopped by something else (runner shutdown) or exited while stopping: still news.
+    a.observeEnd('other', 'running', 'stopped'); sessions[1].status = 'stopped';
+    assert.match(a.list(sessions)[0].reason, /El proceso terminó/);
+    const failing = [session('crash')]; a.list(failing); stopping.add('crash');
+    a.observeEnd('crash', 'running', 'failed'); failing[0].status = 'failed';
+    assert.equal(a.list(failing).some((item: { reason: string }) => /El proceso terminó/.test(item.reason)), true);
+  });
   test('all app-server sessions queried, baseline quiet, truncated counts honored, failures preserve', async () => {
     const a = new SessionAttention(); const sessions = [session('visible', 'running', 'app-server'), session('hidden', 'running', 'app-server'), session()]; a.list(sessions);
     const queried: string[] = [];

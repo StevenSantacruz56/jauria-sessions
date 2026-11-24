@@ -106,6 +106,8 @@ let historyId: string | null = null;
 let dismissed: DismissedSessions = new Map();
 const isRetired = (id: string) => dismissed.has(id);
 attention.retired = isRetired;
+// Runner 1.3.x (window mode): a Terminar the person confirmed is not «Proceso terminó» (the runner 1.4 does the same).
+attention.stopRequested = id => stopping.has(id) || stopFlights.has(id);
 // What native_binding said about a Claude session in this connection (identity present or not).
 const bindingKnown = new Map<string, 'none' | 'present'>();
 const bindingReads = new Set<string>();

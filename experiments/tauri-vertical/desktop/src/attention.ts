@@ -21,6 +21,8 @@ export class SessionAttention {
   private acknowledged = new Map<string, string>();
   /** Dismissed or continued sessions (view metadata): their interruption is never an alert. */
   retired: (id: string) => boolean = () => false;
+  /** Sessions the person is terminating (Terminar): their `stopped` end is their own action, not an alert. */
+  stopRequested: (id: string) => boolean = () => false;
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
   clearProgram(id:string):boolean {const values=this.signals.get(id);const changed=values?.delete('program')??false;if(values&&!values.size)this.signals.delete(id);return changed;}
@@ -80,7 +82,8 @@ export class SessionAttention {
   seeProgram(id: string) { this.seen.add(`${id}:program:needs`); }
   observeEnd(id: string, previous: string, status: string) {
     if (isLiveStatus(previous) && (status === 'exited' || status === 'stopped' || status === 'failed') && !this.ended.has(id)) {
-      this.ended.add(id); this.signal(id, 'ended');
+      this.ended.add(id);
+      if (!(status === 'stopped' && this.stopRequested(id))) this.signal(id, 'ended');
     }
   }
   async poll(sessions: readonly Session[], rpc: (op: string, args: { id: string }) => Promise<unknown>, current: () => boolean): Promise<void> {

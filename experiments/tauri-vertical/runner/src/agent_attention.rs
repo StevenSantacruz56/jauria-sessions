@@ -217,6 +217,10 @@ struct Inner {
     /// Readers that closed before their process end was published. The end
     /// consumes the entry and seals nothing: no more output can arrive.
     drained: std::collections::HashSet<String>,
+    /// PTY sessions the person asked to stop (`stop` RPC): their `stopped`
+    /// end is their own action, not news. Bounded by the live sessions: an id
+    /// leaves when its process end is published.
+    stop_requested: std::collections::HashSet<String>,
     deleted: BTreeSet<String>,
     /// At most one mark_seen waits for durability; others answer at once.
     waiting: bool,
@@ -325,7 +329,7 @@ impl Attention {
         });
         let durable = conn.is_some();
         let attention = Arc::new(Self { shared: Arc::new(Shared {
-            inner: Mutex::new(Inner { records, sealed: Default::default(), drained: Default::default(), deleted: BTreeSet::new(), waiting: false, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
+            inner: Mutex::new(Inner { records, sealed: Default::default(), drained: Default::default(), stop_requested: Default::default(), deleted: BTreeSet::new(), waiting: false, dirty: BTreeSet::new(), since: None, requested: 0, flushed: 0,
                 urgent: false, durable, stop: None, #[cfg(test)] crash: false }),
             wake: Condvar::new(), flushed: Condvar::new(), generation, clock, config }), done: Mutex::new(None),
         });
@@ -429,6 +433,14 @@ impl Attention {
         }
     }
 
+    /// The person asked to stop this PTY session (Terminar, `stop` RPC). Its
+    /// `stopped` end then raises no `ended`: they caused it and the client
+    /// already confirms it. Runner shutdown does not call this, so an orderly
+    /// restart still leaves `ended` for every session it stopped.
+    pub fn stop_requested(&self, id: &str) {
+        lock(&self.inner).stop_requested.insert(id.to_owned());
+    }
+
     /// A PTY child's wait result was published. Only confirmed final statuses
     /// raise `ended`; needs_attention keeps its own session status cause.
     pub fn process_ended(&self, id: &str, status: &str) {
@@ -437,12 +449,16 @@ impl Attention {
         // Sealed first: a reader still draining after finish cannot reopen it.
         // A reader that already closed cannot emit again: nothing to seal.
         if !m.drained.remove(id) { m.sealed.insert(id.to_owned()); }
+        let requested = m.stop_requested.remove(id);
         let confirmed = matches!(status, "exited" | "stopped" | "failed");
-        if !confirmed && !m.records.contains_key(id) { return; }
+        // A stop the person asked for is not news; earlier unseen alerts stay.
+        let alert = confirmed && !(requested && status == "stopped");
+        if !alert && !m.records.contains_key(id) { return; }
         let record = self.entry(&mut m, id);
         record.close_turn(now, true);
         if record.state.is_some() { record.state = None; record.state_changed_at = Some(now.0); record.state_frame = None; }
-        if confirmed { record.raise(Kind::Ended, None); record.finished_process = true; }
+        if confirmed { record.finished_process = true; }
+        if alert { record.raise(Kind::Ended, None); }
         record.updated_at = now.0;
         self.touch(&mut m, id);
         self.prune(&mut m);
@@ -820,6 +836,33 @@ mod tests {
         let v = agent(&a, "b");
         assert!(v["pending"].get("ended").is_none());
         assert_eq!(v["pending"]["needs"]["seq"], 1, "process end never clears an unseen alert");
+    }
+
+    #[test]
+    fn a_stop_the_person_requested_is_not_news_but_keeps_earlier_alerts() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        // Terminar on a quiet session: no record, no alert.
+        a.stop_requested("q");
+        a.process_ended("q", "stopped");
+        assert!(a.snapshot("q").is_none());
+        // Terminar after an unseen finish: the finish stays, no ended on top.
+        a.pty("f", &[(State(Working), Some(1)), (State(Done), Some(2))]);
+        a.stop_requested("f");
+        a.process_ended("f", "stopped");
+        let v = agent(&a, "f");
+        assert_eq!(v["pending"].as_object().unwrap().keys().collect::<Vec<_>>(), ["finished"]);
+        // The request is consumed: a later stop by shutdown (no request) is news again.
+        a.pty("f", &[(Bell, Some(3))]);
+        a.process_ended("f", "stopped");
+        assert!(agent(&a, "f")["pending"]["ended"].is_object());
+        // A requested stop that ends otherwise (the process exited first, or failed) still alerts.
+        a.stop_requested("x");
+        a.process_ended("x", "failed");
+        assert!(agent(&a, "x")["pending"]["ended"].is_object());
+        // Runner shutdown never calls stop_requested: its stopped sessions keep `ended`.
+        a.process_ended("s", "stopped");
+        assert!(agent(&a, "s")["pending"]["ended"].is_object());
     }
 
     #[test]

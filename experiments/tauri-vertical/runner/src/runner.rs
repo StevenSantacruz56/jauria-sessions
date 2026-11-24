@@ -644,6 +644,8 @@ impl Runner {
                 Ok(json!({"rows":actual.rows,"cols":actual.cols}))
             }
             "stop" => {
+                // The person's own Terminar: its `stopped` end is not an unseen alert.
+                self.attention.stop_requested(id);
                 ensure!(child.stop()?, "termination pending; no confirmed wait result");
                 self.db.lock().unwrap().session(id)?.context("session missing")
             }
@@ -880,6 +882,8 @@ impl Runner {
                 Ok(json!({"rows":actual.rows,"cols":actual.cols}))
             }
             "stop" => {
+                // The person's own Terminar: its `stopped` end is not an unseen alert.
+                self.attention.stop_requested(id);
                 ensure!(child.stop()?,"termination pending; no confirmed wait result");
                 match self.terminal_streams.session(id) {
                     Some(row)=>Ok(row),
