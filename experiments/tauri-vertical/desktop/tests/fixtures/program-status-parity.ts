@@ -29,13 +29,21 @@ export async function feed(create: () => TerminalLike, bytes: Uint8Array, chunks
     if (state === 'clear') events.push({ kind: 'clear', at }); else if (state) events.push({ kind: 'state', state, at });
     return true;
   });
+  const pieces: { piece: Uint8Array; last: number }[] = [];
   let start = 0;
   for (const end of [...chunks, bytes.length]) {
     if (end <= start) continue;
-    at = end - 1;
-    const piece = bytes.slice(start, end);
-    await new Promise<void>(resolve => term.write(piece, resolve));
+    pieces.push({ piece: bytes.slice(start, end), last: end - 1 });
     start = end;
+  }
+  // Every piece is queued at once and xterm parses them in order, calling each callback right after
+  // its piece and before the next: `at` moves there. Awaiting one write at a time costs a timer per
+  // byte, which a throttled CI browser turns into minutes.
+  if (pieces.length) {
+    at = pieces[0].last;
+    await new Promise<void>(resolve => pieces.forEach(({ piece }, i) => term.write(piece, () => {
+      if (i + 1 < pieces.length) at = pieces[i + 1].last; else resolve();
+    })));
   }
   ring.dispose(); attention.dispose(); program.dispose(); term.dispose();
   return events;
