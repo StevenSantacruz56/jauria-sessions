@@ -11,9 +11,11 @@
 //! (prompt, tool, message) is read or forwarded.
 //!
 //! - Claude Code: `--settings` (one invocation, merged with the user's own
-//!   settings; the user's hooks keep running) gets `UserPromptSubmit` and
-//!   `PostToolUse` → working, `Notification` for a permission prompt or an
-//!   elicitation dialog → blocked, `Stop` → done.
+//!   settings; the user's hooks keep running) gets `UserPromptSubmit`,
+//!   `PostToolUse` and `PostToolUseFailure` → working, `PermissionRequest`
+//!   (immediate, no decision returned) and `Notification` for a permission
+//!   prompt or an elicitation dialog → blocked, `Stop` → done, `StopFailure`
+//!   (turn ended by an API error) → error.
 //! - Codex in a terminal: `-c notify=[...]` (agent-turn-complete) → a turn
 //!   (working then done: Codex has no turn-start hook, so the duration is not
 //!   measured). Codex's `notify` is a single program, not a list: when the
@@ -39,6 +41,7 @@ pub fn sequence(state: &str) -> Option<&'static [u8]> {
         "working" => b"\x1b]7501;state=working\x07",
         "blocked" => b"\x1b]7501;state=blocked\x07",
         "done" => b"\x1b]7501;state=done\x07",
+        "error" => b"\x1b]7501;state=error\x07",
         "turn" => b"\x1b]7501;state=working\x07\x1b]7501;state=done\x07",
         _ => return None,
     })
@@ -93,11 +96,19 @@ fn quote(path: &Path) -> Result<String> {
 pub fn claude_hooks(executable: &Path) -> Result<Value> {
     let exe = quote(executable)?;
     let run = |state: &str| json!([{"type": "command", "command": format!("{exe} --attention-hook {state}"), "timeout": 5}]);
+    // Event names checked against Claude Code 2.1.331 (its hook event list) and
+    // https://code.claude.com/docs/en/hooks. PermissionRequest fires as the
+    // prompt appears (Notification permission_prompt only after ~6 s of waiting);
+    // the hook returns no decision (exit 0, no stdout): the dialog still decides.
+    // StopFailure replaces Stop when the turn ends on an API error.
     Ok(json!({
         "UserPromptSubmit": [{"hooks": run("working")}],
         "PostToolUse": [{"matcher": "*", "hooks": run("working")}],
+        "PostToolUseFailure": [{"matcher": "*", "hooks": run("working")}],
+        "PermissionRequest": [{"matcher": "*", "hooks": run("blocked")}],
         "Notification": [{"matcher": "permission_prompt|elicitation_dialog", "hooks": run("blocked")}],
         "Stop": [{"hooks": run("done")}],
+        "StopFailure": [{"hooks": run("error")}],
     }))
 }
 
@@ -135,7 +146,7 @@ mod tests {
     fn sequences_are_what_the_scanner_reads() {
         use crate::agent_signals::{Declared, Scanner, Signal};
         for (state, expected) in [("working", vec![Signal::State(Declared::Working)]), ("blocked", vec![Signal::State(Declared::Blocked)]),
-            ("done", vec![Signal::State(Declared::Done)]), ("turn", vec![Signal::State(Declared::Working), Signal::State(Declared::Done)])] {
+            ("done", vec![Signal::State(Declared::Done)]), ("error", vec![Signal::State(Declared::Error)]), ("turn", vec![Signal::State(Declared::Working), Signal::State(Declared::Done)])] {
             let mut scanner = Scanner::new();
             let mut seen = Vec::new();
             scanner.feed(sequence(state).unwrap(), |_, signal| seen.push(signal));
@@ -152,6 +163,12 @@ mod tests {
         assert!(command("Stop").ends_with("--attention-hook done"));
         assert!(command("Notification").ends_with("--attention-hook blocked"));
         assert_eq!(hooks["Notification"][0]["matcher"], "permission_prompt|elicitation_dialog", "idle reminders are not a permission");
+        assert!(command("PermissionRequest").ends_with("--attention-hook blocked"), "the permission is announced when it appears");
+        assert!(command("PostToolUseFailure").ends_with("--attention-hook working"));
+        assert!(command("StopFailure").ends_with("--attention-hook error"), "an API error ends the turn as «te necesita»");
+        // Every configured event exists in the installed-version list (Claude Code 2.1.331).
+        const KNOWN: &[&str] = &["PreToolUse","PostToolUse","PostToolUseFailure","PostToolBatch","Notification","UserPromptSubmit","UserPromptExpansion","SessionStart","SessionEnd","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","PreModelSwitch","PostModelSwitch","PermissionRequest","PermissionDenied"];
+        for event in hooks.as_object().unwrap().keys() { assert!(KNOWN.contains(&event.as_str()), "{event}"); }
         assert!(claude_hooks(Path::new("relative")).is_err());
     }
 

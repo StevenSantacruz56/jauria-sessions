@@ -24,13 +24,21 @@ def fire(event, payload):
     for group in hooks.get(event, []):
         for hook in group["hooks"]:
             subprocess.run(["/bin/sh", "-c", hook["command"]], input=json.dumps(payload).encode(), timeout=5)
+import os
 fire("UserPromptSubmit", {"hook_event_name": "UserPromptSubmit", "prompt": "SECRET-PROMPT"})
 time.sleep(0.2)
-fire("Notification", {"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "SECRET-TOOL"})
-time.sleep(0.2)
-fire("PostToolUse", {"hook_event_name": "PostToolUse", "tool_name": "Bash"})
-time.sleep(0.2)
-fire("Stop", {"hook_event_name": "Stop"})
+if os.path.exists(os.path.join(os.environ["HOME"], "api-error")):
+    # A tool fails, then the turn ends on an API error: StopFailure instead of Stop.
+    fire("PostToolUseFailure", {"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "error": "SECRET-ERROR"})
+    time.sleep(0.2)
+    fire("StopFailure", {"hook_event_name": "StopFailure", "error": "rate_limit"})
+else:
+    # The permission appears (PermissionRequest at once), is approved, the tool runs, the turn ends.
+    fire("PermissionRequest", {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "SECRET-TOOL"}})
+    time.sleep(0.2)
+    fire("PostToolUse", {"hook_event_name": "PostToolUse", "tool_name": "Bash"})
+    time.sleep(0.2)
+    fire("Stop", {"hook_event_name": "Stop"})
 print("FAKE_DONE", flush=True)
 PY
 exec /bin/cat
@@ -118,7 +126,7 @@ fn claude_hooks_declare_turn_and_permission_through_the_pty() {
         assert!(Instant::now() < end, "no finished from the Stop hook: {agent}");
         thread::sleep(Duration::from_millis(20));
     };
-    // UserPromptSubmit → working, Notification → blocked (needs), PostToolUse → working (needs leaves), Stop → done.
+    // UserPromptSubmit → working, PermissionRequest → blocked (needs), PostToolUse → working (needs leaves), Stop → done.
     assert_eq!(agent["alertSeq"], 2, "needs then finished: {agent}");
     assert!(agent["pending"].get("needs").is_none(), "the permission was answered: needs left by itself");
     assert_eq!(agent["state"], "done");
@@ -130,6 +138,23 @@ fn claude_hooks_declare_turn_and_permission_through_the_pty() {
     // The settings keep the quota statusLine next to the hooks.
     let settings: Value = serde_json::from_str(&fs::read_to_string(f.path("home/settings.json")).unwrap()).unwrap();
     assert!(settings["statusLine"].is_object() && settings["hooks"]["Stop"].is_array());
+}
+
+#[test]
+fn an_api_error_ends_the_turn_as_needs_you_not_working() {
+    let f = Fixture::new();
+    fs::write(f.path("home/api-error"), "").unwrap();
+    f.rpc("start", json!({"id":"err","title":"err","kind":"claude","rows":24,"cols":80,"cwd":f.path("home").to_str().unwrap()}));
+    f.wait_output("err", "FAKE_DONE");
+    let end = Instant::now() + Duration::from_secs(5);
+    let agent = loop {
+        let agent = f.agent("err");
+        if agent["state"] == "error" { break agent; }
+        assert!(Instant::now() < end, "StopFailure left the row as: {agent}");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(agent["pending"]["needs"].is_object(), "«te necesita» after the API error: {agent}");
+    assert!(!f.rpc("status", json!({})).to_string().contains("SECRET"));
 }
 
 #[test]
