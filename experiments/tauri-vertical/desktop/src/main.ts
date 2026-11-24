@@ -1913,18 +1913,19 @@ $('#enable-native-notifications').addEventListener('click', async () => {
     nativeAttention.disable(); text('#enable-native-notifications', 'Activar avisos de macOS…'); text('#native-notification-status', 'Desactivadas. Los avisos dentro de Jauría siguen disponibles.'); return;
   }
   const button = $<HTMLButtonElement>('#enable-native-notifications'); button.disabled = true;
+  // The click listener first: the plugin only tracks notices shown while it exists.
+  await listenNoticeClicks();
   await nativeAttention.enableFromClick(source.nativeItems(source.list(attentionSessions()))); button.disabled = false;
-  if (nativeAttention.enabled) listenNoticeClicks();
 });
 /**
  * A click on a macOS notice (plugin `actionPerformed`, `tap`): bring Jauría to
  * the front and open that session, or the alerts list for a batch. Registered
- * once, after the person enables notices (the plugin only reports clicks on
- * notices shown while a listener exists).
+ * once, when the person enables notices and before any is sent (the plugin
+ * only reports clicks on notices shown while a listener exists).
  */
 let noticeClicks: Promise<{ unregister(): Promise<void> } | null> | null = null;
 function listenNoticeClicks() {
-  noticeClicks ??= onAction(event => {
+  return noticeClicks ??= onAction(event => {
     const target = nativeAttention.target(clickedNotice(event));
     if (!target || disposed) return;
     const win = getCurrentWindow();

@@ -119,7 +119,10 @@ async function install(page: Page, options: Options) {
         if (cmd === 'plugin:window|set_badge_count') { badges.push(request.value); return; }
         if (cmd === 'plugin:notification|is_permission_granted') return true;
         // Click on a macOS notice: the plugin's actionPerformed channel, and bringing the window forward.
-        if (cmd === 'plugin:notification|register_listener') { if (request.event === 'actionPerformed') w.agentFixture.clickChannel = request.handler; return; }
+        if (cmd === 'plugin:notification|register_listener') {
+          if (w.agentFixture.holdListener) await new Promise<void>(resolve => { w.agentFixture.releaseListener = resolve; });
+          if (request.event === 'actionPerformed') w.agentFixture.clickChannel = request.handler; return;
+        }
         if (cmd === 'plugin:window|unminimize' || cmd === 'plugin:window|set_focus') { calls.push(cmd); return; }
         if (cmd === 'pulso_request' && options.pulso) {
           const { op } = request;
@@ -475,6 +478,25 @@ try {
           await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.end('foreground','exited',0);`);
           await page.waitForFunction(() => document.querySelector('#status-finished-text')?.textContent === '1 terminó');
           assert.equal(await page.locator('#status-needs-text').textContent(), '1 te necesita', 'the failure still counts apart');
+        });
+      });
+
+      await t.test('notices are enabled only once the click listener is registered (no notice without a click target)', async () => {
+        await fixture({ runner: true }, async page => {
+          await open(page);
+          await fx(page, `f.holdListener = true;`);
+          await page.locator('#open-settings').click();
+          await page.locator('#enable-native-notifications').click();
+          await page.waitForFunction(() => typeof (window as any).agentFixture.releaseListener === 'function');
+          await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+          await fx(page, `f.focus(false); window.dispatchEvent(new Event('blur')); f.raise('background','bell',f.output('background','\\u0007'));`);
+          await page.waitForTimeout(2200);
+          assert.deepEqual(await page.evaluate(() => (window as any).agentFixture.notices), [], 'not enabled while the listener registers');
+          await fx(page, `f.holdListener = false; f.releaseListener();`);
+          await page.waitForFunction(() => document.querySelector('#enable-native-notifications')?.textContent?.startsWith('Desactivar'));
+          await fx(page, `f.raise('foreground','notify',f.output('foreground','\\u001b]9;x\\u0007'));`);
+          await page.waitForFunction(() => (window as any).agentFixture.notices.length === 1, undefined, { timeout: 5000 });
+          assert.ok(await page.evaluate(() => !!(window as any).agentFixture.clickChannel), 'the notice went out with its click listener in place');
         });
       });
 

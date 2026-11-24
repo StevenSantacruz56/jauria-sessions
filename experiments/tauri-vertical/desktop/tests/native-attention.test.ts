@@ -76,6 +76,16 @@ test('a click leads to the one session of a notice, or to the alerts list for a 
   assert.equal(n.target(clickedNotice({ actionId: 'tap', notification: { id: 'session-secret-1' } })), null);
   assert.equal(n.target(clickedNotice(null)), null);
 });
+test('an own notice whose target was evicted (over 64 later) opens the alerts list; an unknown id does nothing', async () => {
+  const sent: number[] = [];
+  const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: (_kind, id) => { sent.push(id); } }, () => true, () => {}, 1);
+  await n.enableFromClick([]);
+  for (let i = 0; i < 70; i++) { n.update([item(`s${i}:agent:bell:7:1`, { id: `s${i}` })]); await tick(); }
+  assert.equal(sent.length, 70);
+  assert.deepEqual(n.target(sent[0]), { list: true }, 'expired own id: the list, not nothing');
+  assert.deepEqual(n.target(sent[69]), { session: 's69' });
+  assert.equal(n.target(424242), null);
+});
 test('enabling never claims that macOS allows or shows the notices (H10)', async () => {
   const said: string[] = [];
   const n = new NativeAttention({ granted: async () => true, request: async () => 'granted', send: () => {} }, () => true, text => { said.push(text); }, 1);

@@ -79,6 +79,8 @@ export class NativeAttention {
       const id = this.nextId();
       this.targets.set(id, sessions.size === 1 ? { session: items[0].id } : { list: true });
       while (this.targets.size > 64) this.targets.delete(this.targets.keys().next().value!);
+      this.issued.add(id);
+      while (this.issued.size > 4096) this.issued.delete(this.issued.keys().next().value!);
       this.api.send(noticeKind(items), id);
       for (const item of items) for (const key of item.keys) this.delivered.add(key);
     } catch { if (epoch === this.epoch) { this.disable(); this.feedback('No se pudo solicitar el aviso nativo. Los avisos dentro de Jauría siguen disponibles.'); } }
@@ -86,14 +88,18 @@ export class NativeAttention {
   disable() { this.enabled = false; this.epoch++; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.pending.clear(); }
   /** Where a click on notice `id` leads; null for an unknown (old window, forged) id. */
   target(id: unknown): NoticeTarget | null {
-    return typeof id === 'number' ? this.targets.get(id) ?? null : null;
+    if (typeof id !== 'number') return null;
+    // An own notice whose target was evicted (more than 64 later) still leads somewhere safe: the list.
+    return this.targets.get(id) ?? (this.issued.has(id) ? { list: true } : null);
   }
   private targets = new Map<number, NoticeTarget>();
+  /** Every id this window issued (numbers only, at most 4,096): tells an own expired id from an unknown one. */
+  private issued = new Set<number>();
   /** Random positive 31-bit id (the plugin's notification id is an i32): carries no session data. */
   private nextId(): number {
     for (;;) {
       const value = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
-      if (value > 0 && !this.targets.has(value)) return value;
+      if (value > 0 && !this.targets.has(value) && !this.issued.has(value)) return value;
     }
   }
 }
