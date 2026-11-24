@@ -25,6 +25,8 @@ export type WorkbenchOptions = {
   /** sidebar_summary says there are more projects than it lists; `link` fails for these targets. */
   summaryHasMore?: boolean;
   failLinks?: string[];
+  /** Events already stored when the window connects (replayed as history); `seq` is assigned in order. */
+  history?: { sessionId: string; kind: string; data: string }[];
 };
 
 export async function installWorkbench(page: Page, options: WorkbenchOptions = {}) {
@@ -42,6 +44,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
     let settings: any = { schemaVersion: 2, maxConcurrentSessions: options.limit ?? 8, maxSupportedSessions: 8, pulsoAutoAccess: true };
     if (options.settingsVersion === 1) settings = { schemaVersion: 1, maxConcurrentSessions: 8, maxSupportedSessions: 8 };
     const out = (sessionId: string, data: string) => events.push({ seq: events.length + 1, sessionId, kind: 'output', data: btoa(unescape(encodeURIComponent(data))) });
+    for (const event of options.history ?? []) events.push({ seq: events.length + 1, ...event });
     const status = () => structuredClone({ pid: 77, generation: 'workbench', ...(options.runnerVersion === null ? {} : { runnerVersion: options.runnerVersion ?? '1.4.0' }),
       pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true, pulsoSummaryVersion: 1, pulsoRevisionVersion: 1, pulsoRevision: 1,
       normalTerminalVersion: 1, sessionRenameVersion: 1, ...(options.nativeResume ? { nativeResumeVersion: 1, pulsoBoardCardsVersion: 1 } : {}), telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,

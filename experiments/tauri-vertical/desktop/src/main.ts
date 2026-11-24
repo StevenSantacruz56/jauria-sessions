@@ -568,6 +568,15 @@ function notice(message: string, kind: boolean | NoticeKind = false) {
   }
   syncNotice();
 }
+/**
+ * Replay caught up, by whichever path: controls come back and its progress notice goes. The notice has
+ * no timer of its own, so every exit from replay must pass through here or it stays on screen.
+ */
+function endReplay() {
+  if (!replaying) return;
+  replaying = false; refresh();
+  if ($('#notice').dataset.kind === 'progress' && $('#notice-text').textContent?.startsWith('Conectado. Recuperando')) dismissNotice();
+}
 function dismissNotice() { if (noticeTimer !== undefined) clearTimeout(noticeTimer); noticeTimer = undefined; $('#notice').hidden = true; syncNotice(); }
 /** Polite announcement without any visible element (session start, ending). */
 function announce(value: string) { text('#app-announcer', value); }
@@ -1270,7 +1279,7 @@ async function poll(version: number) {
         archiveUnavailable = true;
         // Keep the DB cursor: if archives recover they still deduplicate by frame.
         // An unavailable archive must not indefinitely disable live/control.
-        replaying = false;
+        endReplay();
         page = {events:[], lastSeq:renderedSeq, hasMore:false};
       }
       const transferred=performance.now();
@@ -1284,7 +1293,7 @@ async function poll(version: number) {
       };
       for (const event of page.events) {
         if (event.seq <= pageSeq) continue;
-        if (replaying && event.seq > replayThrough) { await flushWrites(); replaying = false; }
+        if (replaying && event.seq > replayThrough) { await flushWrites(); endReplay(); }
         validateSequence(pageSeq,event);
         if(event.kind==='provider'){
           const payload = terminalFramesPayload(event.data, views.get(event.sessionId)?.session.transport);
@@ -1341,9 +1350,7 @@ async function poll(version: number) {
           // Flush old queries while responses are still suppressed, then allow
           // live queries/keyboard from the next event onward.
           await flushWrites();
-          replaying = false;
-          refresh();
-          if ($('#notice-text').textContent?.startsWith('Conectado. Recuperando')) { $('#notice').hidden = true; syncNotice(); }
+          endReplay();
         }
       }
       await flushWrites();
@@ -1359,7 +1366,8 @@ async function poll(version: number) {
         streamMetrics.lastPageMs=performance.now()-pageStarted;streamMetrics.maxParseMs=Math.max(streamMetrics.maxParseMs,streamMetrics.lastParseMs);
         streamMetrics.visibility=document.visibilityState;streamMetrics.pageBytes=page.events.reduce((sum,event)=>sum+event.data.length,0);
       }
-      if (replaying && pageSeq >= replayThrough) replaying = false;
+      // A page can end on a stream checkpoint (which skips the per-event check) or bring nothing new.
+      if (replaying && pageSeq >= replayThrough) endReplay();
       if (!polledNative && !replaying && runner?.terminalStreamVersion === 1) nativeMore = await pollNative(version);
       if (version !== loopVersion) return;
       if (!page.hasMore && page.events.length) for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);

@@ -46,6 +46,20 @@ try {
         assert.equal(await noticeVisible(page), false);
       });
 
+      await t.test('the recovery notice leaves when the stored history ends on a terminal checkpoint (interrupted sessions after a runner restart)', async () => {
+        // A `state` event carrying terminalStream is a checkpoint: it skips the per-event end-of-replay check.
+        const page = await browser.newPage({ viewport: { width: 1220, height: 800 } }); t.after(() => page.close());
+        const stream = { generation: 'previous-runner', history: { state: 'recording', durableFrame: 0, lastFrame: 0 } };
+        await installWorkbench(page, { open: 0, closed: 0, projects: 1,
+          sessions: [{ id: 'cut-0', title: 'Cortada', kind: 'terminal', cwd: '/synthetic/cut-0', status: 'exited', detail: { terminalStream: stream } }],
+          history: [{ sessionId: 'cut-0', kind: 'output', data: btoa('$ ') },
+            { sessionId: 'cut-0', kind: 'state', data: JSON.stringify({ id: 'cut-0', status: 'exited', terminalStream: stream }) }] });
+        await workbenchReady(page, url);
+        await page.waitForFunction(() => (document.querySelector('#workbench') as HTMLElement).dataset.renderedSeq === '2');
+        await page.waitForFunction(() => (document.querySelector('#notice') as HTMLElement).hidden, null, { timeout: 3000 });
+        assert.equal(await page.locator('#new-session').isDisabled(), false, 'controls come back with the end of the replay');
+      });
+
       await t.test('an error stays until closed with its button or Escape; a new message replaces the previous one', async () => {
         const page = await open();
         await page.evaluate(() => (window as any).workbench.failStart());
