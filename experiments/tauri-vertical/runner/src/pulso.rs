@@ -1,7 +1,7 @@
 //! Private, independent Pulso service. No core-store or process-launch operations.
 #[path = "pulso_store.rs"]
 mod store;
-/// Refusal for writes to a finished project (also shown by the MCP as is).
+/// Stable code refusing writes to an archived project (translated by the UI and the MCP).
 pub(crate) const PROJECT_ARCHIVED: &str = store::PROJECT_ARCHIVED;
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{OptionalExtension, params};

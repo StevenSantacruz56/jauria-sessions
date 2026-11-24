@@ -88,7 +88,7 @@ fn tool_call(params: &Value) -> Value {
               else if detail=="not found or not authorized" {"El proyecto o la fase no está disponible para esta sesión."}
               else if detail=="session is not live" {"La sesión terminó. Abre una sesión nueva y concede acceso si aún lo necesitas."}
               else if detail=="Herramienta desconocida" {"Herramienta desconocida: este servidor solo ofrece las herramientas de tools/list (jauria_projects, jauria_project, jauria_create_project, jauria_phases, jauria_phase, jauria_create_phase, jauria_update_phase y jauria_checkpoint). No se hizo ningún cambio; no reintentes con este nombre."}
-              else if detail==crate::pulso::PROJECT_ARCHIVED {detail.as_str()}
+              else if detail==crate::pulso::PROJECT_ARCHIVED {"El proyecto está en el histórico; reábrelo para cambiarlo. No se hizo ningún cambio."}
               else if detail=="invalid status" {"Estado no válido: usa todo, doing, waiting o done. No se hizo ningún cambio."}
               else if detail.starts_with("Falta ") || detail=="Argumento MCP no disponible para esta herramienta" || detail.starts_with("idempotencyKey debe ser estable") || detail=="Indica un cambio de título, nota o estado" {detail.as_str()}
               else {"No se confirmó la operación. Comprueba el acceso y consulta el resultado antes de reintentar con el mismo idempotencyKey."};

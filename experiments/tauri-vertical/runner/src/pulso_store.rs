@@ -351,9 +351,10 @@ impl Store {
                 }
                 // Count in SQLite using exactly the same scope/filters, without fetching bodies.
                 let total: i64 = self.0.query_row(&format!("SELECT count(*) FROM docs WHERE {predicate}"), rusqlite::params_from_iter(parameters.iter()), |r| r.get(0))?;
-                // Terminados: most recently finished first (archivedAt, else the last change for older profiles).
+                // Histórico: most recently archived first; archives from before archivedAt existed go last
+                // (their date is unknown: updatedAt is not a closing date).
                 let order = if op=="items" { "CAST(json_extract(body,'$.position') AS REAL)," }
-                    else if a["archived"].as_bool().unwrap_or(false) { "CAST(COALESCE(json_extract(body,'$.archivedAt'),json_extract(body,'$.updatedAt')) AS INTEGER) DESC," }
+                    else if a["archived"].as_bool().unwrap_or(false) { "json_extract(body,'$.archivedAt') IS NULL,CAST(json_extract(body,'$.archivedAt') AS INTEGER) DESC," }
                     else { "" };
                 let sql=format!("SELECT CASE WHEN kind='project' THEN json_set(body,'$.plan','') ELSE body END FROM docs
                     WHERE {predicate} ORDER BY {order}CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ? OFFSET ?");
@@ -818,8 +819,9 @@ const BOARD_CARDS_SQL: &str = "SELECT j.value,
     FROM json_each(?) AS j";
 // sidebar_summary bounds: at most 50 projects (the UI shows 20) and 2,048
 // distinct session/project pairs within 256 KiB, far below RESPONSE_MAX.
-/// Writes to a finished project (or its phases, checkpoints and links) are refused with this text.
-pub const PROJECT_ARCHIVED: &str = "El proyecto está terminado; reábrelo para cambiarlo.";
+/// Stable code for writes refused because the project (or the project of a
+/// phase, checkpoint or link) is archived. The UI and the MCP translate it.
+pub const PROJECT_ARCHIVED: &str = "project archived";
 const SUMMARY_PROJECTS: usize = 50;
 const SUMMARY_LINKS: usize = 2048;
 const SUMMARY_LINK_BYTES: usize = 256 * 1024;
@@ -1643,8 +1645,8 @@ mod store_tests {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         let mut ui = Principal::ui();
         for p in ["a", "b", "c"] { write(&mut store, &mut ui, "project_create", json!({"id":p,"requestId":p,"title":p})); }
-        // "old": archived before archivedAt existed (only updatedAt); a, then c, then b finished in that order.
-        put_raw(&store, "project", json!({"id":"old","title":"old","plan":"","archived":true,"revision":1,"createdAt":0,"updatedAt":1}));
+        // "old": archived before archivedAt existed. Its recent updatedAt is not a closing date: it goes last.
+        put_raw(&store, "project", json!({"id":"old","title":"old","plan":"","archived":true,"revision":1,"createdAt":0,"updatedAt":999_999}));
         for (p, at) in [("a", 100u64), ("c", 300), ("b", 200)] {
             archive(&mut store, &mut ui, "project", p);
             let mut v = store.get("project", p).unwrap(); v["archivedAt"] = json!(at); v["updatedAt"] = json!(at); store.put("project", &v).unwrap();
