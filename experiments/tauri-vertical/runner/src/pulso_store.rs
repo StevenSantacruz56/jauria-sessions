@@ -185,6 +185,15 @@ impl Store {
         )?;
         Ok(())
     }
+    /// A finished (archived) project is read-only for the UI and for agents:
+    /// no write may change it or its phases, checkpoints or links.
+    fn ensure_open_project(&self, project_id: &Value) -> Result<()> {
+        if let Some(pid) = project_id.as_str() {
+            let project = self.get("project", pid)?;
+            ensure!(!project["archived"].as_bool().unwrap_or(false), PROJECT_ARCHIVED);
+        }
+        Ok(())
+    }
     pub fn authorized(&self, p: &Principal, kind: &str, id: &str) -> Result<Value> {
         let v = self.get(kind, id)?;
         let project = if kind == "project" {
@@ -342,7 +351,10 @@ impl Store {
                 }
                 // Count in SQLite using exactly the same scope/filters, without fetching bodies.
                 let total: i64 = self.0.query_row(&format!("SELECT count(*) FROM docs WHERE {predicate}"), rusqlite::params_from_iter(parameters.iter()), |r| r.get(0))?;
-                let order = if op=="items" { "CAST(json_extract(body,'$.position') AS REAL)," } else { "" };
+                // Terminados: most recently finished first (archivedAt, else the last change for older profiles).
+                let order = if op=="items" { "CAST(json_extract(body,'$.position') AS REAL)," }
+                    else if a["archived"].as_bool().unwrap_or(false) { "CAST(COALESCE(json_extract(body,'$.archivedAt'),json_extract(body,'$.updatedAt')) AS INTEGER) DESC," }
+                    else { "" };
                 let sql=format!("SELECT CASE WHEN kind='project' THEN json_set(body,'$.plan','') ELSE body END FROM docs
                     WHERE {predicate} ORDER BY {order}CAST(json_extract(body,'$.createdAt') AS INTEGER),id LIMIT ? OFFSET ?");
                 parameters.push(SqlValue::Integer((limit+1) as i64));parameters.push(SqlValue::Integer(i64::try_from(cursor)?));
@@ -561,6 +573,7 @@ impl Store {
                         let proj = a.get("projectId").cloned().unwrap_or(Value::Null);
                         if !proj.is_null() {
                             self.authorized(p, "project", &id(a, "projectId")?)?;
+                            self.ensure_open_project(&proj)?;
                         } else {
                             ensure!(p.session.is_none(), "standalone items not authorized");
                         }
@@ -619,6 +632,13 @@ impl Store {
                     let i = id(a, "id")?;
                     let kind = if project { "project" } else { "item" };
                     let mut v = self.authorized(p, kind, &i)?;
+                    // Only a reopening update (archived:false) may touch an archived project.
+                    let was_archived = v["archived"].as_bool().unwrap_or(false);
+                    if project {
+                        ensure!(!was_archived || a.get("archived") == Some(&Value::Bool(false)), PROJECT_ARCHIVED);
+                    } else {
+                        self.ensure_open_project(&v["projectId"])?;
+                    }
                     expected(a, &v)?;
                     boolean(a, "archived")?;
                     for (k, max, required) in [
@@ -641,6 +661,15 @@ impl Store {
                     }
                     if let Some(x) = a.get("archived") {
                         v["archived"] = x.clone();
+                    }
+                    // A project keeps the moment it was finished; reopening forgets it.
+                    if project {
+                        let archived = v["archived"].as_bool().unwrap_or(false);
+                        if archived && !was_archived {
+                            v["archivedAt"] = json!(t);
+                        } else if !archived {
+                            if let Some(o) = v.as_object_mut() { o.remove("archivedAt"); }
+                        }
                     }
                     if let Some(x) = a.get("mainSessionId") {
                         if !x.is_null() {
@@ -678,12 +707,14 @@ impl Store {
                     if a.get("itemId").is_some() {
                         let i = id(a, "itemId")?;
                         let item = self.authorized(p, "item", &i)?;
+                        self.ensure_open_project(&item["projectId"])?;
                         v["itemId"] = json!(i);
                         event["itemId"] = json!(i);
                         event["projectId"] = item["projectId"].clone();
                     } else {
                         let i = id(a, "projectId")?;
-                        self.authorized(p, "project", &i)?;
+                        let project = self.authorized(p, "project", &i)?;
+                        ensure!(!project["archived"].as_bool().unwrap_or(false), PROJECT_ARCHIVED);
                         v["projectId"] = json!(i);
                         event["projectId"] = json!(i);
                     }
@@ -711,6 +742,7 @@ impl Store {
                     ensure!(!self.exists("checkpoint", &i)?, "id already exists");
                     let item_id = id(a, "itemId")?;
                     let mut item = self.authorized(p, "item", &item_id)?;
+                    self.ensure_open_project(&item["projectId"])?;
                     expected(a, &item)?;
                     let mut v = json!({"id":i,"itemId":item_id,"brief":string(a,"brief",4000,false)?,"nextAction":string(a,"nextAction",1000,false)?,"createdAt":t,"revision":rev,"actor":p.id});
                     if a.get("sessionId").is_some() {
@@ -786,6 +818,8 @@ const BOARD_CARDS_SQL: &str = "SELECT j.value,
     FROM json_each(?) AS j";
 // sidebar_summary bounds: at most 50 projects (the UI shows 20) and 2,048
 // distinct session/project pairs within 256 KiB, far below RESPONSE_MAX.
+/// Writes to a finished project (or its phases, checkpoints and links) are refused with this text.
+pub const PROJECT_ARCHIVED: &str = "El proyecto está terminado; reábrelo para cambiarlo.";
 const SUMMARY_PROJECTS: usize = 50;
 const SUMMARY_LINKS: usize = 2048;
 const SUMMARY_LINK_BYTES: usize = 256 * 1024;
@@ -1548,5 +1582,74 @@ mod store_tests {
             assert!(plan.contains(index), "{plan}");
             assert!(!plan.contains("SCAN events"), "{plan}");
         }
+    }
+
+
+    #[test]
+    fn archived_project_is_read_only_until_reopened() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        write(&mut store, &mut ui, "project_create", json!({"id":"p","requestId":"p","title":"P"}));
+        write(&mut store, &mut ui, "item_create", json!({"id":"i","requestId":"i","projectId":"p","title":"Fase"}));
+        write(&mut store, &mut ui, "item_create", json!({"id":"solo","requestId":"solo","title":"Pendiente"}));
+        assert!(store.get("project", "p").unwrap().get("archivedAt").is_none());
+        archive(&mut store, &mut ui, "project", "p");
+        let archived = store.get("project", "p").unwrap();
+        assert_eq!(archived["archived"], true);
+        assert!(archived["archivedAt"].as_u64().is_some_and(|t| t > 0), "{archived}");
+        assert_eq!(archived["archivedAt"], archived["updatedAt"]);
+        let item = store.get("item", "i").unwrap();
+        let project_rev = archived["revision"].clone();
+        let mut agent = Principal { id:"a".into(), session:Some("s-agent".into()), projects:HashSet::new(), create:true, all_projects:true };
+        let refused: Vec<(&str, Value)> = vec![
+            ("project_update", json!({"id":"p","requestId":"r1","expectedRevision":project_rev,"title":"Otro"})),
+            ("project_update", json!({"id":"p","requestId":"r2","expectedRevision":project_rev,"archived":true})),
+            ("project_update", json!({"id":"p","requestId":"r3","expectedRevision":project_rev,"mainSessionId":null})),
+            ("item_create", json!({"id":"j","requestId":"r4","projectId":"p","title":"Nueva"})),
+            ("item_update", json!({"id":"i","requestId":"r5","expectedRevision":item["revision"],"status":"done"})),
+            ("item_update", json!({"id":"i","requestId":"r6","expectedRevision":item["revision"],"archived":true})),
+            ("checkpoint_create", json!({"id":"c","requestId":"r7","itemId":"i","expectedRevision":item["revision"],"brief":"b","nextAction":"n"})),
+            ("link", json!({"requestId":"r8","projectId":"p","sessionId":"s1"})),
+            ("link", json!({"requestId":"r9","itemId":"i","sessionId":"s1"})),
+        ];
+        let before = store.revision().unwrap();
+        for (op, args) in &refused {
+            assert_eq!(store.write(&mut ui, op, args).unwrap_err().to_string(), PROJECT_ARCHIVED, "ui {op} {args}");
+        }
+        // Agents share the store: the same refusal (their own session for links).
+        for (op, mut args) in refused.clone() {
+            if op == "project_update" && (args.get("archived").is_some() || args.get("mainSessionId").is_some()) { continue; }
+            if op == "item_update" && args.get("archived").is_some() { continue; }
+            if op == "link" { args["sessionId"] = json!("s-agent"); }
+            args["requestId"] = json!(format!("agent-{}", args["requestId"].as_str().unwrap()));
+            assert_eq!(store.write(&mut agent, op, &args).unwrap_err().to_string(), PROJECT_ARCHIVED, "agent {op} {args}");
+        }
+        assert_eq!(store.revision().unwrap(), before, "refused writes never commit");
+        // Reads still work, and standalone Pendientes are unaffected.
+        assert_eq!(store.read(&ui, "board", &json!({"projectId":"p"})).unwrap()["columns"]["todo"]["totalCount"], 1);
+        let solo = store.get("item", "solo").unwrap();
+        write(&mut store, &mut ui, "item_update", json!({"id":"solo","requestId":"solo-done","expectedRevision":solo["revision"],"status":"done"}));
+        // Reopening (archived:false, alone or with other fields) works and forgets archivedAt.
+        write(&mut store, &mut ui, "project_update", json!({"id":"p","requestId":"reopen","expectedRevision":project_rev,"archived":false,"title":"P de nuevo"}));
+        let reopened = store.get("project", "p").unwrap();
+        assert_eq!(reopened["archived"], false); assert_eq!(reopened["title"], "P de nuevo");
+        assert!(reopened.get("archivedAt").is_none(), "{reopened}");
+        write(&mut store, &mut ui, "item_update", json!({"id":"i","requestId":"after","expectedRevision":item["revision"],"status":"done"}));
+        write(&mut store, &mut ui, "link", json!({"requestId":"after-link","projectId":"p","sessionId":"s1"}));
+    }
+
+    #[test]
+    fn archived_projects_list_most_recently_finished_first() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut ui = Principal::ui();
+        for p in ["a", "b", "c"] { write(&mut store, &mut ui, "project_create", json!({"id":p,"requestId":p,"title":p})); }
+        // "old": archived before archivedAt existed (only updatedAt); a, then c, then b finished in that order.
+        put_raw(&store, "project", json!({"id":"old","title":"old","plan":"","archived":true,"revision":1,"createdAt":0,"updatedAt":1}));
+        for (p, at) in [("a", 100u64), ("c", 300), ("b", 200)] {
+            archive(&mut store, &mut ui, "project", p);
+            let mut v = store.get("project", p).unwrap(); v["archivedAt"] = json!(at); v["updatedAt"] = json!(at); store.put("project", &v).unwrap();
+        }
+        let order: Vec<_> = store.read(&ui, "projects", &json!({"archived":true})).unwrap()["projects"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(order, ["c", "b", "a", "old"]);
     }
 }

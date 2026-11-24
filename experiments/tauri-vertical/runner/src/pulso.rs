@@ -1,6 +1,8 @@
 //! Private, independent Pulso service. No core-store or process-launch operations.
 #[path = "pulso_store.rs"]
 mod store;
+/// Refusal for writes to a finished project (also shown by the MCP as is).
+pub(crate) const PROJECT_ARCHIVED: &str = store::PROJECT_ARCHIVED;
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -689,6 +691,7 @@ fn public_error(e: &anyhow::Error) -> String {
         "service stopped",
         "limit must be 1..100",
         "invalid status",
+        store::PROJECT_ARCHIVED,
     ] {
         if text == safe {
             return safe.into();
@@ -813,6 +816,10 @@ fn remove_handle(dir: &Path, sid: &str, token: &str) {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    #[test]
+    fn archived_project_refusal_reaches_the_ui_and_agents_verbatim() {
+        assert_eq!(public_error(&anyhow::anyhow!(PROJECT_ARCHIVED)), PROJECT_ARCHIVED);
+    }
     struct Fixture {
         _root: TempDir,
         data: PathBuf,
