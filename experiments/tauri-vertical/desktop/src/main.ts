@@ -181,6 +181,8 @@ const alertsPopover = new AlertsPopover({ button: $<HTMLButtonElement>('#session
 const stopDialog = $<HTMLDialogElement>('#stop-session-dialog');
 let dialogReturn: HTMLElement | null = null;
 let newDialogVersion = 0;
+/** Pulso «Nuevo proyecto» waiting for the session this dialog starts (cleared when the dialog closes). */
+let projectSessionTarget: ((sessionId: string) => void) | null = null;
 const nativeAttention = new NativeAttention({
   granted: isPermissionGranted, request: requestPermission,
   send: kind => sendNotification(nativeNoticeContent(kind)),
@@ -1069,6 +1071,7 @@ async function start(id: string, kind: string, title: string, pane: Pane, cwd?: 
   presentSession(session, pane);
   // The pane heading already says «Abriendo» until the runner reports it running: no floating notice.
   announce(`Abriendo ${title}…`);
+  return session.id;
 }
 function presentSession(session: Session, pane: Pane) {
   stageView = 'terminal';
@@ -1450,7 +1453,7 @@ $('#choose-directory').addEventListener('click', () => action(async () => {
 $('#use-home-directory').addEventListener('click', () => action(async () => {
   setSessionDirectory(await invoke<string>('home_directory'));
 }));
-newDialog.addEventListener('close', () => { newDialogVersion++; });
+newDialog.addEventListener('close', () => { newDialogVersion++; projectSessionTarget = null; });
 $('#new-session-form').addEventListener('submit', event => {
   event.preventDefault();
   void action(async () => {
@@ -1460,7 +1463,9 @@ $('#new-session-form').addEventListener('submit', event => {
       if (!kind || !['codex', 'claude', 'terminal'].includes(kind)) throw new Error('Selecciona una herramienta para iniciar.');
       if (kind === 'terminal' && runner?.normalTerminalVersion !== 1) throw new Error('Reinicia el runner desde Diagnóstico para habilitar Terminal cuando no tengas sesiones en ejecución.');
       const title = $<HTMLInputElement>('#session-title').value.trim() || providerLabel(kind);
-      await start(`${kind}-${crypto.randomUUID()}`, kind, title, panes[focusedPane], selectedDirectory);
+      const started = await start(`${kind}-${crypto.randomUUID()}`, kind, title, panes[focusedPane], selectedDirectory);
+      // Opened from Pulso «Nuevo proyecto»: that project takes this session as its main one.
+      const target = projectSessionTarget; projectSessionTarget = null; target?.(started);
       newDialog.close(); focusView(activeView());
     } catch (e) { text('#new-session-error', message(e)); $('#new-session-error').hidden = false; }
   });
@@ -1841,10 +1846,6 @@ const settingsPanel = mountSettings({
   canEdit: () => connected && !connecting && (runner?.settingsVersion === 1 || runner?.settingsVersion === 2),
   onSaved(settings) { if (runner) runner.settings = settings; refresh(); },
 });
-function openPermissions(context: {projectId?: string; sessionId?: string}) {
-  if(disposed || settingsPanel.isOpen || Array.from(document.querySelectorAll('dialog[open]')).some(dialog => !dialog.classList.contains('pulso-drawer')))return;
-  settingsPanel.open('permissions',context);closeSidebar();refresh();
-}
 function openSettings() {
   if (disposed || document.querySelector('dialog[open]')) return;
   settingsPanel.open(); closeSidebar(); refresh();
@@ -2070,7 +2071,8 @@ pulsoPanel = mountPulsoPanel({
   request: requestPulso,
   persistenceKey: () => profileDataDir,
   bindingCacheKey: () => `${loopVersion}:${runner?.generation??''}`,
-  onOpenPermissions: openPermissions,
+  // «Empezar una sesión nueva para este proyecto»: the usual Nueva sesión dialog; the session it starts is handed back once.
+  startProjectSession: started => { openNew(); if (!newDialog.open) return false; projectSessionTarget = started; return true; },
   sessions: () => [...views.values()].map(view => ({...view.session,programState:source.display(view.session.id)})),
   currentSession: () => activeView()?.session ?? null,
   openSession: id => { if (!views.has(id)) { notice('La sesión vinculada no está disponible en este perfil.'); return; } selectSession(id); },
