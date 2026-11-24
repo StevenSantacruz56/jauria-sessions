@@ -422,19 +422,25 @@ async function continueConversation(id: string, target?: Pane): Promise<string> 
 /*
  * A continuation counts only when it works (1.4.0): the original is marked
  * continued (it leaves Interrumpidas) and its Pulso links are inherited once
- * two consecutive `status` reads see the new session `running` (about one
- * second apart). If it is seen closed, Sin confirmar or failed before that,
- * nothing is marked or linked and the person is told; the original stays.
+ * consecutive `status` reads see the new session `running` for at least
+ * CONTINUATION_SETTLE_MS: two reads in quick succession are not enough, and
+ * a read that omits the session restarts the wait. If it is seen closed,
+ * Sin confirmar or failed before that, nothing is marked or linked and the
+ * person is told; the original stays.
  */
-const pendingContinuations = new Map<string, { from: string; title: string; running: number }>();
-function awaitConfirmation(from: string, next: string, title: string) { pendingContinuations.set(next, { from, title, running: 0 }); }
+const CONTINUATION_SETTLE_MS = 1000;
+const pendingContinuations = new Map<string, { from: string; title: string; runningSince: number | null }>();
+function awaitConfirmation(from: string, next: string, title: string) { pendingContinuations.set(next, { from, title, runningSince: null }); }
 function confirmContinuations(status: RunnerStatus) {
+  const now = performance.now();
   for (const [next, pending] of [...pendingContinuations]) {
-    const session = status.sessions.find(s => s.id === next); if (!session) continue;
+    const session = status.sessions.find(s => s.id === next);
+    if (!session) { pending.runningSince = null; continue; }
     if (session.status === 'running') {
-      if (++pending.running < 2) continue;
+      if (pending.runningSince === null) { pending.runningSince = now; continue; }
+      if (now - pending.runningSince < CONTINUATION_SETTLE_MS) continue;
       pendingContinuations.delete(next); markContinued(pending.from, next); void inheritPulsoLinks(pending.from, next);
-    } else if (session.status === 'starting') pending.running = 0;
+    } else if (session.status === 'starting') pending.runningSince = null;
     else {
       pendingContinuations.delete(next);
       notice(`La continuación de ${pending.title} terminó al arrancar. La original sigue en Interrumpidas; revisa su salida o usa Empezar de nuevo aquí.`, true);

@@ -32,7 +32,7 @@ const lifecycle: WorkbenchOptions = {
 const paneSession = (page: Page, pane = 1) => page.evaluate(pane => (document.querySelector(`#session-${pane - 1}`) as HTMLElement).dataset.sessionId ?? '', pane);
 const listIds = (page: Page, selector: string) => page.locator(selector).evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.sessionId));
 const stored = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('jauria:session-dismissed:/synthetic-profile') ?? 'null'));
-/** Rule (1.4.0): a continuation counts once two consecutive status reads see it running. */
+/** Rule (1.4.0): a continuation counts once consecutive status reads see it running for about a second. */
 async function confirmRunning(page: Page, id: string) {
   await page.evaluate(id => (window as any).workbench.setStatus(id, 'running'), id);
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('jauria:session-dismissed:/synthetic-profile') ?? 'null') !== null, undefined, { timeout: 6000 });
