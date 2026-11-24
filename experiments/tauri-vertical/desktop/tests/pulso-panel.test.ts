@@ -97,6 +97,9 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         if (op === 'revoke_policy') { f.policies = f.policies.filter((p: any) => p.id !== args.id); return {}; }
         if (f.receipts.has(args.requestId)) return structuredClone(f.receipts.get(args.requestId));
         if (f.failWrite) throw 'timeout or revision conflict';
+        // Runner 1.4: writes into an archived project are refused with a stable code (reopening is allowed).
+        { const target = op === 'project_update' ? args.id : op === 'item_update' || op === 'checkpoint_create' ? f.items.find((i: any) => i.id === (args.itemId ?? args.id))?.projectId : op === 'link' ? (args.projectId ?? f.items.find((i: any) => i.id === args.itemId)?.projectId) : args.projectId;
+          const project = f.projects.find((x: any) => x.id === target); if (project?.archived && !(op === 'project_update' && args.archived === false)) throw 'project archived'; }
         let result: any;
         if (op.endsWith('_create') && op !== 'checkpoint_create') {
           const isProject = op === 'project_create'; const row = { ...(isProject ? project(args.id) : item(args.id, args.projectId ?? null)), ...args, revision: ++f.revision };
@@ -129,6 +132,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
           return data;
         },
         resumeSession: async (id: string) => { f.resumed.push(id); if (f.resumeError) throw new Error('secret-runner-detail'); },
+        restartSession: (id: string) => { (f.restarted ??= []).push(id); },
       });
       f.mount();
     }, setup);
@@ -282,17 +286,21 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.equal(archive.length, 1); assert.equal(archive[0].archived, true); assert.equal(archive[0].expectedRevision, 1);
         await p.getByRole('button', { name: 'Proyecto p1', exact: true }).waitFor({ state: 'detached' });
         assert.equal(await p.getByRole('button', { name: 'Pendientes', exact: true }).getAttribute('aria-current'), 'true');
-        assert.match((await run(p, 'return f.notices')).join(' '), /Terminados/);
+        assert.match((await run(p, 'return f.notices')).join(' '), /Histórico/);
       });
-      await t.test('Terminados lists archived projects, shows a read-only board and reopens', async () => {
+      await t.test('Histórico lists archived projects honestly, shows a read-only board and reopens', async () => {
         const p = await mounted('f.projects.push({...f.project("old"),title:"Proyecto viejo",archived:true});f.items.push({...f.item("v1","old"),status:"done"},{...f.item("v2","old"),status:"doing"});');
-        await p.getByRole('button', { name: 'Terminados', exact: true }).click();
-        const dialog = p.getByRole('dialog'); await dialog.getByText('Proyecto viejo', { exact: true }).waitFor();
-        await dialog.getByText(/1 de 2 fases hechas · Terminado el/).waitFor();
+        await p.getByRole('button', { name: /^Histórico/ }).click();
+        const dialog = p.getByRole('dialog', { name: 'Histórico de proyectos' }); await dialog.getByText('Proyecto viejo', { exact: true }).waitFor();
+        assert.equal(await p.getByRole('button', { name: /^Histórico/ }).getAttribute('aria-expanded'), 'true');
+        assert.equal(await p.getByRole('button', { name: /^Histórico/ }).getAttribute('aria-current'), null);
+        // Archived before archivedAt existed, with an open phase: no invented date, «sin terminar».
+        await dialog.getByText('Archivado sin terminar · fecha no registrada · 1 de 2 fases hechas', { exact: true }).waitFor();
         assert.equal(await dialog.getByText('Proyecto p1', { exact: true }).count(), 0);
         await dialog.getByRole('button', { name: 'Ver tablero', exact: true }).click(); await idle(p);
         await p.locator('.pulso-archived-badge').waitFor();
-        assert.equal(await p.getByRole('button', { name: 'Terminados', exact: true }).getAttribute('aria-current'), 'true');
+        assert.equal(await p.getByRole('button', { name: /^Histórico/ }).getAttribute('aria-expanded'), 'false');
+        assert.equal(await p.locator('.pulso-archived-badge').innerText(), 'Archivado');
         assert.equal(await p.getByRole('button', { name: /Añadir fase|^Mover |^Abrir Fase|^Proyecto$|^Sesiones$|Dar por terminado/ }).count(), 0);
         await p.getByText('Fase v2', { exact: true }).waitFor();
         await p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
@@ -307,7 +315,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByRole('button', { name: 'Archivar proyecto', exact: true }).click(); await p.getByRole('button', { name: 'Sí, archivar', exact: true }).click(); await idle(p);
         assert.equal(await run(p, 'return f.projects[0].archived'), true); assert.equal(await p.locator('dialog[open]').count(), 0);
         assert.equal(await p.getByRole('button', { name: 'Proyecto p1', exact: true }).count(), 0);
-        await p.getByRole('button', { name: 'Terminados', exact: true }).click(); await p.getByRole('dialog').getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
+        await p.getByRole('button', { name: /^Histórico/ }).click(); await p.getByRole('dialog').getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
         await p.getByRole('button', { name: 'Proyecto p1', exact: true }).waitFor(); assert.equal(await run(p, 'return f.projects[0].archived'), false);
       });
       await t.test('a pending Proyecto edit is sent when the panel is disposed or the window hides', async () => {
@@ -359,7 +367,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       });
       await t.test('a read-only board only views its main session: no continue and no link', async () => {
         const p = await mounted('f.projects.push({...f.project("old"),title:"Proyecto viejo",archived:true});');
-        await p.getByRole('button', { name: 'Terminados', exact: true }).click();
+        await p.getByRole('button', { name: /^Histórico/ }).click();
         await p.getByRole('dialog').getByRole('button', { name: 'Ver tablero', exact: true }).click(); await p.locator('.pulso-archived-badge').waitFor();
         const toolbar = p.locator('.pulso-board-toolbar');
         assert.equal(await toolbar.getByRole('button', { name: /Continuar|Abrir conversación|Empezar de nuevo/ }).count(), 0);
@@ -380,6 +388,90 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.getByRole('button', { name: 'Reintentar mismo cambio', exact: true }).waitFor();
         await p.getByText('No se guardó el proyecto. Sigues en el tablero.', { exact: true }).waitFor();
         assert.equal(await run(p, 'return f.navigated'), 1); assert.equal(await p.locator('dialog[open]').count(), 1);
+      });
+      await t.test('the tab strip holds only boards; Nuevo proyecto and Histórico are buttons with a counter', async () => {
+        const p = await mounted('f.projects.push({...f.project("old"),title:"Archivado",archived:true,archivedAt:Date.parse("2026-11-20T10:00:00Z")});');
+        const nav = p.getByRole('navigation', { name: 'Tableros de Pulso' });
+        assert.deepEqual(await nav.getByRole('button').allInnerTexts(), ['Pendientes', 'Proyecto p1']);
+        const history = p.getByRole('button', { name: /^Histórico/ });
+        await p.waitForFunction(() => document.querySelector('.pulso-archive-count')?.textContent === '1');
+        assert.equal(await history.getAttribute('aria-label'), 'Histórico (1)');
+        for (const b of [history, p.getByRole('button', { name: 'Nuevo proyecto', exact: true })]) {
+          assert.equal(await b.evaluate(n => n.closest('nav')), null); assert.match(await b.getAttribute('class') ?? '', /secondary/);
+          assert.notEqual(await b.evaluate(n => getComputedStyle(n).borderTopStyle), 'none');
+        }
+        assert.equal(await p.locator('.pulso-tab-actions').evaluate(n => getComputedStyle(n).borderLeftStyle), 'solid', 'a divider separates boards and actions');
+        await history.click(); await p.getByRole('dialog', { name: 'Histórico de proyectos' }).getByText('Archivado sin terminar el 20/11/2026 · Sin fases', { exact: true }).waitFor();
+        const q = await mounted('f.projects=f.projects.filter(x=>!x.archived);');
+        await q.waitForFunction(() => (window as any).fixture.calls.some((c: any) => c.op === 'projects' && c.args.archived === true));
+        assert.equal(await q.locator('.pulso-archive-count').isHidden(), true); assert.equal(await q.getByRole('button', { name: /^Histórico/ }).getAttribute('aria-label'), 'Histórico');
+        await q.getByRole('button', { name: /^Histórico/ }).click();
+        await q.getByText('Aquí quedan los proyectos que das por terminados o archivas.', { exact: true }).waitFor();
+      });
+      await t.test('text actions are bordered secondary buttons; quiet is left to icons and the add control', async () => {
+        const p = await mounted('f.items.push({...f.item("hecha","p1"),status:"done"});'); await projectBoard(p);
+        const quiet = await p.locator('.pulso-panel button.quiet, .pulso-tabs button.quiet, .pulso-tab-actions button.quiet').evaluateAll(ns => ns.map(n => n.className));
+        assert.ok(quiet.every(c => /pulso-card-menu|pulso-card-handle|pulso-add-trigger|icon-button/.test(c)), JSON.stringify(quiet));
+        for (const name of ['Proyecto', 'Sesiones']) assert.match(await p.locator('.pulso-board-toolbar').getByRole('button', { name, exact: true }).getAttribute('class') ?? '', /secondary/);
+        const add = p.getByRole('region', { name: 'Por hacer', exact: true }).getByRole('button', { name: 'Añadir fase', exact: true });
+        assert.equal(await add.evaluate(n => getComputedStyle(n).borderTopStyle), 'dashed'); assert.equal(await add.locator('svg').count(), 1);
+        assert.ok((await add.boundingBox())!.height >= 32);
+      });
+      await t.test('an empty board shows one first step and «Añadir fase» at the same height in every column', async () => {
+        const p = await mounted('f.items=f.items.filter(i=>i.projectId!=="p1");'); await projectBoard(p);
+        assert.equal(await p.locator('.pulso-first-step').count(), 1);
+        assert.equal(await p.getByRole('region', { name: 'Por hacer', exact: true }).locator('.pulso-first-step').innerText(), 'Empieza por añadir la primera fase.');
+        for (const width of [1120, 760]) {
+          await p.setViewportSize({ width, height: 800 });
+          const ys = await p.locator('.pulso-add-trigger').evaluateAll(ns => ns.map(n => Math.round(n.getBoundingClientRect().top)));
+          assert.equal(ys.length, 4); assert.equal(new Set(ys).size, 1, `${width}: ${ys}`);
+        }
+      });
+      await t.test('Proyecto has no repeated title and one closing button; forms put Cancelar beside the primary', async () => {
+        const p = await mounted(); await projectDetail(p);
+        assert.equal(await p.locator('.pulso-detail h2').count(), 0);
+        const close = p.locator('.pulso-close-section'); assert.equal(await close.locator('h3').innerText(), 'Terminar o archivar');
+        assert.deepEqual(await close.getByRole('button').allInnerTexts(), ['Archivar proyecto']);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click(); await move(p, 'Fase i1', 'done'); await idle(p);
+        await p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Proyecto', exact: true }).click();
+        assert.deepEqual(await p.locator('.pulso-close-section').getByRole('button').allInnerTexts(), ['Dar por terminado']);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
+        await p.getByRole('button', { name: 'Nuevo proyecto', exact: true }).click();
+        const row = p.locator('.pulso-capture .pulso-form-actions'); assert.deepEqual(await row.getByRole('button').allInnerTexts(), ['Crear proyecto', 'Cancelar']);
+        const [create, cancel] = [await row.getByRole('button', { name: 'Crear proyecto' }).boundingBox(), await row.getByRole('button', { name: 'Cancelar' }).boundingBox()];
+        assert.ok(create && cancel && Math.abs(create.y - cancel.y) < 2 && create.x < cancel.x, 'same row, primary first');
+        assert.match(await row.getByRole('button', { name: 'Cancelar' }).getAttribute('class') ?? '', /secondary/);
+      });
+      await t.test('Sesiones explains first and offers «Empezar de nuevo aquí» on its own line', async () => {
+        const p = await mounted('f.bindingProvider=null;'); await sessionsDetail(p);
+        const stack = p.locator('.pulso-drawer .pulso-recovery-stack'); await stack.getByRole('button', { name: 'Empezar de nuevo aquí', exact: true }).waitFor();
+        assert.equal(await stack.locator('p').first().innerText(), 'La sesión principal terminó y su conversación no se puede continuar.');
+        await stack.getByText('Abre una sesión nueva en la misma carpeta; no recupera la conversación anterior.', { exact: true }).waitFor();
+        assert.match(await stack.getByRole('button', { name: 'Empezar de nuevo aquí' }).getAttribute('class') ?? '', /secondary/);
+        assert.match(await p.locator('.pulso-session').first().innerText(), /Terminada · solo historial/);
+        await stack.getByRole('button', { name: 'Empezar de nuevo aquí', exact: true }).click(); assert.deepEqual(await run(p, 'return f.restarted'), ['ended']);
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click();
+        const board = p.locator('.pulso-board-toolbar').getByRole('button', { name: 'Empezar de nuevo aquí', exact: true });
+        assert.match(await board.getAttribute('class') ?? '', /secondary/); assert.match(await board.getAttribute('title') ?? '', /no recupera la conversación anterior/);
+        assert.equal(await p.locator('.pulso-board-toolbar .pulso-recovery-note').innerText(), 'Sin conversación que continuar');
+      });
+      await t.test('a write refused because the project is archived offers Reabrir, not a retry', async () => {
+        const p = await mounted(); await itemDetail(p);
+        await run(p, 'f.projects[0].archived=true'); await p.getByLabel('Notas', { exact: true }).fill('Cambio tardío');
+        await p.getByRole('button', { name: 'Guardar fase', exact: true }).click();
+        await p.getByText('El proyecto está en el histórico; reábrelo para cambiarlo. Tu borrador sigue aquí.', { exact: true }).waitFor();
+        assert.equal(await p.getByRole('button', { name: 'Reintentar mismo cambio' }).count(), 0);
+        await p.getByRole('button', { name: 'Consultar versión actual', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
+        await p.waitForFunction(() => (window as any).fixture.items.find((i: any) => i.id === 'i1').note === 'Cambio tardío');
+        assert.equal(await run(p, 'return f.projects[0].archived'), false);
+        const writes = await run(p, 'return f.calls.filter(c=>c.op==="item_update")'); assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]);
+      });
+      await t.test('the drawer is named by its current title', async () => {
+        const p = await mounted(); await projectDetail(p);
+        await p.getByRole('dialog', { name: 'Proyecto', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Cerrar detalle', exact: true }).click(); await p.getByRole('button', { name: 'Sesiones', exact: true }).click();
+        await p.getByRole('dialog', { name: 'Sesiones', exact: true }).waitFor();
       });
       await t.test('uncertain mutation keeps draft, freezes edits and manually reuses UUID/payload', async () => {
         const p = await mounted(); await itemDetail(p);
@@ -505,7 +597,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
       await t.test('history, live focus, uncertain inspection and Claude resume are separate; bindings do not poll', async () => {
         const p = await mounted('f.links=[{itemId:"i1",sessionId:"live"},{itemId:"i1",sessionId:"attention"}];'); await itemDetail(p);
         await p.getByRole('button', { name: 'Continuar conversación' }).waitFor();
-        assert.match(await p.locator('.pulso-detail').innerText(), /Historial local/);
+        assert.match(await p.locator('.pulso-detail').innerText(), /Terminada · solo historial/);
         await p.getByRole('button', { name: 'Abrir sesión de la fase' }).click(); await p.getByRole('button', { name: 'Inspeccionar sesión' }).click();
         await p.getByRole('button',{name:'Ver historial',exact:true}).click();
         await p.getByRole('button', { name: 'Continuar conversación' }).click(); await idle(p);
@@ -721,7 +813,7 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         assert.equal(await p.locator('.pulso-project-tabs .pulso-tab').count(), 51);
         await p.getByRole('button', { name: 'Más proyectos' }).click(); await idle(p);
         assert.equal(await p.locator('.pulso-project-tabs .pulso-tab').count(), 56);
-        const pages = await run(p, 'return f.calls.filter(x=>x.op==="projects")'); assert.equal(pages[1].args.cursor, 50); assert.equal(pages[1].args.limit, 50);
+        const pages = await run(p, 'return f.calls.filter(x=>x.op==="projects"&&x.args.archived===false)'); assert.equal(pages[1].args.cursor, 50); assert.equal(pages[1].args.limit, 50);
       });
       await t.test('a pending detail neither offers agent access nor reads or mutates authority', async () => {
         const p = await mounted();

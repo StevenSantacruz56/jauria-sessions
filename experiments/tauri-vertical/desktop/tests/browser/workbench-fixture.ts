@@ -73,6 +73,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
         if (a.op === 'link' && (options.failLinks ?? []).includes(a.args.projectId ?? a.args.itemId)) return { ok: false, error: 'Pulso no confirmó el vínculo sintético.' };
         if (a.op === 'link') { links.push(structuredClone(a.args)); return { ok: true, result: { link: { id: `link-${links.length}`, ...a.args } } }; }
         if (a.op === 'revision') return { ok: true, result: { revision: 1 } };
+        if (a.op === 'projects' && a.args.archived === true) return { ok: true, result: { projects: [], revision: 1, totalCount: 0, hasMore: false } };
         if (a.op === 'projects') return { ok: true, result: { projects: projects.map(p => ({ id: p.id, title: p.title, plan: '', mainSessionId: null, revision: 1, archived: false, createdAt: 1, updatedAt: 1 })), revision: 1, totalCount: projects.length, hasMore: false } };
         if (a.op === 'policies') return { ok: true, result: { policies: [] } };
         if (a.op === 'board') return { ok: true, result: { revision: 1, columns: Object.fromEntries(['todo', 'doing', 'waiting', 'done'].map(s => [s, { items: s === 'doing' ? structuredClone((options.boardItems ?? []).filter((item: any) => item.projectId === a.args.projectId)) : [], totalCount: 0, hasMore: false }])) } };

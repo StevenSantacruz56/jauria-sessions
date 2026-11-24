@@ -90,15 +90,22 @@
   border-color: var(--border);
   color: var(--text);
 }
-/* Labelled «Nuevo proyecto»: never the bare "+" that opens a session in the terminal view. */
-.pulso-tab-new { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; min-height: 29px; height: 29px; padding: 0 10px; margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
-.pulso-tab-new:hover:not(:disabled) { color: var(--text); }
-.pulso-tab-archive { margin-left: 6px; }
+/*
+ * The tab strip holds only boards. «Nuevo proyecto» and «Histórico» are
+ * secondary buttons after a divider, outside the scrolling strip, so they stay
+ * visible; at 760 px they keep only their icon (named by aria-label).
+ */
+.pulso-tab-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--border); }
+.pulso-tab-action { flex: 0 0 auto; min-height: 32px; height: 32px; padding: 0 10px; gap: 6px; font-size: 12px; white-space: nowrap; }
+.pulso-tab-action svg { flex: 0 0 auto; }
+.pulso-archive-button[aria-expanded="true"] { background: var(--selected); color: var(--selected-text); }
+.pulso-archive-count { min-width: 18px; padding: 0 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; font-weight: 500; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
 /* In the workbench top bar the tabs share its 42 px line and scroll sideways. */
 .top-pulso-tabs { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; height: 100%; }
-.top-pulso-tabs .pulso-tabs { height: 100%; padding: 0; border: 0; gap: 3px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.top-pulso-tabs .pulso-tabs { flex: 0 1 auto; min-width: 0; height: 100%; padding: 0; border: 0; gap: 3px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.top-pulso-tabs .pulso-tab { min-height: 32px; height: 32px; line-height: 30px; }
 .top-pulso-tabs .pulso-tabs::-webkit-scrollbar { display: none; }
-.top-pulso-tabs .pulso-project-tabs > .quiet { flex: 0 0 auto; min-height: 29px; height: 29px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+.top-pulso-tabs .pulso-project-tabs > .secondary { flex: 0 0 auto; min-height: 32px; height: 32px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
 
 /* Project bar: one compact line with title, progress, Plan y sesiones and the primary action. */
 .pulso-board-toolbar {
@@ -112,9 +119,7 @@
 }
 .pulso-board-title { flex: 0 0 auto; max-width: 45%; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pulso-board-toolbar .pulso-progress { flex: 1 1 auto; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pulso-board-toolbar button { flex: 0 0 auto; min-height: 28px; padding: 4px 10px; font-size: 12px; white-space: nowrap; }
-.pulso-board-toolbar .pulso-plan-button { color: var(--muted); }
-.pulso-board-toolbar .pulso-finish-button { border-color: var(--state-ready); color: var(--state-ready); }
+.pulso-board-toolbar button { flex: 0 0 auto; min-height: 32px; padding: 4px 10px; font-size: 12px; white-space: nowrap; }
 .pulso-archived-badge { flex: 0 0 auto; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; }
 /* Inline confirmation (Dar por terminado, Archivar proyecto). */
 .pulso-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; font-size: 12px; }
@@ -176,7 +181,9 @@
   padding: 2px 3px 8px;
 }
 .pulso-cards > * { flex-shrink: 0; }
-.pulso-empty { margin: 0; padding: 10px 6px 16px; }
+/* Fixed height (two lines) so «Añadir fase» starts at the same y in every empty column. */
+.pulso-empty { margin: 0; padding: 10px 6px 16px; min-height: calc(12px * 1.6 * 2 + 26px); }
+.pulso-first-step { color: var(--text); font-weight: 500; }
 .pulso-card {
   position: relative;
   min-width: 0;
@@ -216,6 +223,10 @@
 }
 /* Menu (keyboard alternative to dragging) and grip share the top-right corner. */
 .pulso-card-controls { position: absolute; top: 6px; right: 5px; display: flex; align-items: center; gap: 0; }
+/* 28 px drawn, 32 px to press: the extra area is a transparent ring, so cards keep their height. */
+.pulso-card-menu, .pulso-card-handle, .pulso-card-session { position: relative; }
+.pulso-card-menu::after, .pulso-card-handle::after { content: ""; position: absolute; inset: -2px; }
+.pulso-card-session::after { content: ""; position: absolute; inset: -5px 0; }
 .pulso-card-menu, .pulso-card-handle {
   width: 28px;
   min-height: 28px;
@@ -257,8 +268,9 @@
 .pulso-move-current { color: var(--dim); }
 .pulso-card.is-dragging { opacity: .5; border-style: dashed; border-color: var(--focus); }
 .pulso-column.is-drop-target { outline: 2px solid var(--focus); outline-offset: -2px; background: var(--selected); }
-.pulso-add-trigger { flex: 0 0 auto; justify-content: flex-start; width: 100%; min-height: 30px; padding: 0 8px; border-color: transparent; border-radius: var(--radius-row); background: transparent; color: var(--dim); font-size: 12px; font-weight: 400; }
-.pulso-add-trigger:hover:not(:disabled) { color: var(--text); }
+/* The add control reads as an action: «+», dashed outline, row hover. */
+.pulso-add-trigger.quiet { flex: 0 0 auto; justify-content: flex-start; gap: 6px; width: 100%; min-height: 32px; padding: 0 8px; border: 1px dashed var(--control-border); border-radius: var(--radius-row); background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; }
+.pulso-add-trigger.quiet:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .pulso-add-form { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; padding: 4px; min-width: 0; }
 .pulso-add-form input { flex: 1 0 100%; width: 100%; min-height: 36px; }
 .pulso-add-form button { font-size: 12px; }
@@ -295,7 +307,7 @@
 .pulso-empty-board .pulso-inline-actions { margin-top: 20px; }
 .pulso-capture { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 20px; }
 .pulso-capture input { width: 100%; }
-.pulso-capture .primary { align-self: flex-start; }
+.pulso-form-actions { margin-top: 4px; }
 
 /* Keep the native dialog's closed state intact; only an open drawer is flex. */
 .pulso-drawer {
@@ -351,14 +363,22 @@
 :where(.pulso-panel, .pulso-drawer) summary:hover { color: var(--text); background: transparent; }
 .pulso-prose { max-width: 74ch; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; }
 .pulso-session { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 10px 0; overflow-wrap: anywhere; }
-.pulso-session > span { min-width: 0; overflow-wrap: anywhere; }
+.pulso-session-info { display: flex; flex-direction: column; gap: 2px; flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.pulso-session-name { font-weight: 500; }
+.pulso-session-info .pulso-muted:empty { display: none; }
+.pulso-inline-actions button, .pulso-section .pulso-inline-actions button, .pulso-form .pulso-inline-actions button { margin: 0; }
+/* In drawers a recovery explains first, then offers its action on its own line. */
+.pulso-recovery-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.pulso-recovery-hint { font-size: 11px; }
+.pulso-close-section .pulso-inline-actions { margin-top: 4px; }
+.pulso-archive-empty { max-width: 60ch; }
 .pulso-check { display: flex; align-items: flex-start; gap: 8px; max-width: 65ch; margin: 12px 0; font-size: 12px; font-weight: 400; line-height: 1.6; cursor: pointer; }
 .pulso-check input { flex: 0 0 auto; width: 15px; height: 15px; padding: 0; margin: 2px 0 0; accent-color: var(--focus); }
 .pulso-policy { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .pulso-history { list-style: none; padding: 0; margin: 0; }
 .pulso-history li { padding: 14px 0; border-bottom: 1px solid var(--border); }
 .pulso-history .pulso-muted { margin-bottom: 8px; font-variant-numeric: tabular-nums; }
-.pulso-breadcrumb { justify-content: flex-start; padding-left: 0; margin-bottom: 8px; color: var(--muted); text-align: left; }
+.pulso-breadcrumb { justify-content: flex-start; margin-bottom: 12px; text-align: left; }
 .pulso-checkpoint-preview { margin: 0 0 20px; padding: 0 0 16px; border-bottom: 1px solid var(--border); }
 .pulso-checkpoint-preview .pulso-prose + h4 { margin-top: 12px; }
 .pulso-autosave-state { min-height: 1.6em; margin: 0; font-variant-numeric: tabular-nums; }
@@ -369,6 +389,8 @@
 .pulso-archive-row .pulso-muted { font-size: 12px; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 760px) {
+  .pulso-tab-action-label { display: none; }
+  .pulso-tab-action { padding: 0 9px; }
   .pulso-tabs { padding-inline: 16px; scroll-padding-inline: 16px; }
   .pulso-board-toolbar { flex-wrap: wrap; padding: 6px 16px; }
   .pulso-board { padding: 12px 16px 16px; scroll-padding-inline: 16px; }
@@ -383,3 +405,4 @@
 
 .pulso-project-recovery { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
 .pulso-project-recovery .pulso-muted { max-width: 42ch; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pulso-project-recovery .pulso-recovery-action { display: flex; align-items: center; gap: 8px; min-width: 0; }

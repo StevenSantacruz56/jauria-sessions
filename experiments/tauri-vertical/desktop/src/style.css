@@ -567,7 +567,10 @@ html[data-theme="dark"] .brand-dark { display: block; }
 #telemetry-summary:hover { color: var(--text); }
 @media (max-width: 1050px) { #telemetry-summary { display: none; } }
 
-.top-back { flex: 0 0 auto; min-height: 28px; height: 28px; padding: 0 8px; gap: 6px; font-size: 12px; color: var(--muted); }
+/* «Terminal» in Pulso: a way back, not a tab; a divider separates it from the board tabs. */
+.top-back { position: relative; flex: 0 0 auto; min-height: 32px; height: 32px; margin-right: 10px; padding: 0 8px; gap: 6px; font-size: 12px; color: var(--muted); }
+.top-back::after { content: ""; position: absolute; top: 7px; right: -6px; bottom: 7px; width: 1px; background: var(--border); }
+.top-back:hover:not(:disabled) { color: var(--text); }
 .top-back .icon { width: 15px; height: 15px; }
 
 .terminal-view[data-transport="app-server"] > .xterm { display:none; }

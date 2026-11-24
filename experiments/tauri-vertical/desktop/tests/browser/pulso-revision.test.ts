@@ -166,7 +166,8 @@ try {
       await page.getByRole('button', { name: 'Abrir Título remoto vía MCP', exact: true }).waitFor();
       await statusCycles(page, 2);
       const changed = await opsSince(page, before);
-      assert.deepEqual([...changed].sort(), ['board', 'projects', 'sidebar_summary'], `one board refresh and one summary read (${changed.join(',')})`);
+      // The board refresh also reads the Histórico counter (projects archived:true, limit 1: a totalCount).
+      assert.deepEqual([...changed].sort(), ['board', 'projects', 'projects', 'sidebar_summary'], `one board refresh, the Histórico counter and one summary read (${changed.join(',')})`);
       // A session-set change re-renders without reading Pulso.
       before = await callCount(page);
       await fx(page, `f.sessions.push({id:'fresh',title:'Sesión nueva',kind:'claude',cwd:'/synthetic/new',status:'running',rows:24,cols:80})`);

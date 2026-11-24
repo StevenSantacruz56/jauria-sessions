@@ -6,18 +6,27 @@ import { createServer } from 'vite';
 import { mkdir } from 'node:fs/promises';
 const server=await createServer({configFile:false,server:{host:'127.0.0.1',port:0,hmr:false}});await server.listen();
 const url=server.resolvedUrls!.local[0];
-type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string; volatileStatus?: boolean };
+type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string; volatileStatus?: boolean; ux?: boolean };
 async function install(page:Page, history = '', options: FixtureOptions = {}){await page.addInitScript(({history, options})=>{
  const w=window as any;const sessions=[{id:'main',title:'Plan sintético · Integración',kind:'claude',cwd:'/synthetic/project',status:'running',rows:24,cols:80},{id:'related',title:'Fase sintética · Validación',kind:'codex',cwd:'/synthetic/other',status:'running',rows:24,cols:80}];
  if(options.mainClosed)sessions[0].status='exited';
  if(options.activeContinuation)sessions.push({...sessions[0],id:'continued',title:'Continuación sintética',status:'running'});
+ if(options.ux)sessions.push({id:'old-term',title:'Terminal anterior',kind:'terminal',cwd:'/synthetic/empty',status:'exited',rows:24,cols:80});
  const runnerCalls:any[]=[];
  if(options.savedProject && !localStorage.getItem('jauria-pulso:last-board:/synthetic'))localStorage.setItem('jauria-pulso:last-board:/synthetic',JSON.stringify({schemaVersion:1,projectId:options.savedProject}));
  const events:any[]=history?[{seq:1,sessionId:'main',kind:'output',data:btoa(history)}]:[],resizes:any[]=[],inputs:any[]=[],calls:any[]=[];let rev=3,statusReads=0;
  const projects:any[]=[{id:'plan',title:'Integrar Pulso en Jauria',plan:'Plan de demostración sintético.\n1. Definir el modelo\n2. Implementar\n3. Validar la fluidez',mainSessionId:'main',revision:1,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
  const items:any[]=[{id:'phase',projectId:'plan',title:'Validar la fluidez de las terminales',note:'Contenido sintético para comprobar navegación.',status:'doing',position:0,revision:2,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'},{id:'todo',projectId:null,title:'Preparar la revisión de mañana',note:'',status:'todo',position:0,revision:3,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
+ // UX review (ux): an empty project, a finished one and one archived with open phases.
+ if(options.ux){
+  projects.push({id:'empty',title:'Proyecto nuevo sin fases',plan:'',mainSessionId:'old-term',revision:1,archived:false,createdAt:'2026-11-15T10:00:00Z',updatedAt:'2026-11-15T10:00:00Z'},
+   {id:'done-p',title:'Migrar las alertas',plan:'',mainSessionId:null,revision:1,archived:true,archivedAt:Date.parse('2026-11-20T10:00:00Z'),createdAt:'2026-11-01T10:00:00Z',updatedAt:'2026-11-20T10:00:00Z'},
+   {id:'open-p',title:'Revisión de costos',plan:'',mainSessionId:null,revision:1,archived:true,archivedAt:Date.parse('2026-11-18T10:00:00Z'),createdAt:'2026-11-02T10:00:00Z',updatedAt:'2026-11-18T10:00:00Z'},
+   {id:'legacy-p',title:'Proyecto antiguo',plan:'',mainSessionId:null,revision:1,archived:true,createdAt:'2026-10-01T10:00:00Z',updatedAt:'2026-11-21T10:00:00Z'});
+ }
  // Keep every board column populated for visual review; the phase under test stays first.
  for(const [id,title,status] of [['scope','Definir el alcance de la entrega','todo'],['implementation','Integrar el tablero con el shell','doing'],['model','Modelo y checkpoints verificados','done']])items.push({...items[0],id,title,status,note:'Datos de prueba sintéticos.',revision:1});
+ if(options.ux)for(const [id,projectId,status] of [['d1','done-p','done'],['d2','done-p','done'],['o1','open-p','done'],['o2','open-p','doing'],['o3','open-p','todo']])items.push({...items[0],id,projectId,title:`Fase ${id}`,status,note:'',revision:1});
  const status=()=>{statusReads++;w.pulsoFixture.statusReads=statusReads;return{pid:123,generation:'pulso-synthetic',pulsoVersion:1,pulsoBoardVersion:1,pulsoAvailable:true,nativeResumeVersion:1,workspaceVersion:1,projectLifecycleVersion:1,projects:[],tasks:[],normalTerminalVersion:1,settingsVersion:1,settings:{schemaVersion:1,maxConcurrentSessions:2,maxSupportedSessions:8},sessions:structuredClone(sessions).map(s=>options.volatileStatus?{...s,lastObservedAt:statusReads}:s),lastSeq:events.length};};
  w.pulsoFixture={calls,runnerCalls,resizes,inputs,sessions,statusReads:0,connections:0,holdNext:null,held:[],output(data:string){events.push({seq:events.length+1,sessionId:'main',kind:'output',data:btoa(data)});},phase:()=>structuredClone(items[0])};
  w.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},async invoke(cmd:string,a:any){
@@ -26,7 +35,7 @@ async function install(page:Page, history = '', options: FixtureOptions = {}){aw
   if(cmd==='pulso_request'){
    calls.push({op:a.op,args:structuredClone(a.args)});const x=a.args;let result:any;
    if(a.op==='revision')result={revision:rev};
-   else if(a.op==='projects'){const cursor=x.cursor??0;result={projects:structuredClone(projects.slice(cursor,cursor+x.limit)),revision:rev,totalCount:projects.length,hasMore:projects.length>cursor+x.limit};}
+   else if(a.op==='projects'){const all=projects.filter(p=>!!p.archived===!!x.archived);const cursor=x.cursor??0;result={projects:structuredClone(all.slice(cursor,cursor+x.limit)),revision:rev,totalCount:all.length,hasMore:all.length>cursor+x.limit};}
    else if(a.op==='project')result={project:structuredClone(projects.find(p=>p.id===x.id))};
    else if(a.op==='board')result={revision:rev,columns:Object.fromEntries(['todo','doing','waiting','done'].map(status=>{const rows=items.filter(i=>!i.archived&&i.projectId===x.projectId&&i.status===status);return[status,{items:structuredClone(rows.slice(0,20)),totalCount:rows.length,hasMore:rows.length>20,nextCursor:20}];}))};
    else if(a.op==='items'){if(x.expectedSnapshotRevision!==rev)return{ok:false,error:'stale snapshot'};const rows=items.filter(i=>!i.archived&&i.projectId===x.projectId&&(!x.status||i.status===x.status));const cursor=x.cursor??0;result={items:structuredClone(rows.slice(cursor,cursor+x.limit)),revision:rev,totalCount:rows.length,hasMore:rows.length>cursor+x.limit};}
@@ -184,6 +193,30 @@ try{
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
     } finally {await browser.close();}
   });
+  // Visual review of the button levels, tab bar, drawers and Histórico (PULSO_UX_SCREENSHOT_DIR; Chrome only).
+  if(engine===chromium&&process.env.PULSO_UX_SCREENSHOT_DIR)for(const theme of ['light','dark'])for(const [width,height] of [[1220,800],[760,560]])await test(`${engine.name()}: UX captures ${theme} ${width}`,async()=>{
+    const dir=process.env.PULSO_UX_SCREENSHOT_DIR!;await mkdir(dir,{recursive:true});
+    const browser=await engine.launch({channel:'chrome'});const page=await browser.newPage({viewport:{width,height}});
+    try{
+      await install(page,'',{mainClosed:true,ux:true});await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
+      await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+      const shot=async(name:string)=>{await page.waitForTimeout(250);await page.screenshot({path:`${dir}/${name}-${theme}-${width}.png`,animations:'disabled'});};
+      // At 760 px the sidebar is a drawer: open Pulso through its button without showing it.
+      await page.locator('#open-pulso').evaluate(n=>(n as HTMLButtonElement).click());
+      await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();await page.locator('.pulso-board-toolbar').getByRole('button',{name:/sesión principal/}).first().waitFor();
+      await shot('tablero');
+      await page.getByRole('button',{name:'Proyecto nuevo sin fases',exact:true}).click();await page.locator('.pulso-first-step').waitFor();
+      await shot('tablero-vacio');
+      await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Proyecto',exact:true}).click();await page.getByLabel('Nombre del proyecto',{exact:true}).waitFor();
+      await shot('cajon-proyecto');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Sesiones',exact:true}).click();await page.getByLabel('Sesión principal',{exact:true}).waitFor();await page.waitForTimeout(300);
+      await shot('cajon-sesiones');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.getByRole('button',{name:'Nuevo proyecto',exact:true}).click();await page.getByLabel('Nombre del proyecto',{exact:true}).waitFor();
+      await shot('cajon-nuevo');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.getByRole('button',{name:/^Histórico/}).click();await page.getByText(/Archivado sin terminar/).first().waitFor();
+      await shot('historico');
+    }finally{await browser.close();}
+  });
   // 1.4.0: the project drawers no longer carry «Acceso de agentes»; manual access stays in Configuración.
   await test(`${engine.name()}: agent access lives in Configuración, not in Proyecto or Sesiones`, async () => {
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
@@ -193,7 +226,7 @@ try{
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
       for(const drawer of ['Proyecto','Sesiones']){
         await page.locator('.pulso-board-toolbar').getByRole('button',{name:drawer,exact:true}).click();
-        await page.getByRole('dialog',{name:'Detalle de Pulso'}).waitFor();
+        await page.getByRole('dialog',{name:drawer,exact:true}).waitFor();
         assert.equal(await page.getByRole('button',{name:'Configurar permisos…',exact:true}).count(),0,drawer);
         assert.equal(await page.getByText('Acceso de agentes',{exact:true}).count(),0,drawer);
         await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();await page.locator('dialog.pulso-drawer[open]').waitFor({state:'detached'});
