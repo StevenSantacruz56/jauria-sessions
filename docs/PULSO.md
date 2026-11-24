@@ -48,19 +48,21 @@ La paleta de comandos ofrece en **Fases** las fases del tablero de proyecto ya c
 
 Al volver a Pulso se restaura el último tablero de este perfil. Solo se guarda su identificador: no se ejecutan agentes ni se restauran permisos al abrirlo. Si el proyecto fue archivado o ya no existe, se muestran los Pendientes.
 
-En la barra del proyecto, **Abrir sesión principal** vuelve a la sesión viva. Si terminó y Jauria registró su identidad Claude, **Reanudar sesión principal** intenta abrir esa misma conversación. Si la continuación ya está abierta, **Abrir conversación activa** la enfoca, incluso con todas las plazas ocupadas. Puedes cerrar el detalle para usar la acción de la barra.
+En la barra del proyecto, **Abrir sesión principal** vuelve a la sesión viva. Si terminó y Jauria registró su identidad Claude, **Continuar sesión principal** intenta abrir esa misma conversación (desde 1.4.0 el verbo es siempre «continuar»; antes, «Reanudar»). Si la continuación ya está abierta, **Abrir conversación activa** la enfoca, incluso con todas las plazas ocupadas. Puedes cerrar el detalle para usar la acción de la barra.
 
-Desde una fase se prioriza la sesión de su último checkpoint; después su vínculo y finalmente la principal. Reanudar continúa el estado actual del proveedor, no rebobina hasta esa fase. Si no existe identidad registrada, consulta **Ver historial** o prepara el contexto para una sesión nueva. Una comprobación fallida muestra **Reintentar comprobación** y nunca inicia otra sesión automáticamente.
+Desde una fase se prioriza la sesión de su último checkpoint; después su vínculo y finalmente la principal. Continuar retoma el estado actual del proveedor, no rebobina hasta esa fase. Si no existe identidad registrada, consulta **Ver historial** o prepara el contexto para una sesión nueva; para Codex en terminal, Pulso dice que no permite continuar la conversación y ofrece **Empezar de nuevo aquí** (Nueva sesión con la misma carpeta, herramienta y nombre). Una comprobación fallida muestra **Reintentar comprobación** y nunca inicia otra sesión automáticamente.
 
 | Acción | Qué hace |
 | --- | --- |
 | Enfocar sesión viva | Vuelve a la misma terminal y proceso. |
-| Ver historial | Consulta la salida local de una sesión terminada; no la reinicia. |
+| Ver historial | Abre la vista Historial (no un panel de trabajo) con la salida local de una sesión terminada; no la reinicia. |
 | Preparar contexto | Prepara texto editable a partir del plan, la fase y su último checkpoint. Puedes copiarlo y abrir otra sesión; Jauria no lo pega ni lo envía. |
-| Intentar reanudar conversación | Para una conversación Claude cuya identidad reservó Jauria, inicia la CLI con ese ID exacto. No garantiza que Claude haya conservado su historial. |
+| Continuar conversación / sesión principal / sesión de la fase | Para una conversación Claude cuya identidad reservó Jauria, inicia la CLI con ese ID exacto en una sesión nueva. No garantiza que Claude haya conservado su historial. |
 | Abrir conversación activa | Enfoca la continuación administrada que ya está viva para esa misma identidad. |
 
-La reanudación conserva metadatos de origen y añade un vínculo de la nueva sesión al proyecto o fase desde donde se solicitó. Si el vínculo falla después del inicio, la interfaz lo avisa y puedes añadirlo manualmente. La sesión principal original se conserva.
+La continuación conserva metadatos de origen y añade un vínculo de la nueva sesión al proyecto o fase desde donde se solicitó. Si el vínculo falla después del inicio, la interfaz lo avisa y puedes añadirlo manualmente. La sesión principal original se conserva.
+
+**Herencia del vínculo (1.4.0).** Continuar una conversación desde cualquier sitio (panel de una Interrumpida, vista Historial, barra lateral, paleta o Pulso) usa un único camino, y la sesión nueva hereda automáticamente los vínculos de la original, con un aviso visible: si la original era sesión principal o estaba vinculada a un proyecto, la nueva queda **vinculada a ese proyecto** (la sesión principal no se cambia); si estaba vinculada a una fase, a **esa fase**. Solo se usan operaciones existentes: `sidebar_summary` para saber qué proyectos nombran la sesión original y, para las fases, el pie de tarjeta de `board` (primera página de cada columna, la sesión más reciente vinculada a cada fase). Cada vínculo se escribe con el mismo identificador de petición que usa Pulso para su propio vínculo de continuación, así que repetirlo no lo duplica. Límites: una fase fuera de la primera página del tablero, cuya sesión más reciente no sea la original, o un pendiente sin proyecto no se encuentran (el aviso dice qué no se heredó); con un runner 1.3.x no se comprueba y el aviso lo dice. Nunca se pega ni se envía nada a la sesión.
 
 Las fases organizan el trabajo; no son puntos para rebobinar una conversación. La reanudación nativa continúa su estado actual. Para otro camino desde una fase, usa su contexto guardado en una sesión nueva.
 
