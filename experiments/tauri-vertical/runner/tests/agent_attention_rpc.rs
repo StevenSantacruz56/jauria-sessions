@@ -188,8 +188,9 @@ fn process_end_closes_the_turn_and_unseen_alerts_survive_a_restart() {
     assert_eq!(w["pending"]["ended"]["seq"], agent["pending"]["ended"]["seq"]);
     let b = &rows.iter().find(|r| r["id"] == "b").unwrap()["agent"];
     assert!(b["state"].is_null(), "no PTY survives a restart");
-    assert_eq!(b["pending"]["needs"]["frame"], Value::Null, "old-generation frames are not offered");
-    assert!(b["pending"]["needs"]["seq"].as_u64().unwrap() > 0);
+    // The orderly restart stopped it: its needs left with the process and the end is the unseen alert.
+    assert!(b["pending"].get("needs").is_none(), "a dead process no longer asks for the person");
+    assert!(b["pending"]["ended"]["seq"].as_u64().unwrap() > 0);
     let db = Connection::open(app.path("data/runner.sqlite")).unwrap();
     assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
 }

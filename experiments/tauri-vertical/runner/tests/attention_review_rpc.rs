@@ -177,6 +177,16 @@ fn process_end_with_any_exit_code_is_one_ended_alert() {
     }
 }
 
+/// H6: «Solicita atención» does not outlive the process that asked.
+#[test]
+fn needs_of_a_process_that_exits_becomes_ended() {
+    let app = Instance::new();
+    app.shell("dead");
+    app.type_line("dead", r"printf '\033]7501;state=blocked\007'; sleep 0.1; exit 3");
+    let row = app.wait_row("dead", "ended", |r| r["agent"]["pending"]["ended"].is_object());
+    assert_eq!(pending(&row["agent"]), ["ended"], "needs left with the process");
+}
+
 #[test]
 fn two_clients_race_and_seen_survives_restart_without_replaying_alerts() {
     let mut app = Instance::new();

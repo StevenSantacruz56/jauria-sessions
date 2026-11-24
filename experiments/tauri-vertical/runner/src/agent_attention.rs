@@ -379,8 +379,10 @@ impl Attention {
             record.state_frame = None;
             for alert in &mut record.alerts { alert.frame = None; }
             record.updated_at = record.updated_at.max(0);
-            write_row(&tx, &id, generation, &record)?;
             record.finished_process = FINAL.contains(&status[id.as_str()]);
+            // No process behind it (crash, or a row written before 1.4.0): no live «needs».
+            if record.finished_process { record.supersede(Kind::Needs); }
+            write_row(&tx, &id, generation, &record)?;
             if record.pending_count() == 0 && record.finished_process { idle.push((record.updated_at, id.clone())); }
             records.insert(id, Entry { record, generation: generation.to_owned() });
         }
@@ -457,7 +459,10 @@ impl Attention {
         let record = self.entry(&mut m, id);
         record.close_turn(now, true);
         if record.state.is_some() { record.state = None; record.state_changed_at = Some(now.0); record.state_frame = None; }
-        if confirmed { record.finished_process = true; }
+        // A process that ended can no longer be waiting for the person: its
+        // «needs» leaves with it (the end itself is the news). An uncertain
+        // end (needs_attention) keeps it.
+        if confirmed { record.finished_process = true; record.supersede(Kind::Needs); }
         if alert { record.raise(Kind::Ended, None); }
         record.updated_at = now.0;
         self.touch(&mut m, id);
@@ -1129,10 +1134,16 @@ mod tests {
         assert_eq!(agent(&a, "q")["pending"]["needs"], json!({"seq":1,"frame":1}));
         a.pty("q", &[(Clear, Some(3))]);
         assert!(agent(&a, "q")["pending"].get("needs").is_none());
-        // A process end does not clear it.
+        // A confirmed process end replaces it by ended: a dead process cannot be waiting for the person.
         a.pty("r", &[(State(Error), Some(1))]);
         a.process_ended("r", "exited");
-        assert_eq!(agent(&a, "r")["pending"]["needs"]["seq"], 1);
+        let v = agent(&a, "r");
+        assert!(v["pending"].get("needs").is_none());
+        assert_eq!(v["pending"]["ended"]["seq"], 2);
+        // An uncertain end (custody in doubt) keeps it.
+        a.pty("u", &[(State(Blocked), Some(1))]);
+        a.process_ended("u", "needs_attention");
+        assert_eq!(agent(&a, "u")["pending"]["needs"]["seq"], 1);
     }
 
     #[test]
