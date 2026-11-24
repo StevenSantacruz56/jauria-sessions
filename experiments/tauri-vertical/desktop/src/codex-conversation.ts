@@ -20,7 +20,7 @@ const encoder = new TextEncoder();
 const obj = (v: unknown): Data => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Data : {};
 const str = (v: unknown): string => typeof v === 'string' ? v : '';
 const statesAllowed = new Set(['idle', 'running', 'cancel_requested', 'interrupted', 'closed']);
-const labels: Record<string, string> = { idle: 'Disponible', running: 'En ejecución', cancel_requested: 'Interrupción solicitada', interrupted: 'Interrumpido', closed: 'Cerrado', completed: 'Turno finalizado', failed: 'Falló', inProgress: 'En ejecución', success: 'Terminó sin errores', uncertain: 'Resultado incierto' };
+const labels: Record<string, string> = { idle: 'Disponible', running: 'En ejecución', cancel_requested: 'Cancelación solicitada', interrupted: 'Interrumpido', closed: 'Cerrado', completed: 'Turno finalizado', failed: 'Falló', inProgress: 'En ejecución', success: 'Terminó sin errores', uncertain: 'Resultado incierto' };
 const label = (v: unknown): string => labels[str(v)] || str(v) || 'Sin estado observado';
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag); e.textContent = text; e.className = cls; return e;
@@ -64,8 +64,8 @@ export function mountCodexConversation(host: HTMLElement, request: Rpc, confirm:
     const b = el('button', text); b.type = 'button'; b.addEventListener('click', action); return b;
   }
   const refreshButton = button('Actualizar estado', () => { void refresh(); });
-  const stopButton = button('Interrumpir turno', () => { if (current) void stop(current); });
-  const resumeButton = button('Reanudar conversación', () => { if (current) void resume(current); });
+  const stopButton = button('Cancelar turno', () => { if (current) void stop(current); });
+  const resumeButton = button('Continuar conversación', () => { if (current) void resume(current); });
   const retryButton = button('Consultar el mismo envío', () => { if (current?.pending) void submit(current, current.pending); });
   const sendButton = el('button', 'Enviar', 'primary'); sendButton.type = 'submit';
   header.append(el('h3', 'Codex'), connection, refreshButton, stopButton, resumeButton);
@@ -143,7 +143,7 @@ export function mountCodexConversation(host: HTMLElement, request: Rpc, confirm:
     const live = v?.turns.find(t => t.generation === v.generation && ['running', 'cancel_requested'].includes(t.status));
     stopButton.hidden=!live;
     stopButton.disabled = !s.online || s.busy || !live || live.status === 'cancel_requested' || s.stopIntent === live.turnId;
-    stopButton.textContent = live && (live.status === 'cancel_requested' || s.stopIntent === live.turnId) ? 'Interrupción solicitada' : 'Interrumpir turno';
+    stopButton.textContent = live && (live.status === 'cancel_requested' || s.stopIntent === live.turnId) ? 'Cancelación solicitada' : 'Cancelar turno';
     resumeButton.hidden = !v || !['closed', 'interrupted'].includes(v.status);
     resumeButton.disabled = !s.online || s.busy || !!s.pending || s.resumeIntent || !v?.hasNativeTurns || v.connectionStatus==='needs_attention';
     sendButton.disabled = !s.online || s.busy || !!s.pending || v?.status !== 'idle' || v?.acceptingTurns===false || !v?.nativeThreadId || (v?.connectionStatus!==undefined && v.connectionStatus!=='running') || !s.draft.trim();
@@ -228,7 +228,7 @@ export function mountCodexConversation(host: HTMLElement, request: Rpc, confirm:
     const v = s.summary, t = v?.turns.find(t => t.generation === v.generation && t.status === 'running');
     if (!active(s) || !s.online || s.busy || !v || !t || s.stopIntent === t.turnId) return;
     s.busy = true; s.stopIntent = t.turnId; paint();
-    try { await request('codex_interrupt', { id: s.id, turnId: t.turnId, attemptId: t.attemptId, generation: t.generation }); if (!disposed && s.summary?.generation === t.generation) s.message = 'Interrupción solicitada. El acuse solo registra la intención; esperando estado del turno.'; }
+    try { await request('codex_interrupt', { id: s.id, turnId: t.turnId, attemptId: t.attemptId, generation: t.generation }); if (!disposed && s.summary?.generation === t.generation) s.message = 'Cancelación solicitada. El acuse solo registra la intención; esperando estado del turno.'; }
     catch { if (!disposed && s.summary?.generation === t.generation) { s.online = false; s.error = 'Respuesta de interrupción desconocida. Actualiza el estado; el proceso no se considera detenido.'; s.stopIntent = ''; } }
     finally { s.busy = false; if (active(s)) { paint(); void refresh(); } }
   }
@@ -236,7 +236,7 @@ export function mountCodexConversation(host: HTMLElement, request: Rpc, confirm:
     const v = s.summary;
     if (!active(s) || !s.online || s.busy || !v || !['closed', 'interrupted'].includes(v.status) || s.pending || s.resumeIntent || !v.hasNativeTurns || v.connectionStatus==='needs_attention') return;
     s.busy = true; s.resumeIntent = true; paint();
-    try { await request('codex_resume', { id: s.id, generation: v.generation }); if (!disposed && s.summary?.generation === v.generation) s.message = 'Reanudación solicitada. Esperando estado; no se ha enviado el borrador.'; }
+    try { await request('codex_resume', { id: s.id, generation: v.generation }); if (!disposed && s.summary?.generation === v.generation) s.message = 'Continuación solicitada. Esperando estado; no se ha enviado el borrador.'; }
     catch { if (!disposed && s.summary?.generation === v.generation) { s.online = false; s.error = 'Respuesta de reanudación desconocida. Actualiza el estado antes de volver a solicitarla.'; s.resumeIntent = false; } }
     finally { s.busy = false; if (active(s)) { paint(); void refresh(); } }
   }

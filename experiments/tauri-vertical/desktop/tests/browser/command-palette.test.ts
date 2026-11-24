@@ -152,7 +152,7 @@ try {
           assert.equal(await option(page, 'action:settings').locator('kbd').textContent(), '⌘,');
           assert.equal(await option(page, 'action:new-session').locator('kbd').textContent(), '⌘N');
           await page.keyboard.press('End'); assert.equal(await activeId(page), 'action:stop');
-          await page.keyboard.press('Home'); assert.equal(await activeId(page), 'session:live');
+          await page.keyboard.press('Home'); assert.equal(await activeId(page), 'session:other', '1.4.0: most recent session first');
           await page.keyboard.press('ArrowUp'); assert.equal(await activeId(page), 'action:stop', 'wraps around');
           await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('dialog.command-palette[open]'));
         });

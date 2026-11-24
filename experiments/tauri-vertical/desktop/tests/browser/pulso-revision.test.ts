@@ -234,8 +234,10 @@ try {
       await page.locator('#open-pulso').click(); await page.locator('.pulso-card[data-item-id="history"] .pulso-card-foot button').waitFor();
       await page.locator('.pulso-card[data-item-id="history"] .pulso-card-foot button').focus(); await page.keyboard.press('Enter');
       await page.waitForFunction(() => (document.querySelector('#pulso-panel-host') as HTMLElement).hidden);
-      assert.equal(await page.locator('#workspace-title').textContent(), 'Historial sintético');
-      assert.match(await page.locator('.pane').first().textContent() ?? '', /Historial · solo lectura/);
+      // 1.4.0: a closed session opens the Historial view, never a pane.
+      await page.locator('#history-view').waitFor();
+      assert.equal(await page.locator('#workspace-title').textContent(), 'Historial · Historial sintético');
+      assert.match(await page.locator('#history-state').textContent() ?? '', /Terminada · solo lectura/);
       assert.equal(await fx(page, 'return f.inputs.length'), 0, 'opening a session never sends input');
       assert.equal(await fx(page, 'return f.calls.filter(c=>/^(link|grant)$|_update|_create/.test(c.op)).length'), 0);
       // Dragging a card with a footer still moves it.

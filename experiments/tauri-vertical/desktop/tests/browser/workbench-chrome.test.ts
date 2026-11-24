@@ -24,7 +24,7 @@ async function install(page: Page, options: Fixture = {}) {
     const calls: any[] = []; const resizes: any[] = []; const inputs: any[] = [];
     const status = () => structuredClone({ pid: 7, generation: 'chrome', pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true, normalTerminalVersion: 1,
       sessionRenameVersion: 1, sessions, lastSeq: 0 });
-    w.chromeFixture = { calls, resizes, inputs };
+    w.chromeFixture = { calls, resizes, inputs, end(id: string) { sessions.find((s: any) => s.id === id)!.status = 'exited'; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
       if (cmd === 'connect_runner') return { dataDir: '/synthetic', socket: '/synthetic.sock', status: status(), smoke: false };
       if (cmd === 'probe_tools') return [];
@@ -95,7 +95,7 @@ try {
             await install(page); await ready(page);
             const active = () => page.evaluate(() => { const input = document.querySelector('.pane:nth-child(1) .session-picker-search')!; const id = input.getAttribute('aria-activedescendant'); return id ? document.getElementById(id)?.dataset.sessionId : null; });
             await page.locator('#session-0').click(); await page.locator('.pane:nth-child(1) .session-picker-search').waitFor();
-            await page.keyboard.press('End'); assert.equal(await active(), 'closed', 'End: last option');
+            await page.keyboard.press('End'); assert.equal(await active(), ':new', 'End: last option (1.4.0: «Nueva sesión…»; a Terminada is never offered)');
             await page.keyboard.press('Home'); assert.equal(await active(), '', 'Home: first option (Sin sesión)');
             await page.keyboard.type('sint');
             const caret = () => page.evaluate(() => (document.activeElement as HTMLInputElement).selectionStart);
@@ -105,7 +105,7 @@ try {
             await page.waitForFunction(() => (window as any).homePrevented !== null);
             assert.equal(await page.evaluate(() => (window as any).homePrevented), false, 'with text Home belongs to the field');
             if (engine === chromium) assert.equal(await caret(), 0, 'Chromium moves the caret to the start');
-            assert.equal(await active(), 'live', 'active option unchanged by Home with text');
+            assert.equal(await active(), 'other', 'active option unchanged by Home with text (the first match; 1.4.0: most recent first)');
             await page.keyboard.press('End'); if (engine === chromium) assert.equal(await caret(), 4);
             await page.keyboard.press('Tab');
             await page.waitForFunction(() => (document.querySelector('.pane:nth-child(1) .session-picker') as HTMLElement).hidden);
@@ -118,16 +118,21 @@ try {
           } finally { await page.close(); }
         });
 
-        await t.test('a closed session shows a visible fixed-height read-only label, also at 760 px', async () => {
+        // 1.4.0: a Terminada can no longer be chosen for a pane (it opens the Historial view);
+        // the label is for a session that ends while on screen, which keeps its pane.
+        await t.test('a session that ends on screen shows a visible fixed-height read-only label, also at 760 px; the picker never offers a Terminada', async () => {
           const page = await browser.newPage({ viewport: { width: 1220, height: 800 } });
           try {
             await install(page); await ready(page);
             const before = await hostRect(page);
             await page.locator('#session-0').click();
-            await page.locator('.pane:nth-child(1) .session-picker [role="option"][data-session-id="closed"]').click();
+            assert.equal(await page.locator('.pane:nth-child(1) .session-picker [role="option"][data-session-id="closed"]').count(), 0);
+            await page.keyboard.press('Escape');
+            const shown = await page.evaluate(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId!);
+            await page.evaluate(id => (window as any).chromeFixture.end(id), shown);
             const label = page.locator('.pane:nth-child(1) .history-banner');
             await label.waitFor({ state: 'visible' });
-            assert.equal(await label.innerText(), 'Historial · solo lectura');
+            assert.equal(await label.innerText(), 'Terminada · solo lectura');
             assert.deepEqual(await hostRect(page), before, 'the label does not resize the terminal host');
             await page.setViewportSize({ width: 760, height: 560 }); await page.waitForTimeout(300);
             assert.equal(await label.isVisible(), true); assert.equal(await label.innerText(), 'Solo lectura');

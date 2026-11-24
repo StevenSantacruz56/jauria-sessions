@@ -26,7 +26,7 @@ import { preserveTerminalViewport, syncTerminalViewport } from './terminal-viewp
 import { terminalTheme, terminalTypography } from './terminal-theme';
 import { shell, icon } from './ui';
 import { paneMarkup, paintPaneHeader } from './pane-header';
-import { SessionPicker, sessionPickerOptions } from './session-picker';
+import { NEW_SESSION_OPTION, SessionPicker, sessionPickerOptions } from './session-picker';
 import { AlertsPopover, alertRows, alertAnnouncement, unseenKeys, statusCounts, needsLabel, finishedLabel, workingLabel, quietLabel } from './alerts-popover';
 import { renderSessionTabs, sessionTabs } from './top-bar';
 import { mountPulsoPanel } from './pulso-panel';
@@ -41,7 +41,7 @@ import { createShortcutHandler, installShortcutListeners, isMacPlatform, shortcu
 import { claimFloating, release as releaseFloating } from './floating';
 import { clampShare, clampWidth, defaultSidebarLayout, effectiveSidebarWidth, maxSidebarWidth, projectsMaxHeight, projectsShare, readSidebarLayout, sameLayout, saveSidebarLayout, separatorKey, sidebarOverlayBelow, sidebarWidth, type SidebarLayout } from './sidebar-layout';
 import { readTerminalFont, saveTerminalFont, terminalFontSize } from './terminal-font';
-import { category, isClosed, isLiveStatus } from './session-lifecycle';
+import { category, categoryLabel, continuation, interruptionDetail, isClosed, isLiveStatus, orderRecent, readDismissed, saveDismissed, withDismissed, type DismissedSessions } from './session-lifecycle';
 
 type Session = { agent?: unknown; programState?:ProgramState|null; programFinishedUnseen?:boolean; terminalStream?: TerminalStream; detail?: {terminalStream?: TerminalStream; [key:string]:unknown}; transport?:string; codex?:{generation:number;status:string;nativeThreadId:string|null}; id: string; title: string; kind: string; cwd: string | null; workspace?: string | null; status: string; pid?: number; rows: number; cols: number };
 type RunnerStatus = { agentAttentionVersion?: number; agentAttention?: object; settings?: AppSettings; settingsVersion?: number; pulsoVersion?:number; pulsoBoardVersion?:number; pulsoAvailable?:boolean; pulsoRevision?: number; pulsoRevisionVersion?: number; pulsoSummaryVersion?: number; pulsoBoardCardsVersion?: number; nativeResumeVersion?:number; sessionRenameVersion?: number; terminalStreamVersion?: number; nativePermissionsVersion?: number; runnerVersion?: string; claudeNativeConfigVersion?: number; normalTerminalVersion?: number; pid: number; generation: string; statusVersion?:number; sessions: Session[]; lastSeq: number; retention?:{outputEncodedBytes:number;eventRows:number;outputRowLimit?:number;maxOutputEncodedBytes:number;atCapacity:boolean} };
@@ -88,7 +88,18 @@ let archiveHasMore = false;
 let busyAction = false;
 let disposed = false;
 let selectedDirectory: string | null = null;
-let stageView: 'terminal' | 'pulso' = 'terminal';
+let stageView: 'terminal' | 'pulso' | 'history' = 'terminal';
+// Vista Historial (1.4.0): the Terminada being read in the stage; never a pane.
+let historyId: string | null = null;
+// «Descartar» and «continuada» (view metadata per profile): those Interrumpidas are Terminadas.
+let dismissed: DismissedSessions = new Map();
+const isRetired = (id: string) => dismissed.has(id);
+attention.retired = isRetired;
+// What native_binding said about a Claude session in this connection (identity present or not).
+const bindingKnown = new Map<string, 'none' | 'present'>();
+const bindingReads = new Set<string>();
+// Recovery overlays the person folded with «Ver salida».
+const recoveryFolded = new Set<string>();
 let pulsoPanel: ReturnType<typeof mountPulsoPanel> | null = null;
 let palette: CommandPalette | null = null;
 let pulsoShown = false;
@@ -181,12 +192,15 @@ function activeView() { return panes[focusedPane]?.id ? views.get(panes[focusedP
 // Null-safe: the Configuración controls are moved into its dialog, which is removed on unload.
 function text(selector: string, value: string) { const node = document.querySelector(selector); if (node) node.textContent = value; }
 function closeSidebar() { $('.workspace-shell').classList.remove('sidebar-open'); $('#sidebar-scrim').hidden = true; $('#toggle-sidebar').setAttribute('aria-expanded', 'false'); }
-function openNew(cwd: string | null = null) {
+/** `preset` (Empezar de nuevo aquí): provider and name already filled; the person confirms. */
+function openNew(cwd: string | null = null, preset?: { kind: string; title: string }) {
   if (busyAction || newDialog.open) return;
   const version = ++newDialogVersion;
   selectedDirectory = cwd;
   text('#selected-directory', cwd ?? 'Cargando carpeta personal…'); $('#selected-directory').title = cwd ?? '';
-  $<HTMLInputElement>('#session-title').value = '';
+  $<HTMLInputElement>('#session-title').value = preset?.title ?? '';
+  const provider = preset && ['codex', 'claude', 'terminal'].includes(preset.kind) ? document.querySelector<HTMLInputElement>(`input[name=provider][value=${preset.kind}]`) : null;
+  if (provider && !provider.disabled) provider.checked = true;
   $('#new-session-error').hidden = true;
   dialogReturn = document.activeElement as HTMLElement;
   closeSidebar(); newDialog.showModal(); refresh();
@@ -203,7 +217,29 @@ function setSessionDirectory(directory: string) {
   selectedDirectory = directory; text('#selected-directory', directory); $('#selected-directory').title = directory; $('#new-session-error').hidden = true; refresh();
 }
 function closeNew() { if (busyAction) return; newDialog.close(); dialogReturn?.focus(); }
+function lifecycleOf(session: Session) { return category(session.status, isRetired(session.id)); }
+function continuationOf(session: Session) {
+  return continuation(session, { nativeResume: runner?.nativeResumeVersion === 1 }, bindingKnown.get(session.id) ?? 'unknown');
+}
+/** Reads once per connection whether a closed Claude session has a registered identity (never starts anything). */
+function learnBinding(session: Session) {
+  if (session.kind !== 'claude' || session.transport === 'app-server' || !isClosed(session.status) || runner?.nativeResumeVersion !== 1) return;
+  if (bindingKnown.has(session.id) || bindingReads.has(session.id) || !connected) return;
+  const version = loopVersion; bindingReads.add(session.id);
+  void request<{ binding?: unknown }>('native_binding', { id: session.id }).then(value => {
+    if (version !== loopVersion || disposed) return;
+    bindingKnown.set(session.id, value?.binding ? 'present' : 'none'); refresh();
+  }).catch(() => { /* Unknown: the action stays offered and the runner has the last word. */ }).finally(() => bindingReads.delete(session.id));
+}
+/**
+ * Sidebar, tabs, alerts, palette and Pulso open a session through here. A
+ * Terminada opens the Historial view, never a pane (owner, 1.4.0), unless it
+ * is already on screen (it ended there): then that pane takes focus.
+ */
 function selectSession(id: string) {
+  const chosen = views.get(id)?.session; if (!chosen) return;
+  const onScreen = panes.find((pane, index) => pane.id === id && (index === 0 || split));
+  if (lifecycleOf(chosen) === 'ended' && !(onScreen && stageView === 'terminal')) { showHistory(id); return; }
   source.select(id, attentionSessions()); lastUsed.set(id, ++usedClock);
   stageView = 'terminal';
   const target = panes[focusedPane];
@@ -221,9 +257,10 @@ function setSplit(value: boolean) {
     const id = panes[1].id; assign(panes[1], null); if (id) assign(panes[0], id); focusedPane = 0;
   }
   if (!split) assign(panes[1], null);
+  // Dividir only brings an Abierta not shown in the other pane; with none, the pane stays empty (welcome).
   if (split && !panes[1].id) {
-    const candidate = [...views.keys()].find(id => id !== panes[0].id);
-    if (candidate) assign(panes[1], candidate);
+    const candidate = nextOpenSession([panes[0].id], false);
+    if (candidate) assign(panes[1], candidate.id);
   }
   refresh();
   for (const p of panes) if (p.id) scheduleResize(views.get(p.id)!);
@@ -240,8 +277,13 @@ for (let i = 0; i < 2; i++) {
   // The picker floats inside the pane (absolute), above the terminal host; it never resizes it.
   const picker = new SessionPicker({
     trigger, container: root, before: root.querySelector('.terminal-host'), label: `Sesión del panel ${i + 1}`,
-    options: () => sessionPickerOptions([...views.values()].map(view => view.session), i, panes.map(p => p.id), split),
-    onSelect: id => { focusedPane = i; if (id) selectSession(id); else { assign(pane, null); refresh(); trigger.focus(); } },
+    options: () => sessionPickerOptions([...views.values()].map(view => view.session), i, panes.map(p => p.id), split,
+      { retired: isRetired, canContinue: s => { const session = views.get(s.id)?.session; return !!session && continuationOf(session).action === 'continue'; } }),
+    onSelect: id => {
+      focusedPane = i;
+      if (id === NEW_SESSION_OPTION) { trigger.focus({ preventScroll: true }); refresh(); openNew(); return; }
+      if (id) selectSession(id); else { assign(pane, null); refresh(); trigger.focus(); }
+    },
     onClose: restore => { if (!restore) return; const view = pane.id ? views.get(pane.id) : undefined; if (view && focusedPane === i) focusView(view); else trigger.focus(); },
   });
   const pane: Pane = { root, host: root.querySelector('.terminal-host')!, trigger, picker, id: null };
@@ -293,10 +335,10 @@ for (let i = 0; i < 2; i++) {
       if (op === 'release') {
         const released = await invoke<boolean>('release_session', { id: view.session.id });
         updateStatus(await request<RunnerStatus>('status', {}));
-        notice(released ? 'Carpeta liberada por confirmación explícita. El historial se conserva; no se señaló ningún proceso.' : 'Liberación cancelada.');
+        notice(released ? 'Plaza liberada por confirmación explícita. El historial se conserva; no se señaló ningún proceso.' : 'Liberación cancelada.');
         return;
       }
-      if (!isLive(view.session)) throw new Error('La sesión ya no está activa. Crea una sesión nueva para continuar.');
+      if (!isLive(view.session)) throw new Error('Esta sesión terminó. Pulsa Continuar conversación o Empezar de nuevo aquí.');
       if (op === 'ping' || op === 'size' || op === 'flood') {
         if (view.session.kind !== 'fixture') throw new Error('Este control solo está disponible para fixtures.');
         await view.input.enqueue(`${op}\n`);
@@ -308,11 +350,128 @@ for (let i = 0; i < 2; i++) {
         });
       }
       else await request(op, { id: view.session.id });
-      notice(`${label} enviado a ${view.session.title}.`);
+      notice(op === 'interrupt' ? `Ctrl-C enviado a ${view.session.title}. La sesión sigue abierta.` : `${label} enviado a ${view.session.title}.`);
       focusView(view);
     }));
   });
   new ResizeObserver(() => { if (pane.id) scheduleResize(views.get(pane.id)!); }).observe(pane.host);
+  root.querySelectorAll<HTMLButtonElement>('[data-recovery]').forEach(button => button.addEventListener('click', () => {
+    const view = pane.id ? views.get(pane.id) : undefined; if (!view) return;
+    const id = view.session.id;
+    switch (button.dataset.recovery) {
+      case 'primary': focusedPane = i; recoverHere(view.session, pane); return;
+      case 'output': recoveryFolded.add(id); refresh(); root.querySelector<HTMLButtonElement>('[data-recovery="primary"]')?.focus({ preventScroll: true }); return;
+      case 'expand': recoveryFolded.delete(id); refresh(); root.querySelector<HTMLButtonElement>('[data-recovery="primary"]')?.focus({ preventScroll: true }); return;
+      case 'dismiss': focusedPane = i; dismissSession(id); return;
+    }
+  }));
+}
+/** The primary recovery action: continue the conversation, or a new session prefilled in the same pane. */
+function recoverHere(session: Session, pane: Pane) {
+  if (continuationOf(session).action === 'continue') { void action(async () => { await continueConversation(session.id, pane); }); return; }
+  focusedPane = panes.indexOf(pane);
+  openNew(session.cwd, { kind: session.kind, title: session.title });
+}
+/**
+ * Continuar conversación (1.4.0): the one path for the pane, the Historial
+ * view, the sidebar, the palette and Pulso. Checks the slot, puts the new
+ * session in the same pane and marks the original as continued (Terminada).
+ * Claude: `resume_native` (a new session, `--resume`, no text). Structured
+ * Codex: `codex_resume` (same id). Nothing is pasted or sent to the PTY. The
+ * new session inherits the original's Pulso project/phase links (notice).
+ */
+async function continueConversation(id: string, target?: Pane): Promise<string> {
+  const original = views.get(id)?.session;
+  if (!original) throw new Error('La sesión no está disponible en este perfil.');
+  if (!connected || connecting) throw new Error('Sin conexión con el runner.');
+  const pane = target ?? panes.find((p, index) => p.id === id && (index === 0 || split)) ?? panes[focusedPane];
+  const check = workspaceContext();
+  if (original.transport === 'app-server') {
+    if (!isClosed(original.status)) { presentSession(original, pane); return id; }
+    requireSessionCapacity();
+    await request('codex_resume', { id, generation: original.codex?.generation }); check();
+    updateStatus(await request<RunnerStatus>('status', {})); check();
+    presentSession(views.get(id)!.session, pane);
+    announce(`Continuando ${original.title}…`);
+    return id;
+  }
+  if (original.kind !== 'claude') throw new Error('Esta sesión no permite continuar la conversación. Usa Empezar de nuevo aquí.');
+  if (runner?.nativeResumeVersion !== 1) throw new Error('Este runner no permite continuar conversaciones. Reinícialo cuando no tengas trabajo en curso.');
+  const native = await request<{ binding?: unknown; activeSessionId?: string | null }>('native_binding', { id }); check();
+  bindingKnown.set(id, native.binding ? 'present' : 'none');
+  if (native.activeSessionId) {
+    const active = views.get(native.activeSessionId);
+    if (active && isLive(active.session)) { presentSession(active.session, pane); markContinued(id, active.session.id); return active.session.id; }
+    throw new Error('La conversación ya tiene una sesión activa o sin confirmar. Revisa su estado antes de continuar.');
+  }
+  if (!native.binding) { refresh(); throw new Error('No se registró la identidad de esta conversación. Usa Empezar de nuevo aquí.'); }
+  if (!resumeAttempts.has(id)) requireSessionCapacity();
+  const next = resumeAttempts.get(id) ?? `claude-${crypto.randomUUID()}`; resumeAttempts.set(id, next);
+  const session = await request<Session>('resume_native', { id: next, sourceId: id, rows: 24, cols: 80 }); check();
+  resumeAttempts.delete(id);
+  presentSession(session, pane);
+  markContinued(id, session.id);
+  announce(`Continuando ${original.title} en una sesión nueva…`);
+  void inheritPulsoLinks(id, session.id);
+  return session.id;
+}
+function rememberDismissed(next: DismissedSessions) {
+  dismissed = next;
+  try { saveDismissed(localStorage, profileDataDir, dismissed); } catch { /* Optional view metadata: it holds for this window. */ }
+}
+function markContinued(id: string, successor: string) { if (dismissed.get(id) !== successor) rememberDismissed(withDismissed(dismissed, id, successor)); refresh(); }
+/** Descartar: the Interrumpida becomes Terminada (Historial). View metadata only; nothing is deleted. */
+function dismissSession(id: string, afterFocus?: () => void) {
+  const session = views.get(id)?.session; if (!session || category(session.status) !== 'interrupted') return;
+  rememberDismissed(withDismissed(dismissed, id));
+  recoveryFolded.delete(id);
+  const shown = panes.find((pane, index) => pane.id === id && (index === 0 || split));
+  if (shown) leavePane(shown, id); else refresh();
+  afterFocus?.();
+  notice(`${session.title} pasó a Terminadas. Sigue en Historial; no se borró nada.`);
+}
+type PulsoSummary = { projects?: { id: string; title: string; mainSessionId: string | null }[]; links?: { projectId?: string | null; sessionId: string; via?: 'project' | 'item' }[]; linksTruncated?: boolean };
+type PulsoBoard = { columns?: Record<string, { items?: { id: string; session?: { id: string } | null }[] }> };
+/**
+ * Owner decision (1.4.0): the continuation inherits the original's Pulso
+ * links, with a visible notice. Only existing operations: `sidebar_summary`
+ * finds the projects whose main session or links name the original; for a
+ * phase link, the project `board` card footers say which phase. Each link is
+ * written with the same request id Pulso uses for its own resume link, so
+ * both are idempotent. A phase off the first board page cannot be found: the
+ * notice says so. Nothing is pasted or sent to the session.
+ */
+async function inheritPulsoLinks(from: string, to: string) {
+  if (!pulsoReadable()) return;
+  try {
+    if (runner?.pulsoSummaryVersion !== 1) { notice('Conversación continuada. Este runner no permite comprobar sus vínculos con Pulso; si la original estaba vinculada, vincula la nueva desde Pulso.'); return; }
+    const summary = await requestPulso('sidebar_summary', {}) as PulsoSummary;
+    const projects = new Map((summary.projects ?? []).map(project => [project.id, project.title]));
+    const projectLinks = new Set<string>(), phaseProjects = new Set<string>();
+    for (const project of summary.projects ?? []) if (project.mainSessionId === from) projectLinks.add(project.id);
+    for (const link of summary.links ?? []) if (link.sessionId === from && link.projectId) (link.via === 'item' ? phaseProjects : projectLinks).add(link.projectId);
+    if (!projectLinks.size && !phaseProjects.size) {
+      if (summary.linksTruncated) notice('Conversación continuada. Pulso devolvió sus vínculos incompletos: si la original estaba vinculada, vincula la nueva desde Pulso.');
+      return;
+    }
+    const linked: string[] = [], missing: string[] = [];
+    for (const projectId of projectLinks) {
+      await requestPulso('link', { projectId, sessionId: to, requestId: `resume-link-${to}-project-${projectId}` });
+      linked.push(`«${projects.get(projectId) ?? projectId}»`);
+    }
+    for (const projectId of phaseProjects) {
+      const board = runner?.pulsoBoardCardsVersion === 1 ? await requestPulso('board', { projectId }) as PulsoBoard : null;
+      const phases = Object.values(board?.columns ?? {}).flatMap(column => column.items ?? []).filter(item => item.session?.id === from);
+      if (!phases.length) { missing.push(`«${projects.get(projectId) ?? projectId}»`); continue; }
+      for (const phase of phases) await requestPulso('link', { itemId: phase.id, sessionId: to, requestId: `resume-link-${to}-item-${phase.id}` });
+      linked.push(`${phases.length === 1 ? 'una fase' : `${phases.length} fases`} de «${projects.get(projectId) ?? projectId}»`);
+    }
+    loadSidebarProjects();
+    notice([linked.length ? `Conversación continuada y vinculada en Pulso como la original: ${linked.join(', ')}.` : 'Conversación continuada.',
+      missing.length ? `No se encontró su fase en ${missing.join(', ')}; vincúlala desde Pulso.` : ''].filter(Boolean).join(' '), missing.length ? true : false);
+  } catch (e) {
+    notice(`La conversación continúa en la sesión nueva, pero no se pudo heredar su vínculo con Pulso: ${message(e)} Vincúlala desde Pulso.`, true);
+  }
 }
 /** Terminar sesión always asks first (pane menu and command palette). */
 function openStopConfirmation(view: View) {
@@ -457,10 +616,12 @@ function refresh() {
   const activityById = new Map(sessions.map(s => [s.id, source.activity(s, alertById.get(s.id))]));
   currentActivity = activityById;
   const unseen = unread.length + hidden, total = alerts.length + hidden;
+  // Abiertas (open/activity) never list an Interrumpida among the agents: it has its own section on top.
+  const interruptedNow = (s: Session) => lifecycleOf(s) === 'interrupted';
   const matches = (s: Session, f: SessionFilter, q: string) => f === 'attention'
     ? alertById.has(s.id) && matchesSession(s, 'all', q)
-    : f === 'activity' ? (isLive(s) || alertById.has(s.id)) && matchesSession(s, 'all', q)
-    : matchesSession(s, f, q);
+    : f === 'activity' ? (isLive(s) || alertById.has(s.id) || lifecycleOf(s) === 'unconfirmed') && !interruptedNow(s) && matchesSession(s, 'all', q)
+    : matchesSession(s, f, q, isRetired(s.id));
   const count = (f: SessionFilter) => sessions.filter(s => matches(s, f, '')).length;
   $('#session-alerts').hidden = total === 0;
   const alertButton = $('#session-alerts');
@@ -510,7 +671,7 @@ function refresh() {
   if (filter === 'attention' && count('attention') === 0) filter = openFilter();
   text('#capacity', `${occupied} de ${sessionLimit()} plazas`);
   $('#capacity').title = `${occupied} de ${sessionLimit()} plazas ocupadas`;
-  text('#open-count', String(open)); text('#closed-count', String(count('closed')));
+  text('#open-count', String(open + sessions.filter(interruptedNow).length)); text('#closed-count', String(count('closed')));
   text('#attention-count', `${total} ${total === 1 ? 'aviso' : 'avisos'}`);
   $('#attention-filter').hidden = count('attention') === 0;
   const tab = filter === 'activity' ? 'open' : filter;
@@ -529,6 +690,8 @@ function refresh() {
   // Pulso through MCP. With pulsoRevisionVersion the status revision says so.
   if (turnEnded(programSeen, sessions, source) && statusPulsoRevision() === null) loadSidebarProjects();
   const newSessionBlocked = newSessionUnavailable({ connected, busy: busyAction, replaying, occupied, limit: sessionLimit() }) !== null;
+  syncHistoryView(newSessionBlocked);
+  const reading = stageView === 'history';
   for (const id of ['new-session', 'welcome-create', 'tab-new-session']) $<HTMLButtonElement>(`#${id}`).disabled = newSessionBlocked;
   for (const id of ['choose-directory', 'use-home-directory']) $<HTMLButtonElement>(`#${id}`).disabled = busyAction || connecting;
   const terminalSupported = runner?.normalTerminalVersion === 1;
@@ -554,6 +717,7 @@ function refresh() {
         ? `Historial local parcial. ${isLive(view.session) ? 'La sesión continúa normalmente. Se alcanzó el límite de guardado local; la salida nueva no se añade al historial de Jauría.' : 'Este límite solo afecta a la salida guardada por Jauría.'} No limita el uso ni afecta la cuota del proveedor.` : '',
     });
     pane.picker.refresh();
+    paintRecovery(pane, view ?? null);
     (pane.root.querySelector('.fixture-controls') as HTMLElement).hidden = !smoke;
     if (view) view.term.options.disableStdin = view.session.transport==='app-server' || replaying || streamReplaying(view) || !connected || !isLive(view.session) || stopping.has(view.session.id);
     pane.root.querySelectorAll<HTMLButtonElement>('[data-action]').forEach(button => {
@@ -578,7 +742,7 @@ function refresh() {
   }
   const focusedView = activeView();
   text('#terminal-size', focusedView?.session.transport === 'app-server' ? 'Conversación' : focusedView ? `${focusedView.term.cols} × ${focusedView.term.rows}` : '—');
-  for(const view of views.values())view.chat?.select(connected && !replaying && stageView==='terminal' && panes.some((pane,index)=>pane.id===view.session.id && (index===0||split))?view.session:null);
+  for(const view of views.values())view.chat?.select(connected && !replaying && ((stageView==='terminal' && panes.some((pane,index)=>pane.id===view.session.id && (index===0||split))) || (reading && historyId===view.session.id))?view.session:null);
   const hasVisibleSession = panes.some((pane, index) => !!pane.id && (index === 0 || split));
   $('#welcome').hidden = hasVisibleSession || stageView !== 'terminal';
   $('#panes').hidden = !hasVisibleSession || stageView !== 'terminal';
@@ -591,11 +755,14 @@ function refresh() {
   $('#session-tabs').hidden = planning; $('#tab-new-session').hidden = planning; $('#pulso-tabs-host').hidden = !planning; $('#pulso-back-terminal').hidden = !planning;
   $('.workbench-header').dataset.view = planning ? 'pulso' : 'terminal';
   if (!planning) renderSessionTabs($('#session-tabs'), sessionTabs(sessions, panes.map((pane, index) => index === 0 || split ? pane.id : null), stageView === 'terminal' ? current?.id : null, id => activityById.get(id)), selectSession);
-  text('#workspace-title', current?.title ?? 'Tu espacio de trabajo');
+  text('#workspace-title', reading ? `Historial · ${historyView()?.session.title ?? ''}` : current?.title ?? 'Tu espacio de trabajo');
   text('#workspace-breadcrumb', current?.cwd?.split('/').filter(Boolean).pop() ?? (current ? providerLabel(current.kind) : 'Sesiones locales'));
   $('#workspace-breadcrumb').hidden = planning;
   if (planning) text('#workspace-title', 'Pulso');
-  const visibleSessions = sessions.filter(s => matches(s, filter, query));
+  // Most recent first everywhere (the runner lists oldest first and gives no dates).
+  const visibleSessions = orderRecent(sessions.filter(s => matches(s, filter, query)));
+  const abiertas = filter === 'open' || filter === 'activity';
+  const interruptedRows = abiertas ? orderRecent(sessions.filter(s => interruptedNow(s) && matchesSession(s, 'all', query))) : [];
   const navigation = $('.workspace-navigation');
   navigation.dataset.sessionView = filter === 'activity' || filter === 'attention' ? 'priority' : 'projects';
   navigation.dataset.filter = filter;
@@ -603,18 +770,20 @@ function refresh() {
   const summary = sidebarProjects.snapshot;
   // Attention and Por estado reuse the activity sections; Abiertas/Historial
   // Por proyecto use the Pulso main session and project links known locally.
+  // Historial por proyecto keeps plain recency inside each project (no priority: they all ended).
   const groups = filter === 'activity' || filter === 'attention'
     ? groupAgents(visibleSessions, 'state', kindOf)
-    : groupAgents(visibleSessions, grouping, kindOf, summary.projects, projectSessionIndex(summary.projects, summary.links));
+    : groupAgents(visibleSessions, grouping, filter === 'closed' && grouping === 'project' ? () => 'unreported' : kindOf, summary.projects, projectSessionIndex(summary.projects, summary.links));
   $('#session-list').setAttribute('aria-label', filter === 'attention' ? 'Sesiones con avisos' : filter === 'activity' ? 'Agentes por estado' : filter === 'closed' ? (grouping === 'state' ? 'Historial por estado' : 'Historial por proyecto') : 'Agentes por proyecto');
   // Keep the button itself mounted while status, output metadata or attention
   // changes. Replacing it between pointer down and up loses the user's click.
-  const key = JSON.stringify([filter, query, summary.linksTruncated, groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
+  const key = JSON.stringify([filter, query, summary.linksTruncated, interruptedRows.map(s => s.id), groups.map(group => [group.key, group.name, group.sessions.map(s => s.id)])]);
   if (sidebarKey !== key) {
     sidebarKey = key;
     const list = $('#session-list');
     const focusedSession = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('.session-item')?.dataset.sessionId ?? null : null;
     list.replaceChildren();
+    if (interruptedRows.length) list.append(interruptedSection(interruptedRows));
     for (const group of groups) {
       const section = document.createElement('section'); section.className = 'session-group';
       if (group.kind) section.dataset.activity = group.kind; else section.dataset.project = group.projectId ?? 'none';
@@ -645,7 +814,7 @@ function refresh() {
     const s = sessionById.get(button.dataset.sessionId!)!;
     const alert = alertById.get(s.id);
     const activity = activityById.get(s.id)!;
-    const selected = stageView === 'terminal' && s.id === current?.id;
+    const selected = (stageView === 'terminal' && s.id === current?.id) || (reading && s.id === historyId);
     button.dataset.selected = String(selected);
     button.setAttribute('aria-current', String(selected));
     button.dataset.attention = String(!!alert); button.dataset.unseen = String(!!alert?.unseen);
@@ -679,7 +848,69 @@ function assign(pane: Pane, id: string | null) {
   const empty = pane.host.querySelector<HTMLElement>('.empty'); if (empty) empty.hidden = !!id;
   if (id) { const view = views.get(id)!; pane.host.append(view.host); syncTerminalViewport(view.term); scheduleResize(view); }
 }
-function focusView(view:View|undefined|null){if(!view)return;if(view.session.transport==='app-server')view.host.querySelector<HTMLTextAreaElement>('textarea')?.focus();else view.term.focus();}
+/**
+ * The recovery overlay of an Interrumpida shown in a pane (plan C.4). It floats
+ * over the terminal (absolute), so showing, folding or hiding it never changes
+ * the terminal's size. «Ver salida» folds it to a bar; «Opciones…» unfolds it.
+ */
+function paintRecovery(pane: Pane, view: View | null) {
+  const box = pane.root.querySelector<HTMLElement>('.pane-recovery')!;
+  const session = view?.session;
+  const show = !!session && lifecycleOf(session) === 'interrupted';
+  if (box.hidden !== !show) box.hidden = !show;
+  if (!show) return;
+  learnBinding(session);
+  const plan = continuationOf(session); const folded = recoveryFolded.has(session.id);
+  const set = (selector: string, value: string) => { const node = box.querySelector(selector)!; if (node.textContent !== value) node.textContent = value; };
+  if (box.dataset.folded !== String(folded)) box.dataset.folded = String(folded);
+  set('.pane-recovery-title', `${session.title} · Interrumpida`);
+  set('.pane-recovery-detail', `${interruptionDetail(session.status)}. No puedes escribir en ella: el proceso ya no existe.`);
+  set('.pane-recovery-note', plan.note);
+  const primary = box.querySelector<HTMLButtonElement>('[data-recovery="primary"]')!;
+  set('[data-recovery="primary"]', plan.action === 'continue' ? 'Continuar conversación' : 'Empezar de nuevo aquí');
+  const help = plan.action === 'continue' ? `${plan.note} Nada se escribe en la sesión.` : 'Abre Nueva sesión con la misma carpeta, herramienta y nombre; tú confirmas.';
+  if (primary.title !== help) primary.title = help;
+  primary.disabled = !connected || connecting || busyAction || replaying;
+  box.querySelector<HTMLButtonElement>('[data-recovery="output"]')!.hidden = folded;
+  box.querySelector<HTMLButtonElement>('[data-recovery="expand"]')!.hidden = !folded;
+  box.querySelector<HTMLButtonElement>('[data-recovery="dismiss"]')!.disabled = busyAction;
+}
+/** «Interrumpidas» inside Abiertas: rows open the session (with its recovery) and offer Descartar. */
+function interruptedSection(rows: readonly Session[]) {
+  const section = document.createElement('section'); section.className = 'session-group session-group-interrupted'; section.dataset.lifecycle = 'interrupted';
+  const heading = document.createElement('div'); heading.className = 'group-heading';
+  heading.title = 'Terminaron sin que lo pidieras: continúalas, empieza de nuevo o descártalas.';
+  const marker = document.createElement('span'); marker.className = 'activity-group-marker'; marker.dataset.activity = 'needs'; marker.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span'); name.textContent = 'Interrumpidas';
+  const count = document.createElement('span'); count.className = 'activity-group-count'; count.textContent = String(rows.length);
+  heading.append(marker, name, count); section.append(heading);
+  section.setAttribute('aria-label', `Interrumpidas: ${rows.length}`);
+  for (const s of rows) {
+    const row = document.createElement('div'); row.className = 'session-row';
+    const button = document.createElement('button'); button.className = 'session-item'; button.dataset.sessionId = s.id;
+    button.innerHTML = `<span class="provider-badge" aria-hidden="true"></span><span class="session-item-title"></span><span class="session-item-duration"></span><span class="session-item-state"><span class="agent-indicator" aria-hidden="true"></span><span class="session-item-state-label sr-only"></span></span><span class="session-item-meta sr-only"></span>`;
+    button.addEventListener('click', () => selectSession(s.id));
+    const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.className = 'quiet session-dismiss'; dismiss.dataset.sessionId = s.id;
+    dismiss.textContent = 'Descartar'; dismiss.setAttribute('aria-label', `Descartar ${s.title}`); dismiss.title = 'La pasa a Terminadas; no borra nada';
+    dismiss.addEventListener('click', () => dismissFromSidebar(s.id));
+    row.append(button, dismiss); section.append(row);
+  }
+  return section;
+}
+/** After Descartar in the sidebar, focus stays in the list: the next row's Descartar, else the Abiertas tab. */
+function dismissFromSidebar(id: string) {
+  const ids = Array.from(document.querySelectorAll<HTMLElement>('#session-list .session-dismiss')).map(node => node.dataset.sessionId!);
+  const position = ids.indexOf(id); const neighbour = ids[position + 1] ?? ids[position - 1];
+  dismissSession(id, () => {
+    const next = neighbour ? Array.from(document.querySelectorAll<HTMLElement>('#session-list .session-dismiss')).find(node => node.dataset.sessionId === neighbour) : null;
+    (next ?? $('button[data-filter="open"]')).focus({ preventScroll: true });
+  });
+}
+function focusView(view:View|undefined|null){if(!view)return;
+  // An Interrumpida takes no input: its recovery action gets the keyboard instead of a dead terminal.
+  const shown=panes.find((pane,index)=>pane.id===view.session.id&&(index===0||split));
+  const recovery=shown?.root.querySelector<HTMLButtonElement>('.pane-recovery:not([hidden]) [data-recovery="primary"]');
+  if(recovery&&!recovery.disabled){recovery.focus({preventScroll:true});return;}if(view.session.transport==='app-server')view.host.querySelector<HTMLTextAreaElement>('textarea')?.focus();else view.term.focus();}
 function configureConversation(view:View){
   view.host.dataset.transport=view.session.transport??'pty';
   if(view.session.transport!=='app-server' || view.chat)return;
@@ -1116,7 +1347,7 @@ async function connect() {
     const previousSelection = panes.map(p => p.id);
     for (const pane of panes) assign(pane, null);
     for (const view of views.values()) { if(view.chat)codexDrafts.set(view.session.id,view.chat.saveDraft(view.session.id)); view.chat?.dispose(); view.disposal(); view.term.dispose(); view.host.remove(); }
-    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); stopFlights.clear(); stopUncertain.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
+    views.clear();windowAttention.reset();runnerAttention.reset();source=windowAttention;programSeen.clear();if(programRefresh!==undefined){clearTimeout(programRefresh);programRefresh=undefined;} stopping.clear(); stopFlights.clear(); stopUncertain.clear(); bindingKnown.clear(); bindingReads.clear(); archiveUnavailable = false; archivePollAt = 0; archiveHasMore = false; announcedAlerts = new Set(); sidebarKey = ''; renderedSeq = 0; runner = null; statusAt = 0;
     const config = await invoke<{ dataDir: string; socket: string; status: RunnerStatus; smoke: boolean }>('connect_runner');
     smoke = config.smoke; connected = true;
     replayThrough = config.status.lastSeq;
@@ -1125,6 +1356,7 @@ async function connect() {
     if (groupingProfile !== profileDataDir) {
       groupingProfile = profileDataDir; sidebarProjects.reset(); sidebarAsked = null; sidebarRetryAt = 0; projectListKey = '';
       try { grouping = readAgentGrouping(localStorage, profileDataDir); } catch { grouping = 'project'; }
+      try { dismissed = readDismissed(localStorage, profileDataDir); } catch { dismissed = new Map(); }
       // Per-profile view preferences, applied before any terminal is fitted.
       try { layout = readSidebarLayout(localStorage, profileDataDir); } catch { layout = { ...defaultSidebarLayout }; }
       applySidebarLayout();
@@ -1138,10 +1370,12 @@ async function connect() {
       previousSelection.forEach((id, i) => { if (id && views.has(id)) assign(panes[i], id); });
     }
     if (!split) assign(panes[1], null);
+    // A pane opens with the first Abierta (as before 1.4.0), else the most recent Interrumpida (with its
+    // recovery); never a Terminada: with neither, the welcome view.
     if (!panes.some(pane => pane.id) && views.size) {
-      const preferred = [...views.values()].find(v => isLive(v.session)) ?? [...views.values()][0];
-      assign(panes[0], preferred.session.id);
-      if (!matchesSession(preferred.session, filter, query)) filter = isLive(preferred.session) ? openFilter() : matchesSession(preferred.session, 'attention', '') ? 'attention' : 'closed';
+      const sessions = [...views.values()].map(v => v.session);
+      const preferred = sessions.find(s => isLive(s)) ?? orderRecent(sessions).find(s => lifecycleOf(s) === 'interrupted');
+      if (preferred) { assign(panes[0], preferred.id); if (filter !== 'open' && filter !== 'activity') filter = openFilter(); }
     }
     if (!split) assign(panes[1], null);
     $('#notice').hidden = replayThrough === 0; syncNotice();
@@ -1211,7 +1445,7 @@ $('#confirm-stop').addEventListener('click', () => {
       if (result === null) {
         // Never «Terminando…» forever: say it could not be confirmed and keep listening for the answer.
         stopping.delete(id); stopUncertain.add(id); refresh();
-        notice(`${title}: no se pudo confirmar el cierre. Pulsa Reconectar para ver su estado real; si el proceso ya no existe, usa Liberar carpeta en el menú «…» del panel.`, true);
+        notice(`${title}: no se pudo confirmar el cierre. Pulsa Reconectar para ver su estado real; si el proceso ya no existe, usa Liberar plaza en el menú «…» del panel.`, true);
         void work.then(answer => { if (!disposed) stopConfirmed(id, title, answer); }).catch(() => {});
         return;
       }
@@ -1232,7 +1466,7 @@ function stopConfirmed(id: string, title: string, result: Session) {
     notice(`${title}: terminada. Está en Historial, en solo lectura.`);
   } else {
     stopping.delete(id); stopUncertain.add(id); refresh();
-    notice(`${title}: no se pudo confirmar el cierre. La carpeta y su plaza siguen reservadas; comprueba los procesos y usa Liberar carpeta en el menú «…» del panel.`, true);
+    notice(`${title}: no se pudo confirmar el cierre. La carpeta y su plaza siguen reservadas; comprueba los procesos y usa Liberar plaza en el menú «…» del panel.`, true);
   }
 }
 /**
@@ -1241,13 +1475,22 @@ function stopConfirmed(id: string, title: string, result: Session) {
  * recently used), else nothing (the welcome view or the pane's empty state).
  * Keyboard focus goes to that terminal, else to Nueva sesión: never to body.
  */
+/**
+ * The next Abierta for a pane, never one in `exclude`. After Terminar
+ * (`byPriority`): needs you → finished unseen → working → most recently used →
+ * most recently created. Dividir: simply the most recently created.
+ */
+function nextOpenSession(exclude: readonly (string | null)[], byPriority = true): Session | undefined {
+  const rank = (s: Session) => { const kind = currentActivity.get(s.id)?.kind; return kind === 'needs' || kind === 'notice' ? 0 : kind === 'finished' ? 1 : kind === 'working' ? 2 : 3; };
+  const open = orderRecent([...views.values()].map(v => v.session)).filter(s => isLive(s) && !exclude.includes(s.id) && !stopping.has(s.id));
+  if (!byPriority) return open[0];
+  return open.sort((a, b) => rank(a) - rank(b) || (lastUsed.get(b.id) ?? 0) - (lastUsed.get(a.id) ?? 0))[0];
+}
 function leavePane(pane: Pane, id: string) {
   if (pane.id !== id) return;
   const index = panes.indexOf(pane);
   const shownElsewhere = panes.filter((other, i) => other !== pane && (i === 0 || split) && other.id).map(other => other.id);
-  const rank = (s: Session) => { const kind = currentActivity.get(s.id)?.kind; return kind === 'needs' || kind === 'notice' ? 0 : kind === 'finished' ? 1 : kind === 'working' ? 2 : 3; };
-  const next = [...views.values()].map(v => v.session).filter(s => s.id !== id && isLive(s) && !shownElsewhere.includes(s.id) && !stopping.has(s.id))
-    .sort((a, b) => rank(a) - rank(b) || (lastUsed.get(b.id) ?? 0) - (lastUsed.get(a.id) ?? 0))[0];
+  const next = nextOpenSession([id, ...shownElsewhere]);
   focusedPane = index;
   if (next) { selectSession(next.id); return; }
   assign(pane, null); refresh();
@@ -1259,11 +1502,27 @@ function leavePane(pane: Pane, id: string) {
   };
   place(); setTimeout(() => { if (!disposed && pane.id === null && (document.activeElement === document.body || document.activeElement?.id === 'open-command-palette')) place(); });
 }
-/** Closing the notice by the person (button or Escape): focus inside it goes back to the workbench, never body. */
+/** Where focus was before it entered the notice (Tab or a click on its button). */
+let beforeNotice: HTMLElement | null = null;
+$('#notice').addEventListener('focusin', event => {
+  const from = event.relatedTarget;
+  if (from instanceof HTMLElement && !$('#notice').contains(from)) beforeNotice = from;
+});
+/**
+ * Closing the notice by the person (button or Escape): focus inside it goes
+ * back to where it came from, else to the bell when there are alerts, else to
+ * the focused terminal or the palette button; never body. Closing a notice never marks an alert seen by itself.
+ */
 function closeNoticeByPerson() {
   const hadFocus = $('#notice').contains(document.activeElement);
   dismissNotice();
-  if (hadFocus) restoreWorkbenchFocus();
+  if (!hadFocus) return;
+  const back = beforeNotice; beforeNotice = null;
+  if (back?.isConnected && back.getClientRects().length && !(back as HTMLButtonElement).disabled) { back.focus({ preventScroll: true }); if (document.activeElement === back) return; }
+  // Focusing a terminal would consume its activity: with alerts pending, the bell takes focus instead.
+  const bell = $<HTMLButtonElement>('#session-alerts');
+  if (!bell.hidden) { bell.focus({ preventScroll: true }); return; }
+  restoreWorkbenchFocus();
 }
 /** Where focus goes when the control that had it disappears: the focused terminal, else the palette button. */
 function restoreWorkbenchFocus() { const view = activeView(); if (view && stageView === 'terminal') focusView(view); else $<HTMLButtonElement>('#open-command-palette').focus(); }
@@ -1618,13 +1877,13 @@ function focusOtherPane() {
   const pane = panes[focusedPane]; const view = pane.id ? views.get(pane.id) : undefined;
   if (view) focusView(view); else pane.trigger.focus();
 }
-/** Interrumpir sends Ctrl-C at once from its button; the palette only focuses that button. */
+/** Cancelar (Ctrl-C) sends Ctrl-C at once from its button; the palette only focuses that button. */
 function focusInterruptControl(id: string) {
   const pane = panes.find((p, index) => p.id === id && (index === 0 || split)); if (!pane) return;
   const button = pane.root.querySelector<HTMLButtonElement>('[data-action="interrupt"]');
   if (!button || button.hidden || button.disabled) return;
   button.focus();
-  notice(`${views.get(id)?.session.title ?? 'Sesión'}: pulsa Intro o Espacio en Interrumpir para enviar Ctrl-C.`);
+  notice(`${views.get(id)?.session.title ?? 'Sesión'}: pulsa Intro o Espacio en Cancelar (Ctrl-C) para cancelar lo que está haciendo; la sesión sigue abierta.`);
 }
 /** In Pulso, a draft or a failed save keeps the board (same guard as «Terminal»). */
 function pulsoNavigationAllowed() {
@@ -1668,7 +1927,7 @@ installShortcutListeners(window, handleAppShortcut, mac);
 function paletteItems(): PaletteItem[] {
   // The activity the last refresh painted: the palette agrees with the sidebar.
   const sessions = attentionSessions(), summary = sidebarProjects.snapshot;
-  return paletteEntries({ sessions: sessions.map(s => ({ ...s, live: isLive(s) })), activityOf: id => currentActivity.get(id) ?? { kind: 'unreported', label: '' },
+  return paletteEntries({ sessions: orderRecent(sessions).map(s => ({ ...s, live: isLive(s), interrupted: lifecycleOf(s) === 'interrupted' })), activityOf: id => currentActivity.get(id) ?? { kind: 'unreported', label: '' },
     projects: summary.projects, links: summary.links, pendingOpen: summary.pendingOpen, hasMoreProjects: summary.hasMore, pulsoBlocked: pulsoUnavailable(), pulsoDraft: pulsoPanel?.draftBlocked() ?? null,
     commands: commands(), mac, openSession: id => commandContext().actions.openSession(id), openBoard: openBoardFromNavigation,
     openPulso: () => { if (stageView !== 'pulso') showPulso(); }, phases: pulsoPanel?.loadedPhases() ?? null, openPhase: openPhaseFromNavigation });
@@ -1704,7 +1963,7 @@ function paletteReturnTarget(active: Element | null): HTMLElement | null {
 function paletteFallbackFocus() {
   const view = activeView();
   if (stageView === 'terminal' && view) { focusView(view); if (document.activeElement !== document.body) return; }
-  const candidates = stageView === 'pulso' ? ['#pulso-back-terminal', '#open-pulso'] : [`#session-${focusedPane}`, '#welcome-create', '#open-command-palette'];
+  const candidates = stageView === 'pulso' ? ['#pulso-back-terminal', '#open-pulso'] : stageView === 'history' ? ['#history-back', '#open-command-palette'] : [`#session-${focusedPane}`, '#welcome-create', '#open-command-palette'];
   for (const selector of candidates) {
     const node = document.querySelector<HTMLElement>(selector);
     if (!node || (node as HTMLButtonElement).disabled || !node.getClientRects().length) continue;
@@ -1762,22 +2021,120 @@ pulsoPanel = mountPulsoPanel({
   revisionFromStatus: () => statusPulsoRevision() !== null,
   cardFooters: () => runner?.pulsoBoardCardsVersion === 1,
   activityOf: id => currentActivity.get(id) ?? null,
-  resumeSession: async sourceId => {
-    if (runner?.nativeResumeVersion !== 1 || !connected) throw new Error('Este runner no permite reanudar conversaciones nativas.');
-    const check=workspaceContext();
-    const native=await request<{activeSessionId?:string|null}>('native_binding',{id:sourceId});check();
-    if(native.activeSessionId){
-      const active=views.get(native.activeSessionId);
-      if(active&&isLive(active.session)){selectSession(active.session.id);return active.session.id;}
-      throw new Error('La conversación ya tiene una sesión activa o sin verificar. Consulta su estado antes de reanudar.');
-    }
-    if(!resumeAttempts.has(sourceId)) requireSessionCapacity();
-    const id=resumeAttempts.get(sourceId) ?? `claude-${crypto.randomUUID()}`; resumeAttempts.set(sourceId,id);
-    const session=await request<Session>('resume_native',{id,sourceId,rows:24,cols:80});
-    ensure(session); resumeAttempts.delete(sourceId); selectSession(session.id); return session.id;
-  },
+  // The common path (continueConversation): same slot check, pane, «continuada» mark and Pulso link inheritance.
+  resumeSession: sourceId => continueConversation(sourceId),
+  restartSession: id => { const session = views.get(id)?.session; if (session) openNew(session.cwd, { kind: session.kind, title: session.title }); },
 });
 function showPulso() { stageView = 'pulso'; closeSidebar(); refresh(); }
+/*
+ * Vista Historial (1.4.0, owner decision 1): a Terminada is read in the stage,
+ * like Pulso, never in a working pane. Its terminal moves into the view at its
+ * saved geometry (no fit, never a `resize`); going back puts the panes back as
+ * they were, also without `resize`. The panes are covered, so no session is
+ * attended (isAttended needs the terminal stage).
+ */
+let historySearch = { query: '', index: -1 };
+function showHistory(id: string) {
+  const session = views.get(id)?.session; if (!session || !pulsoNavigationAllowed()) return;
+  source.select(id, attentionSessions());
+  historyId = id; stageView = 'history'; historySearch = { query: '', index: -1 };
+  $<HTMLInputElement>('#history-search').value = ''; text('#history-search-count', '');
+  learnBinding(session);
+  closeSidebar(); refresh();
+  $('#history-back').focus({ preventScroll: true });
+}
+function leaveHistory() {
+  if (stageView !== 'history') return;
+  stageView = 'terminal'; historyId = null; $<HTMLDetailsElement>('#history-menu').open = false; refresh();
+  for (const pane of panes) if (pane.id) scheduleResize(views.get(pane.id)!);
+  const view = activeView();
+  if (view) focusView(view); else if (!$<HTMLButtonElement>('#welcome-create').disabled) $('#welcome-create').focus(); else $('#open-command-palette').focus();
+}
+function historyView() { return stageView === 'history' && historyId ? views.get(historyId) : undefined; }
+/** Mounts the read session in the view and paints its header and actions (called by refresh). */
+function syncHistoryView(newSessionBlocked: boolean) {
+  const host = $('#history-terminal');
+  // A reconnect (purge, compact) rebuilds the views: keep the view until the session is known to be gone.
+  if (stageView === 'history' && !historyView() && !connecting) { stageView = 'terminal'; historyId = null; }
+  const view = historyView();
+  $('#history-view').hidden = !view;
+  for (const child of Array.from(host.children)) if (child !== view?.host) child.remove();
+  if (!view) return;
+  const s = view.session;
+  for (const pane of panes) if (pane.id === s.id) assign(pane, null);
+  if (view.host.parentElement !== host) { host.append(view.host); syncTerminalViewport(view.term); }
+  const badge = $('#history-provider'); const provider = providerBadge(s.kind);
+  if (badge.dataset.provider !== provider.provider) { badge.dataset.provider = provider.provider; badge.textContent = provider.letter; }
+  text('#history-title', s.title); text('#history-folder', s.cwd ?? 'Sin carpeta'); $('#history-folder').title = s.cwd ?? '';
+  const successor = dismissed.get(s.id);
+  const next = successor ? views.get(successor)?.session : undefined;
+  text('#history-state', `${categoryLabel(lifecycleOf(s))} · solo lectura${successor ? ` · continuada en «${next?.title ?? 'otra sesión'}»` : isRetired(s.id) ? ' · descartada' : ''}`);
+  const resume = $<HTMLButtonElement>('#history-continue');
+  resume.hidden = continuationOf(s).action !== 'continue' || (!!next && !isClosed(next.status));
+  resume.disabled = !connected || connecting || busyAction || replaying;
+  resume.title = continuationOf(s).note;
+  $<HTMLButtonElement>('#history-new').disabled = !s.cwd || newSessionBlocked;
+  const structured = s.transport === 'app-server';
+  for (const id of ['history-copy', 'history-search']) { const node = $<HTMLInputElement>(`#${id}`); node.disabled = structured; node.title = structured ? 'La conversación de Codex se lee en esta vista; no tiene salida de terminal' : node.id === 'history-copy' ? 'Copia toda la salida guardada al portapapeles' : ''; }
+  for (const id of ['history-purge', 'history-compact']) $<HTMLButtonElement>(`#${id}`).disabled = !connected || busyAction || replaying;
+}
+/** Search in the saved output (case insensitive); Enter: next, Shift+Enter: previous. */
+function findInHistory(backwards: boolean, restart = false) {
+  const view = historyView(); if (!view) return;
+  const query = $<HTMLInputElement>('#history-search').value.trim();
+  if (!query) { view.term.clearSelection(); text('#history-search-count', ''); historySearch = { query: '', index: -1 }; return; }
+  const needle = query.toLocaleLowerCase(); const buffer = view.term.buffer.active;
+  const matches: { row: number; col: number }[] = [];
+  for (let row = 0; row < buffer.length && matches.length < 1000; row++) {
+    const line = buffer.getLine(row)?.translateToString(true).toLocaleLowerCase() ?? '';
+    for (let at = line.indexOf(needle); at >= 0 && matches.length < 1000; at = line.indexOf(needle, at + needle.length)) matches.push({ row, col: at });
+  }
+  if (!matches.length) { view.term.clearSelection(); text('#history-search-count', 'Sin coincidencias'); historySearch = { query, index: -1 }; return; }
+  const index = restart || historySearch.query !== query || historySearch.index < 0 ? (backwards ? matches.length - 1 : 0)
+    : (historySearch.index + (backwards ? -1 : 1) + matches.length) % matches.length;
+  historySearch = { query, index };
+  const match = matches[index];
+  view.term.select(match.col, match.row, query.length);
+  view.term.scrollToLine(Math.max(0, match.row - Math.floor(view.term.rows / 2)));
+  text('#history-search-count', `${index + 1} de ${matches.length}${matches.length >= 1000 ? '+' : ''}`);
+}
+/** The saved output as text: wrapped rows joined, trailing empty rows dropped. */
+function historyText(view: View) {
+  const buffer = view.term.buffer.active; const lines: string[] = [];
+  for (let row = 0; row < buffer.length; row++) {
+    const line = buffer.getLine(row); if (!line) continue;
+    const value = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += value; else lines.push(value);
+  }
+  while (lines.length && !lines.at(-1)!.trim()) lines.pop();
+  return lines.join('\n');
+}
+$('#history-back').addEventListener('click', leaveHistory);
+$('#history-search').addEventListener('input', () => findInHistory(false, true));
+$('#history-search').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); findInHistory(event.shiftKey); }
+  else if (event.key === 'Escape' && $<HTMLInputElement>('#history-search').value) { event.preventDefault(); event.stopPropagation(); $<HTMLInputElement>('#history-search').value = ''; findInHistory(false, true); }
+});
+$('#history-copy').addEventListener('click', () => {
+  const view = historyView(); if (!view) return;
+  void navigator.clipboard.writeText(historyText(view)).then(() => notice('Salida copiada.'), e => notice(message(e), true));
+});
+$('#history-new').addEventListener('click', () => { const s = historyView()?.session; if (s?.cwd) openNew(s.cwd); });
+$('#history-continue').addEventListener('click', () => { const s = historyView()?.session; if (s) void action(async () => { await continueConversation(s.id, panes[focusedPane]); }); });
+{
+  const menu = $<HTMLDetailsElement>('#history-menu'); const summary = menu.querySelector<HTMLElement>('summary')!;
+  const floating = { contains: (node: Node) => menu.contains(node), close: (restore: boolean) => { if (!menu.open) return; menu.open = false; if (restore) summary.focus({ preventScroll: true }); } };
+  summary.addEventListener('click', () => { if (!menu.open) claimFloating(floating); });
+  menu.addEventListener('toggle', () => { if (menu.open) claimFloating(floating); else releaseFloating(floating); });
+  menu.addEventListener('keydown', event => { if (event.key === 'Escape' && menu.open) { event.preventDefault(); event.stopPropagation(); floating.close(true); } });
+  for (const [id, op] of [['history-purge', 'purge_history'], ['history-compact', 'compact_history']] as const) $(`#${id}`).addEventListener('click', () => {
+    const s = historyView()?.session; floating.close(true); if (s) historyAction(op, s.id);
+  });
+}
+$('#history-view').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented || $<HTMLDetailsElement>('#history-menu').open) return;
+  event.preventDefault(); leaveHistory();
+});
 /** Same as the former «Volver a terminal»: a Pulso draft or failed save keeps the board. */
 function leavePulso() {
   if (stageView !== 'pulso') return;

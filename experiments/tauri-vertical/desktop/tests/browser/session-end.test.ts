@@ -52,7 +52,10 @@ try {
         assert.match(await page.locator('#notice-text').innerText(), /terminada.*Historial/);
         await page.locator('button[data-filter="closed"]').click();
         await page.locator('#session-list [data-session-id="open-0"]').click();
-        assert.equal(await page.locator('.pane:nth-child(1) .history-banner').isVisible(), true, 'read only from Historial');
+        // 1.4.0: a Terminada chosen from Historial opens the Historial view, never a pane.
+        await page.locator('#history-view').waitFor();
+        assert.match(await page.locator('#history-state').innerText(), /Terminada · solo lectura/);
+        assert.equal(await paneSession(page), 'open-2', 'the pane keeps its working session');
         assert.deepEqual(await page.evaluate(() => (window as any).workbench.inputs), []);
       });
 
@@ -84,7 +87,7 @@ try {
       await t.test('an end nobody asked for keeps the pane, labels it and offers Cerrar', async () => {
         const page = await open(2);
         await page.evaluate(() => (window as any).workbench.setStatus('open-0', 'exited'));
-        await page.waitForFunction(() => document.querySelector('.pane:nth-child(1) .session-state')?.textContent === 'Cerrada');
+        await page.waitForFunction(() => document.querySelector('.pane:nth-child(1) .session-state')?.textContent === 'Terminada');
         assert.equal(await paneSession(page), 'open-0', 'the pane stays to read the last output');
         assert.equal(await page.locator('.pane:nth-child(1) .history-banner').isVisible(), true);
         const close = page.locator('.pane:nth-child(1) .pane-close');
@@ -94,7 +97,7 @@ try {
         assert.equal(await focusIn(page), 'pane:open-1');
       });
 
-      await t.test('an uncertain stop says so and offers Liberar carpeta; a stop that never answers stops saying «Terminando…»', async () => {
+      await t.test('an uncertain stop says so and offers Liberar plaza; a stop that never answers stops saying «Terminando…»', async () => {
         const page = await open(2);
         await page.evaluate(() => (window as any).workbench.stopMode('needs_attention'));
         await terminate(page);

@@ -127,7 +127,7 @@ try{
       await install(page, '', {mainClosed:true}); await page.goto(url);
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
-      const resume=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Reanudar.*principal/}); await resume.waitFor();
+      const resume=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Continuar.*principal/}); await resume.waitFor();
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>/resume_native|^(start|input)$/.test(c.op))),[]);
       const bindings=await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>c.op==='native_binding'));
       assert.deepEqual(bindings.map((c:any)=>c.args),[{id:'main'}]);

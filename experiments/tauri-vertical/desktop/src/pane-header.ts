@@ -4,7 +4,7 @@ import { icon } from './ui';
 
 /**
  * One fixed 32 px heading per pane: provider, session name (opens the session
- * picker), folder, state label, Interrumpir and the "…" menu. Everything in it
+ * picker), folder, state label, Cancelar (Ctrl-C) and the "…" menu. Everything in it
  * is nowrap and clipped, so no state, alert or name change can alter the height
  * left to the terminal host below it (docs/SESSION_ALERTS.md).
  */
@@ -16,17 +16,20 @@ export function paneMarkup(index: number) {
     + `<span class="pane-status"><span class="agent-indicator" aria-hidden="true"></span><span class="session-state">Sin sesión</span></span>`
     + `<span class="history-banner" hidden><span class="history-long"></span><span class="history-short">Solo lectura</span></span>`
     + `<button type="button" data-action="close-pane" class="quiet pane-close" hidden aria-label="Quitar la sesión terminada de este panel" title="Quitar esta sesión del panel; sigue en Historial">Cerrar</button>`
-    + `<button data-action="interrupt" data-label="Interrumpir" class="icon-button interrupt-button" aria-label="Interrumpir (Ctrl-C)" title="Interrumpir (Ctrl-C)">${icon('interrupt')}</button>`
+    + `<button data-action="interrupt" data-label="Cancelar (Ctrl-C)" class="icon-button interrupt-button" aria-label="Cancelar (Ctrl-C)" aria-description="Cancela lo que está haciendo; la sesión sigue abierta" title="Cancelar (Ctrl-C) · Cancela lo que está haciendo; la sesión sigue abierta">${icon('interrupt')}</button>`
     + `<details class="pane-menu"><summary aria-label="Acciones de la sesión" title="Acciones de la sesión">${icon('more')}</summary><div class="pane-menu-content">`
     + `<div class="pane-menu-info"><span class="pane-menu-folder">Sin carpeta</span><span class="pane-menu-meta"></span></div>`
     + `<button data-action="copy-cwd">Copiar carpeta</button><button data-action="copy-id">Copiar identificador</button>`
     + `<button data-action="new-in-folder">Nueva sesión en esta carpeta…</button>`
     + `<button data-action="rename" hidden>Cambiar nombre…</button>`
     + `<button data-action="stop" data-label="Terminar" class="danger stop-button" disabled>${icon('stop')}Terminar sesión…</button>`
-    + `<button data-action="release" hidden>Liberar carpeta…</button>`
+    + `<button data-action="release" hidden title="Jauría no puede confirmar que el proceso terminó; libera su plaza sin señalarlo">Liberar plaza…</button>`
     + `<p class="pane-menu-note" hidden></p><button data-action="purge" hidden>Eliminar salida guardada…</button><button data-action="compact" hidden>Compactar eventos antiguos…</button>`
     + `<div class="fixture-controls" hidden><button data-action="shell">Shell de prueba</button><button data-action="ping">Ping</button><button data-action="size">Tamaño</button><button data-action="flood">Carga</button></div>`
     + `</div></details></div>`
+    // Recovery of an Interrumpida: floats over the terminal (absolute), never changes its size.
+    + `<section class="pane-recovery" role="region" aria-label="Recuperar la sesión interrumpida" hidden><div class="pane-recovery-copy"><p class="pane-recovery-title">Sesión interrumpida</p><p class="pane-recovery-detail"></p><p class="pane-recovery-note"></p></div>`
+    + `<div class="pane-recovery-actions"><button type="button" class="primary" data-recovery="primary">Continuar conversación</button><button type="button" class="secondary" data-recovery="output">Ver salida</button><button type="button" class="quiet" data-recovery="expand" hidden>Opciones…</button><button type="button" class="quiet" data-recovery="dismiss" title="La pasa a Terminadas; no borra nada">Descartar</button></div></section>`
     + `<div class="terminal-host"><div class="empty"><span>${icon('split')}</span><strong>Elige otra sesión</strong><p>Pulsa el nombre en la cabecera del panel para elegir una sesión y verla junto a la actual.</p></div></div>`;
 }
 

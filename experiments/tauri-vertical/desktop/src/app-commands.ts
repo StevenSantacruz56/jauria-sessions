@@ -8,9 +8,9 @@ import type { ActivityKind } from './session-activity';
 /**
  * The workbench commands, in palette order. Each one calls a function main.ts
  * already uses for its button or menu; availability mirrors that control's
- * disabled state and says why. Terminar, Interrumpir and Cambiar nombre never
+ * disabled state and says why. Terminar, Cancelar (Ctrl-C) and Cambiar nombre never
  * act directly: they open the confirmation dialog, focus the pane's existing
- * Interrumpir control, or open the rename form. No command sends or pastes
+ * Cancelar (Ctrl-C) control, or open the rename form. No command sends or pastes
  * text into a terminal, and none grants Pulso access.
  */
 export type Theme = 'system' | 'light' | 'dark';
@@ -129,7 +129,7 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
     theme('system'), theme('light'), theme('dark'),
     { id: 'rename', label: focused ? `Cambiar nombre de ${focused.title}…` : 'Cambiar nombre de la sesión…', keywords: 'renombrar título', confirmation: 'dialog',
       unavailable: () => !c.renameSupported ? 'El runner no permite cambiar nombres' : sessionControl(c, false), run: () => { if (focused) a.rename(focused.id); } },
-    { id: 'interrupt', label: focused ? `Interrumpir ${focused.title} (Ctrl-C)…` : 'Interrumpir la sesión (Ctrl-C)…', keywords: 'ctrl-c cancelar parar', confirmation: 'control',
+    { id: 'interrupt', label: focused ? `Cancelar lo que hace ${focused.title} (Ctrl-C)…` : 'Cancelar lo que hace la sesión (Ctrl-C)…', keywords: 'ctrl-c cancelar interrumpir parar sigue abierta', confirmation: 'control',
       unavailable: () => focused?.structured ? 'Las conversaciones de Codex se detienen desde su panel' : sessionControl(c, true), run: () => { if (focused) a.interrupt(focused.id); } },
     { id: 'stop', label: focused ? `Terminar ${focused.title}…` : 'Terminar la sesión…', keywords: 'detener cerrar matar proceso', confirmation: 'dialog',
       unavailable: () => sessionControl(c, true), run: () => { if (focused) a.stop(focused.id); } },
@@ -140,7 +140,8 @@ export function appCommands(c: AppCommandContext): AppCommand[] {
   ];
 }
 
-export type PaletteSession = { id: string; title: string; kind: string; cwd: string | null; live: boolean };
+/** `interrupted`: an Interrumpida not dismissed (it opens in a pane with its recovery). Order: most recent first. */
+export type PaletteSession = { id: string; title: string; kind: string; cwd: string | null; live: boolean; interrupted?: boolean };
 export type PaletteSources = {
   sessions: readonly PaletteSession[];
   activityOf: (id: string) => { kind: ActivityKind; label: string };
@@ -166,7 +167,9 @@ export type PaletteSources = {
 /**
  * Palette entries. Te necesitan: sessions whose activity is «needs» or «notice»
  * (open or not), in the sidebar's priority. Sesiones: the other open sessions
- * with their state and Pulso project (else their folder). Proyectos: the
+ * and the Interrumpidas, with their state and Pulso project (else their folder);
+ * ties keep the given order (most recent first). A Terminada is never listed
+ * unless it has an alert (it opens the Historial view). Proyectos: the
  * boards of the sidebar summary, Pendientes and «Más proyectos…». Fases: the
  * phases of the project board already loaded in Pulso. Acciones:
  * the registry, with the shortcut hint and the unavailability reason.
@@ -179,9 +182,9 @@ export function paletteEntries(src: PaletteSources): PaletteItem[] {
   for (const s of sortAgents(src.sessions, id => src.activityOf(id).kind)) {
     const activity = src.activityOf(s.id);
     const needs = activity.kind === 'needs' || activity.kind === 'notice';
-    if (!needs && !s.live) continue;
+    if (!needs && !s.live && !s.interrupted) continue;
     const place = projectTitle.get(projectOf.get(s.id) ?? '') ?? s.cwd?.split('/').filter(Boolean).pop() ?? providerLabel(s.kind);
-    items.push({ id: `session:${s.id}`, group: needs ? 'needs' : 'sessions', label: s.title, detail: needs ? `${activity.label} · ${place}` : place,
+    items.push({ id: `session:${s.id}`, group: needs ? 'needs' : 'sessions', label: s.title, detail: needs ? `${activity.label} · ${place}` : s.interrupted ? `Interrumpida · ${place}` : place,
       keywords: `${providerLabel(s.kind)} ${s.cwd ?? ''} ${activity.label}`, activity: { kind: activity.kind, label: activity.label }, provider: s.kind,
       run: () => src.openSession(s.id) });
   }

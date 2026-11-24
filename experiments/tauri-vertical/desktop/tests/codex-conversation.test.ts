@@ -242,12 +242,12 @@ test('readiness false and starting/unbound connections block sends; resume requi
   }
   for (const hasNativeTurns of [undefined, false]) {
     f.snapshot = ready('a', { status: 'closed', hasNativeTurns, turns: [] }); await f.click('Actualizar estado');
-    assert.equal(f.button('Reanudar conversación').disabled, true);
+    assert.equal(f.button('Continuar conversación').disabled, true);
   }
   f.snapshot = ready('a', { status: 'closed', hasNativeTurns: true, turns: [], hasMoreTurns: true });
   await f.click('Actualizar estado');
   f.mutate = (op, args) => { assert.equal(op, 'codex_resume'); assert.deepEqual(args, { id: 'a', generation: 1 }); return { shouldSend: false }; };
-  await f.click('Reanudar conversación');
+  await f.click('Continuar conversación');
   assert.equal(f.sent('codex_resume').length, 1); assert.equal(f.sent('codex_turn').length, 0);
   assert.equal(f.input().value, 'not yet');
 });
@@ -287,8 +287,8 @@ test('interrupt ACK records intent only; a running turn stays running until obse
     assert.deepEqual(args, { id: 'a', turnId: 'turn', attemptId: 'attempt', generation: 1 });
     return { shouldSend: false, status: 'cancel_requested' };
   };
-  await f.click('Interrumpir turno');
-  assert.equal(f.button('Interrupción solicitada').disabled, true);
+  await f.click('Cancelar turno');
+  assert.equal(f.button('Cancelación solicitada').disabled, true);
   assert.match(f.byClass('codex-conversation-turns')[0].textContent, /En ejecución/);
   assert.doesNotMatch(f.byClass('codex-conversation-turns')[0].textContent, /finalizado/);
   await f.poll(); assert.equal(f.sent('codex_interrupt').length, 1);
@@ -311,7 +311,7 @@ test('selection races keep state polling sequential; stale generations and dispo
   assert.equal(f.sent('codex_state').at(-1)!.args.id, 'b');
   f.draft('preserve selection'); f.input().setSelectionRange(3, 8);
   f.read = args => ready(args.id, { generation: 1, status: 'closed' }); await f.poll();
-  assert.equal(f.button('Reanudar conversación').hidden, true, 'Lower generation ignored');
+  assert.equal(f.button('Continuar conversación').hidden, true, 'Lower generation ignored');
   assert.equal(f.input().value, 'preserve selection'); assert.equal(f.input().selectionStart, 3);
   const late = deferred(); f.read = () => late.promise;
   await f.poll(); assert.equal(f.timers.size, 0);

@@ -195,7 +195,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await ended.click();
           await counts(page, 1, 0);
           assert.equal(await rows.count(), 1);
-          assert.match(await rows.textContent() ?? '', /Codex historical failure.*Visto.*Falló/s);
+          assert.match(await rows.textContent() ?? '', /Codex historical failure.*Visto.*Interrumpida · No llegó a iniciarse/s);
           const states = await page.evaluate(() => (window as any).attentionFixture.snapshot().sessions);
           assert.equal(states.find((s: any) => s.id === 'old-failed').status, 'failed');
           assert.equal(states.find((s: any) => s.id === 'background').status, 'stopped');
@@ -240,13 +240,13 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
         });
       });
 
-      await t.test('active failure remains persistent while attended; leaving makes it new; mark-seen preserves failure and custody', async () => {
+      await t.test('active failure remains persistent while attended; leaving makes it new; mark-seen retires seen failures (1.4.0) and preserves custody', async () => {
         await fixture(async page => {
           await transition(page, 'foreground', 'failed');
           await counts(page, 2, 0);
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           const failed = page.locator('#session-list .session-item').filter({ hasText: 'Claude foreground' });
-          assert.match(await failed.textContent() ?? '', /Falló/);
+          assert.match(await failed.textContent() ?? '', /Interrumpida · No llegó a iniciarse/);
           assert.doesNotMatch(await failed.textContent() ?? '', /El proceso terminó/);
           await page.locator('[data-filter="open"]').click();
           await page.locator('#session-list .session-item').filter({ hasText: 'Claude background' }).click();
@@ -255,9 +255,10 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await counts(page, 3, 1); // Custody is attended; only the background failure is new.
           await page.locator('#session-alerts').click();
           await page.locator('#see-attention').click();
-          await counts(page, 3, 0);
+          // 1.4.0: seen interruptions and failures leave the alerts (they stay in Interrumpidas); custody in doubt stays.
+          await counts(page, 1, 0);
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
-          assert.equal(await page.locator('#session-list .session-item').count(), 3);
+          assert.equal(await page.locator('#session-list .session-item').count(), 1);
           assert.match(await page.locator('#session-list').textContent() ?? '', /custodia/);
           const states = await page.evaluate(() => (window as any).attentionFixture.snapshot().sessions);
           assert.equal(states.find((s: any) => s.id === 'foreground').status, 'failed');
@@ -272,12 +273,13 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await counts(page, 2, 1);
           await page.locator('#session-alerts').click();
           await page.locator('#see-attention').click();
-          await counts(page, 2, 0);
+          // 1.4.0: the seen historical failure leaves the alerts; the pending permissions stay, seen.
+          await counts(page, 1, 0);
           await page.locator('#attention-filter').click(); // Sidebar list of sessions with alerts.
           assert.match(await page.locator('#session-list').textContent() ?? '', /Visto.*2 permisos pendientes/s);
           const reads = await page.evaluate(() => (window as any).attentionFixture.snapshot().permissionReads);
           await page.waitForFunction(n => (window as any).attentionFixture.snapshot().permissionReads > n, reads);
-          await counts(page, 2, 0);
+          await counts(page, 1, 0);
           assert.equal(await page.evaluate(() => (window as any).attentionFixture.snapshot().pending), 2);
         }, true);
       });
@@ -300,7 +302,8 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           assert.deepEqual(await geometry(page), before, 'dialogs and rename preserve fitted terminal geometry');
           await pane.locator('.pane-session-button').click();
           assert.deepEqual(await pane.locator('.session-picker [role="group"]').evaluateAll(groups => groups.map(g => ({label: g.querySelector('.session-picker-group')?.textContent, count: g.querySelectorAll('[role="option"]').length}))), [
-            {label: 'Abiertas', count: 2}, {label: 'Historial', count: 1},
+            // 1.4.0: no Historial group; the old Codex-in-terminal failure cannot be continued, so it is not offered.
+            {label: 'Abiertas', count: 2},
           ]);
           assert.equal(await pane.locator('.session-picker [role="option"][aria-selected="true"]').textContent().then(t => t?.includes('Claude Code')), true);
           await page.keyboard.press('Escape');

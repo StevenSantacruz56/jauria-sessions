@@ -31,6 +31,8 @@ export type PulsoPanelOptions = {
   backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
+  /** Empezar de nuevo aquí: the new-session dialog prefilled with the session's folder, provider and name. */
+  restartSession?: (id: string) => void;
   /** Board selection or saved data changed (read-only signal for the sidebar summary). */
   onChange?: () => void;
   /** Runner 1.4 (pulsoRevisionVersion): `statusChanged` replaces the 2 s revision timer. */
@@ -261,7 +263,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     progress.title=total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'}`:'Añade una tarjeta en la columna donde quieras empezar.';
     toolbar.append(title,progress);
     if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet pulso-plan-button'));
-    if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Reanudar sesión principal');toolbar.append(recovery);}
+    if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Continuar sesión principal');toolbar.append(recovery);}
     closeMoveMenu(false);board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';
     for(const status of statuses){
       const column=el('section','','pulso-column');column.dataset.state=status;column.setAttribute('aria-label',labels[status]);
@@ -539,7 +541,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     }, async data => {dirty=false;await chooseItem(data.item);await reloadBoard();})); checkpoint.append(discardButton());const saveAdvance=el('details');saveAdvance.append(el('summary','Guardar avance'),checkpoint);detail.append(saveAdvance);
     const recover = el('section', '', 'pulso-section'); recover.append(el('h3', 'Continuar fase'));
     const recent=[...checkpoints].sort(checkpointOrder).at(-1);const recoveryId=recent?.sessionId??links[0]?.sessionId??selectedProject?.mainSessionId;
-    if(recoveryId)recoveryAction(recover,recoveryId,'Abrir sesión de la fase','Reanudar sesión de la fase');
+    if(recoveryId)recoveryAction(recover,recoveryId,'Abrir sesión de la fase','Continuar sesión de la fase');
     recover.append(el('p', 'Prepara el contexto, revísalo y cópialo. Tú decides dónde pegarlo.', 'pulso-muted'));
     const composer = el('div', '', 'pulso-context-composer'); composer.hidden = true;
     recover.append(button('Preparar contexto', () => { composer.hidden = false; }));
@@ -576,7 +578,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   function sessionsBlock(host: HTMLElement, ids: string[], recoveryId: string | null, rowRecoveryExcludeId?: string | null) {
     const section = el('section', '', 'pulso-section'); section.append(el('h3', 'Sesiones vinculadas'));
-    if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Reanudar sesión principal', false);
+    if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Continuar sesión principal', false);
     const actionAboveId = rowRecoveryExcludeId ?? recoveryId;
     if (!ids.length) section.append(el('p', 'Sin sesiones vinculadas.', 'pulso-muted'));
     const known = options.sessions();
@@ -598,7 +600,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         row.append(el('span', 'Historial local · sesión finalizada o no disponible', 'pulso-muted'));
         if(s)row.append(button('Ver historial',()=>options.openSession(id)));
         if (rowRecoveryExcludeId !== undefined && id !== rowRecoveryExcludeId)
-          recoveryAction(row, id, 'Abrir sesión vinculada', 'Reanudar conversación', false);
+          recoveryAction(row, id, 'Abrir sesión vinculada', 'Continuar conversación', false);
       }
       section.append(row);
     }
@@ -630,10 +632,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     try{
       const next=await options.resumeSession!(id);started=true;bindings.delete(id);
       if(next&&scope)await request('link',{...scope,sessionId:next,requestId:`resume-link-${next}-${'itemId' in scope?'item':'project'}-${'itemId' in scope?scope.itemId:scope.projectId}`});
-      if(!disposed)options.notice('Conversación abierta con su identidad guardada.');
+      // The common continuation shows its own notice (Pulso links inherited, or why not).
     }catch{
       if(started)options.notice('La sesión se abrió; no se confirmó el vínculo con el plan. Puedes vincularla manualmente.');
-      else say('No se pudo reanudar la conversación. Comprueba la conexión y reintenta. El historial y el contexto guardado se conservan.');
+      else say('No se pudo continuar la conversación. Comprueba la conexión y la plaza libre y reintenta. El historial y el contexto guardado se conservan.');
     }finally{busy=false;if(!disposed)freeze();}
   }
   function recoveryAction(host:HTMLElement,id:string,liveLabel:string,resumeLabel:string,primary=true){
@@ -664,7 +666,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         if(active)area.append(button('Abrir conversación activa',()=>options.openSession(active.id),primary?'primary':'quiet'));
         else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!isClosed(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
         else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
-        else area.append(el('span',session?.kind==='codex'?'Codex: continúa con el historial local o el contexto de la fase.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
+        else {
+          area.append(el('span',session?.kind==='codex'?'Codex en terminal no permite continuar la conversación.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
+          if(options.restartSession&&session?.cwd)area.append(button('Empezar de nuevo aquí',()=>options.restartSession!(id),'quiet'));
+        }
         freeze();restoreRecoveryFocus();
       }catch{
         if(disposed||!area.isConnected||!root.contains(area))return;

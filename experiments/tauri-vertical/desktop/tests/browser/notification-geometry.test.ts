@@ -56,6 +56,7 @@ async function installMock(page: Page) {
       resizes, badges, unexpected, output, inputs, marks,
       agent(value: any) { agent = value; },
       focus(value: boolean) { focused = value; },
+      end(id: string) { for (const item of [session, other, closed]) if (item.id === id) item.status = 'exited'; },
       failInterrupt(value: string) { interruptError = value; },
       holdReplay(value: boolean) { holdReplay = value; },
       snapshot() { return { resizes: structuredClone(resizes), evidence: structuredClone(evidence) }; },
@@ -385,10 +386,11 @@ try {
                 await page.locator('#session-1').click();
                 await page.locator(`.pane:nth-child(2) .session-picker [role="option"][data-session-id="${id}"]`).click();
               };
-              // (b, e) A closed session in pane 2 shows the read-only label; its host keeps its size.
-              await choose('history');
-              await page.locator('.pane:nth-child(2) .history-banner').waitFor({ state: 'visible' });
-              await same('closed history session chosen in the picker');
+              // (b) 1.4.0: the picker never offers a Terminada (it opens the Historial view instead).
+              await page.locator('#session-1').click();
+              assert.equal(await page.locator('.pane:nth-child(2) .session-picker [role="option"][data-session-id="history"]').count(), 0);
+              await page.keyboard.press('Escape');
+              await same('picker opened without a Terminada');
               // (e) «Sin sesión» empties the pane; the host keeps its size.
               await choose('');
               await page.waitForFunction(() => document.querySelector('#session-1')?.getAttribute('data-session-id') === '');
@@ -396,6 +398,10 @@ try {
               await choose('background');
               await page.waitForFunction(() => document.querySelector('#session-1')?.getAttribute('data-session-id') === 'background');
               await same('live session chosen again');
+              // (b, e) A session that ends on screen in pane 2 shows the read-only label; its host keeps its size.
+              await page.evaluate(() => (window as any).geometryFixture.end('background'));
+              await page.locator('.pane:nth-child(2) .history-banner').waitFor({ state: 'visible' });
+              await same('session ended on screen in pane 2');
               assert.deepEqual(errors, []);
             } finally { await page.close(); }
           });

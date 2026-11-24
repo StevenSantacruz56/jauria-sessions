@@ -36,8 +36,9 @@ try {
       async function page() {
         const p = await browser.newPage({ viewport: { width: 1220, height: 800 } }); t.after(() => p.close());
         await installWorkbench(p, { open: 3, closed: 1, projects: 2 }); await workbenchReady(p, url);
-        // One alert keeps the bell visible; split shows a second pane.
-        await p.evaluate(() => (window as any).workbench.out('open-2', '\u0007'));
+        // One alert keeps the bell visible; split shows a second pane (1.4.0: the most recent Abierta, open-2),
+        // so the alert goes to open-1, which no pane shows.
+        await p.evaluate(() => (window as any).workbench.out('open-1', '\u0007'));
         await p.waitForFunction(() => !document.querySelector<HTMLElement>('#session-alerts')!.hidden);
         await p.locator('#toggle-split').click(); await p.waitForTimeout(400);
         return p;

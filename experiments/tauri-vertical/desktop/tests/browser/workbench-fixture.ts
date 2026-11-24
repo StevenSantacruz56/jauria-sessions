@@ -12,6 +12,16 @@ export type WorkbenchOptions = {
   settingsVersion?: 1 | 2 | null;
   restartConfirms?: boolean;
   kinds?: string[];
+  /** Lifecycle (1.4.0): extra sessions appended after the generated ones (runner order = creation). */
+  sessions?: any[];
+  /** nativeResumeVersion 1 with native_binding/resume_native; ids with a registered Claude identity. */
+  nativeResume?: boolean;
+  bindings?: string[];
+  limit?: number;
+  /** Pulso: links in sidebar_summary, main sessions per project, board cards with their session footer. */
+  pulsoLinks?: any[];
+  mainSessions?: Record<string, string>;
+  boardItems?: any[];
 };
 
 export async function installWorkbench(page: Page, options: WorkbenchOptions = {}) {
@@ -21,17 +31,19 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
     const sessions: any[] = [];
     for (let i = 0; i < (options.open ?? 2); i++) sessions.push({ id: `open-${i}`, title: `Sesión abierta ${i + 1}`, kind: kinds[i % kinds.length], cwd: `/synthetic/open-${i}`, status: 'running', rows: 24, cols: 80 });
     for (let i = 0; i < (options.closed ?? 1); i++) sessions.push({ id: `closed-${i}`, title: `Historial ${i + 1}`, kind: kinds[i % kinds.length], cwd: `/synthetic/closed-${i}`, status: 'exited', rows: 24, cols: 80 });
-    const projects = Array.from({ length: options.projects ?? 3 }, (_, i) => ({ id: `p${i}`, title: `Proyecto sintético ${i + 1}`, mainSessionId: null, done: i % 3, total: 4 }));
+    for (const extra of options.sessions ?? []) sessions.push({ rows: 24, cols: 80, ...extra });
+    const projects = Array.from({ length: options.projects ?? 3 }, (_, i) => ({ id: `p${i}`, title: `Proyecto sintético ${i + 1}`, mainSessionId: options.mainSessions?.[`p${i}`] ?? null, done: i % 3, total: 4 }));
+    const links: any[] = [];
     const events: any[] = []; const resizes: any[] = []; const inputs: any[] = []; const calls: any[] = []; const native: any[] = [];
-    let settings: any = { schemaVersion: 2, maxConcurrentSessions: 8, maxSupportedSessions: 8, pulsoAutoAccess: true };
+    let settings: any = { schemaVersion: 2, maxConcurrentSessions: options.limit ?? 8, maxSupportedSessions: 8, pulsoAutoAccess: true };
     if (options.settingsVersion === 1) settings = { schemaVersion: 1, maxConcurrentSessions: 8, maxSupportedSessions: 8 };
     const out = (sessionId: string, data: string) => events.push({ seq: events.length + 1, sessionId, kind: 'output', data: btoa(unescape(encodeURIComponent(data))) });
     const status = () => structuredClone({ pid: 77, generation: 'workbench', ...(options.runnerVersion === null ? {} : { runnerVersion: options.runnerVersion ?? '1.4.0' }),
       pulsoVersion: 1, pulsoBoardVersion: 1, pulsoAvailable: true, pulsoSummaryVersion: 1, pulsoRevisionVersion: 1, pulsoRevision: 1,
-      normalTerminalVersion: 1, sessionRenameVersion: 1, telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
+      normalTerminalVersion: 1, sessionRenameVersion: 1, ...(options.nativeResume ? { nativeResumeVersion: 1, pulsoBoardCardsVersion: 1 } : {}), telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
       ...(options.settingsVersion === null ? {} : { settingsVersion: options.settingsVersion ?? 2, settings }), sessions, lastSeq: events.length });
     let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
-    w.workbench = { out, resizes, inputs, calls, native, sessions, get settings() { return settings; },
+    w.workbench = { out, resizes, inputs, calls, native, sessions, links, get settings() { return settings; },
       setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart() { failNextStart = true; }, stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
       if (cmd === 'connect_runner') { native.push(cmd); return { dataDir: '/synthetic-profile', socket: '/synthetic.sock', status: status(), smoke: false }; }
@@ -45,11 +57,12 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       if (cmd === 'confirm_history') { native.push([cmd, a.op]); return { ok: false, error: 'Cancelado' }; }
       if (cmd === 'pulso_request') {
         calls.push(a.op);
-        if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: false, pendingOpen: 2, links: [], linksTruncated: false } };
+        if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: false, pendingOpen: 2, links: structuredClone(options.pulsoLinks ?? []), linksTruncated: false } };
+        if (a.op === 'link') { links.push(structuredClone(a.args)); return { ok: true, result: { link: { id: `link-${links.length}`, ...a.args } } }; }
         if (a.op === 'revision') return { ok: true, result: { revision: 1 } };
         if (a.op === 'projects') return { ok: true, result: { projects: projects.map(p => ({ id: p.id, title: p.title, plan: '', mainSessionId: null, revision: 1, archived: false, createdAt: 1, updatedAt: 1 })), revision: 1, totalCount: projects.length, hasMore: false } };
         if (a.op === 'policies') return { ok: true, result: { policies: [] } };
-        if (a.op === 'board') return { ok: true, result: { revision: 1, columns: Object.fromEntries(['todo', 'doing', 'waiting', 'done'].map(s => [s, { items: [], totalCount: 0, hasMore: false }])) } };
+        if (a.op === 'board') return { ok: true, result: { revision: 1, columns: Object.fromEntries(['todo', 'doing', 'waiting', 'done'].map(s => [s, { items: s === 'doing' ? structuredClone((options.boardItems ?? []).filter((item: any) => item.projectId === a.args.projectId)) : [], totalCount: 0, hasMore: false }])) } };
         if (a.op === 'items') return { ok: true, result: { items: [], revision: 1, totalCount: 0, hasMore: false } };
         return { ok: false, error: 'unexpected' };
       }
@@ -62,7 +75,13 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
         if (a.op === 'set_settings') { native.push(['set_settings', structuredClone(a.args)]); settings = { ...settings, ...a.args }; return { ok: true, result: structuredClone(settings) }; }
         if (a.op === 'resize') { resizes.push(structuredClone(a.args)); const s = sessions.find(s => s.id === a.args.id); if (s) { s.cols = a.args.cols; s.rows = a.args.rows; } return { ok: true, result: { cols: a.args.cols, rows: a.args.rows } }; }
         if (a.op === 'input') { inputs.push(structuredClone(a.args)); return { ok: true, result: {} }; }
-        if (a.op === 'native_binding') return { ok: true, result: { binding: null } };
+        if (a.op === 'native_binding') return { ok: true, result: { binding: (options.bindings ?? []).includes(a.args.id) ? { provider: 'claude', conversationId: `conv-${a.args.id}`, source: 'reserved', resumedFrom: null } : null, activeSessionId: null } };
+        if (a.op === 'resume_native') {
+          native.push(['resume_native', a.args.sourceId]);
+          const from = sessions.find(s => s.id === a.args.sourceId);
+          const s = { id: a.args.id, title: from.title, kind: 'claude', cwd: from.cwd, status: 'starting', pid: 900, rows: a.args.rows, cols: a.args.cols };
+          sessions.push(s); return { ok: true, result: structuredClone(s) };
+        }
         if (a.op === 'interrupt') return { ok: true, result: {} };
         if (a.op === 'stop') {
           native.push(['stop', a.args.id]);

@@ -88,11 +88,11 @@ try {
       await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent?.includes('b'),undefined,{timeout:250});
       assert.equal(await page.evaluate(()=>(window as any).priorityFixture.waiting),true,'old background request is still held');
       await page.evaluate(()=>(window as any).priorityFixture.finishBackground());
-      await page.waitForFunction(()=>document.querySelector('.pane-heading .session-state')?.textContent==='Cerrada');
+      await page.waitForFunction(()=>document.querySelector('.pane-heading .session-state')?.textContent==='Terminada');
       await page.evaluate(()=>(window as any).priorityFixture.release());
       await page.waitForTimeout(200);
       assert.equal((await page.locator('.xterm-rows').textContent())?.split('b').length,2,'stale response cannot duplicate output');
-      assert.equal(await page.locator('.pane-heading .session-state').first().textContent(),'Cerrada','late snapshot cannot reopen a closed session');
+      assert.equal(await page.locator('.pane-heading .session-state').first().textContent(),'Terminada','late snapshot cannot reopen a closed session');
       await choose(page,0,'foreground');
       await page.evaluate(()=>(window as any).priorityFixture.hold());
       await page.waitForFunction(()=>(window as any).priorityFixture.waiting);

@@ -607,3 +607,50 @@ html[data-theme="dark"] .brand-dark { display: block; }
 
 /* Planning occupies the existing stage without remounting terminal hosts. */
 .pulso-panel-host { flex: 1; min-height: 0; overflow: hidden; background: var(--surface); }
+
+/* Session lifecycle (1.4.0). Recovery of an Interrumpida: floats over the terminal
+ * (absolute inside the pane), so showing, folding or hiding it never resizes the PTY. */
+.pane-recovery { position: absolute; left: 50%; top: 50%; z-index: 8; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 12px; width: min(440px, calc(100% - 32px)); max-height: calc(100% - 52px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--raised); color: var(--text); box-shadow: var(--shadow); white-space: normal; }
+.pane-recovery-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pane-recovery-title { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.pane-recovery-detail, .pane-recovery-note { margin: 0; color: var(--muted); font-size: 12px; }
+.pane-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pane-recovery-actions [data-recovery="dismiss"] { margin-left: auto; }
+/* «Ver salida»: a bar at the bottom of the pane so the last output can be read. */
+.pane-recovery[data-folded="true"] { top: auto; bottom: 10px; transform: translateX(-50%); flex-direction: row; align-items: center; width: min(560px, calc(100% - 24px)); padding: 6px 6px 6px 12px; gap: 8px; }
+.pane-recovery[data-folded="true"] .pane-recovery-detail, .pane-recovery[data-folded="true"] .pane-recovery-note { display: none; }
+.pane-recovery[data-folded="true"] .pane-recovery-copy { flex: 1 1 auto; }
+.pane-recovery[data-folded="true"] .pane-recovery-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-recovery[data-folded="true"] .pane-recovery-actions { flex-wrap: nowrap; }
+.pane-recovery[data-folded="true"] [data-recovery="dismiss"] { margin-left: 0; }
+
+/* Interrumpidas inside Abiertas: the row and its Descartar. */
+.session-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.session-row > .session-item { flex: 1 1 auto; min-width: 0; }
+.session-dismiss { flex: 0 0 auto; min-height: 24px; height: 24px; padding: 0 7px; color: var(--muted); font-size: 11px; }
+.session-dismiss:hover:not(:disabled) { color: var(--text); }
+
+/* Vista Historial: a Terminada read in the stage, like Pulso; never a working pane. */
+.history-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; background: var(--surface); }
+.history-view[hidden] { display: none; }
+.history-head { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 24px; border-bottom: 1px solid var(--border); min-width: 0; white-space: nowrap; }
+.history-title { margin: 0; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 16px; font-weight: 600; }
+.history-folder { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dim); font: 11px/1.4 "JetBrains Mono", ui-monospace, monospace; }
+.history-state { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+.history-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 24px; border-bottom: 1px solid var(--border); }
+.history-actions-spacer { flex: 1 1 auto; }
+.history-search { margin: 0; width: min(240px, 100%); }
+.history-search-count { min-width: 9ch; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.history-menu { position: relative; }
+.history-menu .pane-menu-content { top: 36px; right: 0; }
+.history-terminal { position: relative; flex: 1 1 auto; min-height: 0; margin: 12px 24px 24px; overflow: auto; padding: 10px 8px 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--terminal); }
+.history-terminal > .terminal-view { position: relative; width: max-content; min-width: 100%; height: 100%; }
+.history-terminal .xterm { height: 100%; }
+@media (max-width: 760px) {
+  .history-head, .history-actions { padding-inline: 16px; }
+  .history-terminal { margin: 8px 16px 16px; }
+  .history-folder { display: none; }
+}
+.history-menu summary { width: 32px; height: 32px; min-height: 32px; padding: 8px; color: var(--muted); }
+.history-menu summary:hover { background: var(--hover); color: var(--text); }
+.history-menu summary .icon { width: 16px; height: 16px; }
