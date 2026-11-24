@@ -177,7 +177,8 @@ try {
         assert.equal(await startCalls(page), 1);
         await page.locator('#new-session').focus(); await page.keyboard.press('Enter'); await page.locator('#new-session-dialog[open]').waitFor();
         await page.keyboard.press('Escape'); await page.locator('#new-session-dialog[open]').waitFor({ state: 'detached' });
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'new-session');
+        // Focus returns in the dialog's `close` task, after `open` is gone: wait for it to land.
+        await page.waitForFunction(() => document.activeElement?.id === 'new-session', undefined, { timeout: 2000 });
       });
 
       await t.test('at 760×560 the dialog fits without horizontal scroll', async () => {

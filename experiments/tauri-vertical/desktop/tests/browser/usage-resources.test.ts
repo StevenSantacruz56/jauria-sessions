@@ -11,6 +11,14 @@ import test from 'node:test';
 import { chromium, webkit, type Page } from 'playwright';
 import { createServer } from 'vite';
 import { installWorkbench, rect, resizeCount, workbenchReady, type WorkbenchOptions } from './workbench-fixture.ts';
+/**
+ * A dialog loses `open` at once but its `close` event, which returns focus, is a later task: reading
+ * `activeElement` right after the attribute goes is a race. Wait for focus to land, then report.
+ */
+async function focusOn(page: import('playwright').Page, id: string) {
+  try { await page.waitForFunction(expected => document.activeElement?.id === expected, id, { timeout: 2000 }); }
+  catch { assert.equal(await page.evaluate(() => document.activeElement?.id), id, 'focus after closing the dialog'); }
+}
 
 const server = await createServer({ configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0, hmr: false } });
 await server.listen();
@@ -68,7 +76,7 @@ try {
         await page.waitForTimeout(300); assert.equal(await resizeCount(page), resizes);
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => !document.querySelector('#telemetry-dialog[open]'));
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-telemetry');
+        await focusOn(page, 'open-telemetry');
         await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
         // «Cerrar» is a secondary button: a visible border, not bare text.
         const close = page.locator('#telemetry-dialog').getByRole('button', { name: 'Cerrar', exact: true });
@@ -78,7 +86,7 @@ try {
         assert.doesNotMatch(look.color, /rgba\(0, 0, 0, 0\)|transparent/);
         await close.click();
         assert.equal(await page.locator('dialog[open]').count(), 0);
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-telemetry');
+        await focusOn(page, 'open-telemetry');
         assert.equal(await resizeCount(page), resizes);
       });
 
@@ -176,9 +184,9 @@ try {
         await page.waitForTimeout(300);
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => !document.querySelector('dialog[open]'));
-        const focused = await page.evaluate(() => { const node = document.activeElement as HTMLElement | null;
-          return { id: node?.id, visible: !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' }; });
-        assert.deepEqual(focused, { id: 'toggle-sidebar', visible: true });
+        await focusOn(page, 'toggle-sidebar');
+        const visible = await page.evaluate(() => { const node = document.activeElement as HTMLElement; return node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden'; });
+        assert.equal(visible, true, 'the control that takes focus is visible');
       });
 
       await t.test('review: an older runner (no sessionId) neither says «Ninguna sesión abierta» nor moves sessions into Runner; an unmeasured process marks the total as partial', async () => {
@@ -216,7 +224,7 @@ try {
         await page.waitForSelector('#telemetry-dialog[open]');
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => !document.querySelector('dialog[open]'));
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'telemetry-summary');
+        await focusOn(page, 'telemetry-summary');
       });
     });
   }
