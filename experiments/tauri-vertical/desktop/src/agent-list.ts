@@ -41,7 +41,7 @@ export function paintAgentIndicator(el: HTMLElement, kind: ActivityKind, label: 
   if (el.title !== label) el.title = label;
 }
 
-/** Provider badge: C (Claude Code), X (Codex) or $ (terminal and anything else). */
+/** Provider badge: the tool's mark (CSS mask by `provider`); the letter is the text fallback. Terminal covers anything else. */
 export function providerBadge(kind: string): { provider: 'claude' | 'codex' | 'terminal'; letter: string } {
   return kind === 'claude' ? { provider: 'claude', letter: 'C' } : kind === 'codex' ? { provider: 'codex', letter: 'X' } : { provider: 'terminal', letter: '$' };
 }
