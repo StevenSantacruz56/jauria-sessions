@@ -298,7 +298,7 @@ test('real browser: attention totals, unseen header and Dock stay consistent', {
           await page.getByRole('button', {name: 'Cerrar', exact: true}).click();
           await pane.locator('.pane-menu > summary').click();
           await pane.locator('[data-action=rename]').click();
-          await page.getByLabel('Nombre de la sesión').fill('Claude Code');
+          await page.getByLabel('Nombre de la sesión', { exact: true }).fill('Claude Code');
           await page.getByRole('button', {name: 'Guardar nombre', exact: true}).click();
           await page.waitForFunction(() => !document.querySelector('dialog[open]'));
           assert.equal(await pane.locator('.pane-session-name').textContent(), 'Claude Code');
