@@ -51,14 +51,17 @@ Pulsa `⌘⇧P` o el botón de búsqueda de la barra superior para abrir la **pa
 | `⌘N` | Nueva sesión |
 | `⌘⇧P` | Paleta de comandos |
 | `⌘K` | Buscar en la lista de agentes |
-| `⌘I` | Mostrar u ocultar Información |
 | `⌘,` | Configuración |
 
-Abre **Acciones de la sesión → Cambiar nombre…** en el menú de los tres puntos del panel para cambiar el nombre de una sesión activa o del historial. El nuevo nombre se guarda localmente y no modifica la conversación del proveedor.
+El menú **«…»** de la cabecera del panel muestra la carpeta completa, el proveedor, el estado, el tamaño del terminal y el identificador de la sesión, y reúne **Copiar carpeta**, **Copiar identificador**, **Nueva sesión en esta carpeta…**, **Cambiar nombre…** y **Terminar sesión…**; en una sesión terminada, también **Eliminar salida guardada…** y **Compactar eventos antiguos…**. Se cierra al pulsar fuera, con Escape o al elegir una opción, como el resto de menús y listas flotantes. El nuevo nombre se guarda localmente y no modifica la conversación del proveedor.
 
-En **Configuración…** puedes elegir la apariencia y el máximo de sesiones. El cambio de capacidad se aplica a los próximos inicios; se mantienen las protecciones de worktree. La apariencia se guarda para la interfaz local; la capacidad se guarda en el perfil del runner.
+**Terminar sesión…** pide confirmación; cuando el runner confirma el fin, el panel pasa a la siguiente sesión abierta (primero la que te necesita, después la que terminó sin ver, la que trabaja y la usada más recientemente) o a la bienvenida si no queda ninguna, y la sesión queda en **Historial** en solo lectura. Si una sesión termina sola, el panel se queda en ella para que leas el final, con la etiqueta «Historial · solo lectura» y el botón **Cerrar** en la cabecera. Si el fin no se puede confirmar, la cabecera dice «No se pudo confirmar el cierre».
 
-Actualizar el código o reemplazar la app no actualiza un runner que ya está ejecutándose. Si Información → Diagnóstico indica un runner anterior, termina primero el trabajo activo y usa **Reiniciar runner…**. Las nuevas opciones de capacidad, renombrado y lanzamiento se habilitan con el runner actualizado; las preferencias nativas de permisos se aplican a sesiones nuevas.
+La barra lateral tiene dos zonas con su propio desplazamiento: **Proyectos** y **Agentes**. Arrastra la línea entre ellas para repartir el espacio y el borde derecho para cambiar el ancho (de 220 a 420 px); con el teclado, enfoca el divisor y usa las flechas, Inicio/Fin e Intro (o doble clic) para volver al valor inicial. Un clic en el título de cada zona la pliega o despliega. Jauría recuerda el reparto, el ancho y lo plegado para cada perfil; **Restablecer tamaño de la barra lateral** (paleta o Configuración) vuelve al inicio. En ventanas de 860 px o menos la barra es un cajón de 264 px.
+
+En **Configuración…** (`⌘,`) cada cambio se aplica y se guarda al momento; no hay botón Guardar. Secciones: **Apariencia** (tema y tamaño de letra del terminal, de 11 a 18 px), **Barra lateral** (agrupación de Agentes y restablecer tamaño), **Sesiones** (máximo de sesiones simultáneas), **Pulso y agentes** (acceso automático y acceso a mano para una sesión ya abierta), **Avisos** (avisos de macOS) y **Acerca de y diagnóstico** (versiones de la app y del runner, comprobación de Claude Code y Codex, diagnóstico revisable y **Reiniciar runner…**). El máximo de sesiones y el acceso automático se guardan en el perfil del runner; la apariencia, la letra y la barra lateral, en la interfaz local de este Mac (letra y barra lateral, por perfil).
+
+Actualizar el código o reemplazar la app no actualiza un runner que ya está ejecutándose. Si **Configuración → Acerca de y diagnóstico** indica que las versiones no coinciden o que el runner es anterior, termina primero el trabajo activo y usa **Reiniciar runner…**. Las nuevas opciones de capacidad, renombrado y lanzamiento se habilitan con el runner actualizado; las preferencias nativas de permisos se aplican a sesiones nuevas.
 
 ## Pulso: un tablero por proyecto
 
@@ -74,9 +77,9 @@ Puedes volver directamente a una sesión viva, consultar su historial o editar y
 
 ### Pulso con Claude Code y Codex
 
-Pulso es el tablero local de proyectos, fases y avances de Jauría. Desde 1.3.3, las sesiones nuevas de Claude Code y Codex iniciadas desde Jauría reciben automáticamente el MCP `jauria-pulso` y acceso a todos los proyectos locales, incluida la creación. El interruptor **Configuración → Pulso para agentes → Acceso automático a Pulso** está activado por defecto y permite apagarlo. Cada sesión usa una credencial privada revocada al terminar; Jauría no cambia los permisos nativos de archivos, comandos o red.
+Pulso es el tablero local de proyectos, fases y avances de Jauría. Desde 1.3.3, las sesiones nuevas de Claude Code y Codex iniciadas desde Jauría reciben automáticamente el MCP `jauria-pulso` y acceso a todos los proyectos locales, incluida la creación. El interruptor **Configuración → Pulso y agentes → Acceso automático a Pulso** está activado por defecto y permite apagarlo. Cada sesión usa una credencial privada revocada al terminar; Jauría no cambia los permisos nativos de archivos, comandos o red.
 
-Una conversación ya abierta no carga el MCP añadido después de iniciarse. Para continuar allí, usa **Configuración → Acceso manual para sesiones existentes** y **Copiar instrucciones para el agente**. Ese texto incluye la ruta del permiso privado, pero no su token; compártelo únicamente en la conversación elegida. Las políticas manuales recordadas pueden acotar el acceso por proyecto, herramienta y carpeta. [Alcance y seguridad](docs/PULSO.md#privacidad-permisos-y-límites).
+Una conversación ya abierta no carga el MCP añadido después de iniciarse. Para continuar allí, usa **Configuración → Pulso y agentes → Dar o quitar acceso a una sesión ya abierta** y **Copiar instrucciones para el agente**. Ese texto incluye la ruta del permiso privado, pero no su token; compártelo únicamente en la conversación elegida. Las políticas manuales recordadas pueden acotar el acceso por proyecto, herramienta y carpeta. [Alcance y seguridad](docs/PULSO.md#privacidad-permisos-y-límites).
 
 Cuando un programa emite explícitamente **OSC 7501**, la barra lateral, la pestaña y la cabecera del panel muestran su estado. Esta señal no cambia fases ni prueba que el trabajo esté validado. No se instalan hooks ni se modifica la configuración de los agentes. Sin emisión, la sesión aparece como **progreso no informado**, aunque su proceso siga abierto; el replay no genera estados ni avisos. Desde 1.4, con un runner 1.4, el runner lee esas señales y conserva el estado, la duración del turno y lo que ya viste: sobreviven a cerrar la ventana y reconectar. Con un runner 1.3.x la reconexión reinicia este estado efímero.
 
@@ -95,7 +98,7 @@ Tablero de ejemplo en Jauria 1.4.0. Captura sintética: no contiene sesiones ni 
 
 - **Sesión:** una ejecución en una carpeta. **Interrumpir (Ctrl-C)** interrumpe el trabajo actual, sin garantizar que termine la sesión. **Terminar** detiene la sesión administrada y conserva archivos e historial; no revierte cambios.
 - **Ventana:** cerrarla o salir de la interfaz deja las sesiones en ejecución en el runner local. Si el runner termina, las sesiones no se reanudan automáticamente. Vuelve a abrir con el mismo perfil de datos para consultar su estado e historial.
-- **Historial:** la salida guardada de sesiones terminadas se consulta en solo lectura; seleccionarla no reinicia el proceso. En Información puedes eliminar salida o compactar eventos de sesiones finalizadas.
+- **Historial:** la salida guardada de sesiones terminadas se consulta en solo lectura; seleccionarla no reinicia el proceso. En el menú «…» del panel puedes eliminar la salida o compactar los eventos de una sesión finalizada.
 
 Jauria admite un solo escritor administrado por worktree Git: no abras dos sesiones que editen la misma copia. Usa un worktree por cada trabajo en paralelo. Terminal comparte estas restricciones y los bloqueos de recuperación. Estas protecciones no controlan procesos que abras por fuera de Jauria ni los cambios de carpeta que hagas dentro de una shell.
 

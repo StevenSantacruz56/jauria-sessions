@@ -33,9 +33,9 @@ Return directly to a live session, inspect local history, or edit and copy phase
 
 ### Pulso, Claude Code, and Codex
 
-Pulso is Jauria's local board for projects, phases, and progress checkpoints. Since 1.3.3, new Claude Code and Codex sessions started from Jauria automatically receive the `jauria-pulso` MCP server and access to all local Pulso projects, including project creation. **Configuración → Pulso para agentes → Acceso automático a Pulso** starts enabled and can be turned off. Each session has a private, revocable credential. Native file, command, and network permissions remain with each provider.
+Pulso is Jauria's local board for projects, phases, and progress checkpoints. Since 1.3.3, new Claude Code and Codex sessions started from Jauria automatically receive the `jauria-pulso` MCP server and access to all local Pulso projects, including project creation. **Configuración → Pulso y agentes → Acceso automático a Pulso** starts enabled and can be turned off. Each session has a private, revocable credential. Native file, command, and network permissions remain with each provider.
 
-An already running conversation will not load a newly registered MCP server. For that conversation, open **Configuración → Acceso manual para sesiones existentes** and use **Copiar instrucciones para el agente**. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. Remembered manual policies can narrow access by project, provider, and directory. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
+An already running conversation will not load a newly registered MCP server. For that conversation, open **Configuración → Pulso y agentes → Dar o quitar acceso a una sesión ya abierta** and use **Copiar instrucciones para el agente**. The copied local command includes the private grant-file path, not its token; share it only in the selected conversation. Remembered manual policies can narrow access by project, provider, and directory. See [Pulso's privacy and permission limits](docs/PULSO.md#privacidad-permisos-y-límites).
 
 Explicit **OSC 7501** reports appear in the sidebar, the session tab and the pane heading. They never update phases or prove that work was validated. Jauria installs no hooks and changes no agent configuration. A running session with no report is labeled as progress not reported. Replay creates no status or alerts. Since 1.4, with a 1.4 runner, the runner reads those signals and keeps the state, the turn duration and what you have already seen, so they survive closing the window and reconnecting. With a 1.3.x runner, reconnecting resets this ephemeral state.
 
@@ -78,11 +78,12 @@ Jauria itself does not require Rust or Node to run from an app bundle. Provider 
 1. Open **Nueva sesión** (`⌘N`).
 2. Choose Codex, Claude Code or Terminal and a working directory.
 3. Optionally name the session, then select **Iniciar sesión**.
-4. Open **Configuración…** (`⌘,`) to change appearance or the concurrency limit.
+4. Open **Configuración…** (`⌘,`) to change the appearance, the terminal font size (11–18 px), the sidebar grouping and layout, the concurrency limit, Pulso access and macOS notices, or to see the app and runner versions, check the CLIs, preview a diagnostic and restart the runner. Every change applies and is saved at once; there is no Guardar button.
 5. Use **Dividir** to display two sessions side by side.
-6. Press `⌘⇧P` (or the search button in the top bar) for the **command palette**: sessions that need you, open sessions, Pulso boards and actions, filtered as you type. Unavailable actions are listed with the reason; **Terminar** and **Cambiar nombre** open their usual confirmation or form, and the palette never types into a terminal. `⌘K` still filters the agent list and `⌘I` toggles Información.
+6. Press `⌘⇧P` (or the search button in the top bar) for the **command palette**: sessions that need you, open sessions, Pulso boards and actions, filtered as you type. Unavailable actions are listed with the reason; **Terminar** and **Cambiar nombre** open their usual confirmation or form, and the palette never types into a terminal. `⌘K` still filters the agent list. The Información panel and `⌘I` were retired in 1.4.0: its useful parts moved to Configuración and to the pane's «…» menu (folder, identifier, history clean-up).
+7. The sidebar has two independently scrolling areas, **Proyectos** and **Agentes**: drag the line between them or the right edge (220–420 px), or use the arrow keys, Home/End and Enter on the focused separator; click a heading to fold it. The layout is remembered per profile.
 
-The current interface is in Spanish. Closing its window leaves sessions running in the local runner; **Terminar** stops the selected process while preserving files and saved history. **Interrumpir** sends Ctrl-C without guaranteeing that the process exits.
+The current interface is in Spanish. Closing its window leaves sessions running in the local runner; **Terminar** stops the selected process while preserving files and saved history; once the runner confirms it, the pane moves to the next open session (or the welcome view) and the ended one stays in Historial, read only. A session that ends on its own stays in its pane with a **Cerrar** button. **Interrumpir** sends Ctrl-C without guaranteeing that the process exits.
 
 ## Frequently asked questions
 
@@ -90,7 +91,7 @@ The current interface is in Spanish. Closing its window leaves sessions running 
 
 **Does local history retention limit provider usage?** The local storage budget controls saved terminal output. Reaching it does not stop a running terminal, but some output may be unavailable after reconnecting. It does not change a provider's account quota.
 
-**Does installing an update replace a running session?** Existing runners retain their executable. Finish active work before using Información → Diagnóstico → Reiniciar runner…; new launch settings apply to newly started sessions.
+**Does installing an update replace a running session?** Existing runners retain their executable. Finish active work before using Configuración → Acerca de y diagnóstico → Reiniciar runner…; new launch settings apply to newly started sessions.
 
 **Can I reuse or cite Jauria?** The original source is GPL-3.0-only. Preserve third-party notices and comply with the corresponding-source requirements when redistributing binaries. Brand assets have separate conditions in [NOTICE](NOTICE.md). [CITATION.cff](CITATION.cff) provides software citation metadata without claiming endorsement or search ranking.
 

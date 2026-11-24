@@ -35,7 +35,7 @@ Los nombres `_signed.dmg` y `_notarized.dmg` solo se usan si el script valida la
 
 Guarda tu trabajo y termina de forma controlada las sesiones y procesos de trabajo administrados por Jauria antes de reemplazar la app o reiniciar el runner. Cierra la interfaz, reemplaza Jauria.app en Aplicaciones y vuelve a abrirla. Cerrar la interfaz no garantiza que el runner ni los procesos hayan terminado: comprueba su estado y usa la acción de reiniciar runner solo después de terminar el trabajo activo.
 
-Las funciones nuevas del backend requieren un runner actualizado. Si aparece el aviso de runner anterior en Información → Diagnóstico, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
+Las funciones nuevas del backend requieren un runner actualizado. Si **Configuración → Acerca de y diagnóstico** avisa de que las versiones no coinciden o de un runner anterior, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
 
 Desde 1.0.1, el código propio se licencia bajo GPL-3.0-only. El bundle incorpora LICENSE y NOTICE; el DMG añade ambos textos y `SOURCE_REFERENCE.txt`, con enlaces a la etiqueta y al archivo de fuente de su misma versión. Esa referencia no entrega automáticamente el código ni certifica cumplimiento de GPL. Si redistribuyes binarios, proporciona la fuente correspondiente y los materiales de compilación conforme a [LICENSE](../LICENSE); el destinatario debe poder acceder al código. Un repositorio privado inaccesible para él no basta.
 
