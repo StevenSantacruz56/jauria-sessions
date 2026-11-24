@@ -240,22 +240,30 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       showFailure(m, error);
     } finally { busy = false; if (!disposed) freeze(); }
   }
-  /** The refused change targeted an archived project: reopen it, then send the same change again (it never committed). */
+  /**
+   * The refused change targeted an archived project. «Reabrir» only reopens it, then sends the change
+   * again on the current state: a project change (name, plan, main session) is rebased on the reopened
+   * revision, keeping what was written; a phase change is the same request (it never committed), so a
+   * phase that moved meanwhile ends in the usual conflict review with the draft kept, never lost.
+   */
   async function reopenAndRetry(m: Mutation) {
     if (busy || disposed || failed !== m) return;
     const id = (m.op === 'project_update' ? m.args.id : m.args.projectId ?? selectedProject?.id) as string | undefined;
     if (!id) return;
-    busy = true; freeze();
+    busy = true; freeze(); let reopened: PulsoProject | null = null;
     try {
       const current = (await request('project', { id })).project as PulsoProject;
       const data = await request('project_update', { id, expectedRevision: current.revision, archived: false, requestId: crypto.randomUUID() });
       if (disposed) return;
-      if (selectedProject?.id === id) adoptProject(data.project);
+      reopened = data.project as PulsoProject;
+      if (selectedProject?.id === id) adoptProject(reopened);
       projects = await page<PulsoProject>('projects', 'projects', { archived: false }); void loadArchivedCount();
       options.notice(`«${current.title}» vuelve a estar activo.`);
     } catch { say('No se pudo reabrir el proyecto. Tu borrador sigue aquí.'); return; }
     finally { busy = false; if (!disposed) freeze(); }
-    renderLists(); await mutate(m);
+    renderLists();
+    if (m.op === 'project_update') await mutate({ ...m, args: { ...m.args, expectedRevision: reopened!.revision, requestId: crypto.randomUUID() } });
+    else await mutate(m);
   }
   /** A write that was not confirmed: keep the draft and offer retry, inspection and release. */
   function showFailure(m: Mutation, error: unknown) {
@@ -268,7 +276,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');afterRelease?.(false);
       }, 'secondary');
     const inspect = button('Consultar versión actual', () => inspectRevision(m), 'secondary');
-    if (archivedProject) errors.replaceChildren(el('p', 'El proyecto está en el histórico; reábrelo para cambiarlo. Tu borrador sigue aquí.'),
+    // Archiving a project that is already archived: nothing to reopen.
+    if (archivedProject && m.op === 'project_update' && m.args.archived === true) errors.replaceChildren(el('p', 'Ese proyecto ya está en el histórico.'), inspect, release);
+    else if (archivedProject) errors.replaceChildren(el('p', 'El proyecto está en el histórico; reábrelo para cambiarlo. Tu borrador sigue aquí.'),
       button('Reabrir', () => reopenAndRetry(m), 'secondary'), inspect, release);
     else errors.replaceChildren(el('p', String(error).includes('Pulso local storage budget reached') ? 'Se alcanzó el espacio local reservado para nuevos cambios de Pulso. Los registros existentes y las terminales se conservan; consulta la guía de respaldo antes de continuar.' : 'No se confirmó el cambio. Tu borrador sigue aquí. Reintentar reutiliza la misma solicitud; si hay un conflicto, consulta la versión actual.'),
       button('Reintentar mismo cambio', () => mutate(m), 'secondary'), inspect, release);
@@ -758,8 +768,15 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
    * archivedAt existed say «fecha no registrada» (never updatedAt).
    */
   let archived: Page<PulsoProject> = { rows: [], hasMore: false };
+  /** Counter reads may overlap (refresh, archive, reopen): only a reply newer than the last applied one counts. */
+  let archivedCountAsked = 0, archivedCountApplied = 0;
+  function applyArchivedCount(ticket: number, count: number) {
+    if (disposed || ticket <= archivedCountApplied) return;
+    archivedCountApplied = ticket; archivedCount = count; paintArchiveCount();
+  }
   async function loadArchivedCount() {
-    try { const data = await request('projects', { archived: true, limit: 1 }); if (!disposed && typeof data.totalCount === 'number') { archivedCount = data.totalCount; paintArchiveCount(); } }
+    const ticket = ++archivedCountAsked;
+    try { const data = await request('projects', { archived: true, limit: 1 }); if (typeof data.totalCount === 'number') applyArchivedCount(ticket, data.totalCount); }
     catch { /* The counter is optional; it keeps its last value. */ }
   }
   async function openArchive() {
@@ -767,8 +784,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     selectedItem = null; flushProject = null; afterRelease = null; const epoch = ++selectionEpoch;
     detail.replaceChildren(el('p', 'Consultando el histórico…', 'pulso-muted')); openDrawer('archive', 'Histórico de proyectos');
     try {
+      const ticket = ++archivedCountAsked;
       archived = await page<PulsoProject>('projects', 'projects', { archived: true });
-      if (!archived.hasMore) { archivedCount = archived.rows.length; paintArchiveCount(); }
+      if (!archived.hasMore) applyArchivedCount(ticket, archived.rows.length);
       if (epoch === selectionEpoch && drawerKind === 'archive') await renderArchive(epoch);
     }
     catch { if (epoch === selectionEpoch && drawerKind === 'archive') detail.replaceChildren(el('p', 'No se pudo consultar el histórico.', 'pulso-muted'), button('Reintentar consulta', () => { hideDrawer(); drawerKind = null; void openArchive(); }, 'secondary')); }

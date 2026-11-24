@@ -66,6 +66,8 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         const deliver = async (snapshot: any) => {
           const index = f.holdOps.indexOf(op);
           if (index !== -1) { f.holdOps.splice(index, 1); await new Promise(resolve => f.delayed.push({ op, resolve })); if (f.rejectDelayed === op) throw 'delayed read failure'; }
+          // holdIf(op,args): hold one specific reply (its result is already computed) until released.
+          if (f.holdIf?.(op, args)) { f.holdIf = null; await new Promise(resolve => f.delayed.push({ op, args, resolve })); }
           return snapshot;
         };
         if (f.holdRead && op === 'projects') await new Promise(resolve => f.held.push(resolve));
@@ -466,6 +468,35 @@ if (process.env.PULSO_PANEL_BROWSER !== '1') {
         await p.waitForFunction(() => (window as any).fixture.items.find((i: any) => i.id === 'i1').note === 'Cambio tardío');
         assert.equal(await run(p, 'return f.projects[0].archived'), false);
         const writes = await run(p, 'return f.calls.filter(c=>c.op==="item_update")'); assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]);
+      });
+      await t.test('Reabrir after a refused autosave reopens and saves the written text on the new revision', async () => {
+        const p = await mounted(); await projectDetail(p);
+        await run(p, 'f.projects[0].archived=true'); const plan = p.getByLabel('Plan (opcional) ·'); await plan.fill('Escrito mientras se archivaba');
+        await p.getByText('El proyecto está en el histórico; reábrelo para cambiarlo. Tu borrador sigue aquí.', { exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Reabrir', exact: true }).click(); await idle(p);
+        await p.waitForFunction(() => (window as any).fixture.projects[0].plan === 'Escrito mientras se archivaba');
+        assert.equal(await run(p, 'return f.projects[0].archived'), false);
+        const updates = await run(p, 'return f.calls.filter(c=>c.op==="project_update").map(c=>[c.args.archived??null,c.args.expectedRevision,c.args.plan??null])');
+        assert.equal(updates.length, 3); assert.deepEqual(updates[1].slice(0, 1), [false]);
+        assert.equal(updates[2][1], await run(p, 'return f.projects[0].revision - 1'), 'the resend uses the reopened revision');
+        assert.equal(await p.getByRole('alert').isVisible(), false); assert.equal(await plan.inputValue(), 'Escrito mientras se archivaba');
+      });
+      await t.test('archiving a project already archived elsewhere never offers Reabrir', async () => {
+        const p = await mounted(); await projectDetail(p);
+        await run(p, 'f.projects[0].archived=true');
+        await p.getByRole('button', { name: 'Archivar proyecto', exact: true }).click(); await p.getByRole('button', { name: 'Sí, archivar', exact: true }).click();
+        await p.getByText('Ese proyecto ya está en el histórico.', { exact: true }).waitFor();
+        assert.equal(await p.getByRole('button', { name: 'Reabrir', exact: true }).count(), 0);
+        assert.equal(await run(p, 'return f.projects[0].archived'), true);
+      });
+      await t.test('an older Histórico counter reply never overwrites a newer one', async () => {
+        const p = await mounted(); await p.waitForFunction(() => (window as any).fixture.calls.some((c: any) => c.op === 'projects' && c.args.archived === true));
+        await run(p, 'f.holdIf=(op,args)=>op==="projects"&&args.archived===true&&args.limit===1; f.revision++; return f.panel.refresh()');
+        await p.waitForFunction(() => (window as any).fixture.delayed.some((d: any) => d.op === 'projects'));
+        await run(p, 'f.projects.push({...f.project("late"),archived:true}); f.revision++; return f.panel.refresh()');
+        await p.waitForFunction(() => document.querySelector('.pulso-archive-count')?.textContent === '1');
+        await run(p, 'f.delayed.find(d=>d.op==="projects").resolve()'); await p.waitForTimeout(100);
+        assert.equal(await p.locator('.pulso-archive-count').innerText(), '1', 'the held reply said 0 and arrived last');
       });
       await t.test('the drawer is named by its current title', async () => {
         const p = await mounted(); await projectDetail(p);
