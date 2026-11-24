@@ -14,7 +14,7 @@ Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh t
 - Run Claude Code, Codex or a normal zsh terminal. Configure a combined limit of 1–8 concurrent sessions; the default is 2. Two visible panes do not limit the number of open sessions.
 - Rename active or historical sessions through the pane actions menu.
 - Edit the same repository in parallel from separate Git worktrees. Jauria enforces one managed writer per worktree. Shell and provider settings determine filesystem and command permissions.
-- Inspect session state, optional attention notifications, provider usage when available, and observed CPU/RAM consumption.
+- Inspect session state, optional attention notifications, provider quotas when available, and CPU/RAM per open session, runner and window (web engine included when macOS attributes it), with a Jauría total in the status bar.
 
 Since 1.4, Jauria no longer includes **Repositorios** or Git tasks (repository registration, a worktree per task, review, verification and handoff). Data from that feature in a profile created by an earlier version is kept on disk and ignored; Jauria never deletes worktrees or branches, and you can open an ordinary session in any of those folders.
 

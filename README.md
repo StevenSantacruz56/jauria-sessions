@@ -169,11 +169,9 @@ Las capturas de 1.4.0 usan el frontend real con datos sintéticos, sin perfiles,
 
 ## CPU, RAM y cuotas
 
-**Uso y recursos** muestra procesos observados de la interfaz, el runner, las CLI y sus hijos. No garantiza el consumo total: puede excluir servicios reparentados y procesos WebKit no atribuibles. El pie de ventana resume el proceso de interfaz.
+**Uso y recursos** se abre desde el pie de la barra lateral, desde el total de la barra de estado o desde la paleta, en un diálogo propio. Arriba, las **cuotas** de Claude Code y Codex: por ventana, cuánto queda libre y cuándo se reinicia («Semana: 92 % libre · se reinicia el 25 nov, 11:23»). **Actualizar** consulta a Codex; nada se consulta al abrir. La cuota de Claude Code llega sola mientras hay una sesión de Claude abierta en Jauría; sin ella, la vista lo dice en una línea. Un dato viejo se marca «Dato vencido» con su antigüedad y no se presenta como vigente; no se inventa un saldo. Las cuotas del proveedor son distintas del límite local de sesiones simultáneas y de la cuota de almacenamiento del historial.
 
-La CPU usa **100 % por núcleo** y puede superar ese valor; la primera muestra queda pendiente. La RAM es **RSS residente**, que puede contar memoria compartida más de una vez. Son observaciones del momento, no requisitos mínimos ni promesas de rendimiento.
-
-**Actualizar cuotas** consulta las ventanas informadas por Codex. Para Claude Code se usan datos de la barra de estado de una sesión nativa compatible, cuando los entregue tras una respuesta. Si faltan datos, están vencidos o falla la consulta, la interfaz lo indica: no se inventa un saldo. Las cuotas del proveedor son distintas del límite local de sesiones simultáneas y de la cuota de almacenamiento del historial.
+Debajo, los **recursos de Jauría**: una fila por sesión abierta con su nombre (sumando los procesos que lanzó), el runner, la interfaz y el **total**, que es la misma cifra de la barra de estado. La interfaz incluye los procesos del motor web de la ventana (WebKit) cuando macOS los atribuye a Jauría, que es lo normal al abrirla desde el Finder o el Dock; si no, la vista lo indica. La CPU usa **100 % por núcleo** y puede superar ese valor; la RAM suma la memoria en uso de cada proceso, que puede contar memoria compartida más de una vez. Son observaciones del momento, no requisitos mínimos ni promesas de rendimiento. Cómo se mide (método y fuentes) aparece en Configuración → Acerca de y diagnóstico.
 
 ## Requisitos
 
