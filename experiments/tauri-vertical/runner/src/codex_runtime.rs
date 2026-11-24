@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{collections::{HashMap,HashSet}, io::Read, path::PathBuf, sync::{Arc, Mutex,
-    atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender, TryRecvError}},
+    atomic::{AtomicBool, AtomicU32, Ordering}, mpsc::{self, Receiver, SyncSender, TryRecvError}},
     time::{Duration, Instant}};
 use crate::{codex_protocol::{self as codec, Approval, ApprovalKind, Incoming, RpcId},
     codex_store as ledger, codex_transport::Process, storage::Store};
@@ -16,10 +16,13 @@ pub enum Intent {
 #[derive(Clone)]
 pub struct Control { pub stop: Arc<AtomicBool>, pub ready:Arc<AtomicBool>, pub tx: SyncSender<Intent>, pub generation: i64,
     /// Runner attention ledger; told only about newly inserted permission requests.
-    pub attention: Option<Arc<crate::agent_attention::Attention>> }
+    pub attention: Option<Arc<crate::agent_attention::Attention>>,
+    /// PID of the provider process last spawned for this session (0: none).
+    /// A label for telemetry attribution only; never signal or trust it.
+    pub pid: Arc<AtomicU32> }
 pub fn channel(generation: i64) -> (Control, Receiver<Intent>) {
     let (tx, rx) = mpsc::sync_channel(32);
-    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation, attention: None }, rx)
+    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation, attention: None, pid: Arc::new(AtomicU32::new(0)) }, rx)
 }
 fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
     m.lock().map_err(|_| anyhow::anyhow!("Actor mutex poisoned"))
@@ -75,7 +78,9 @@ fn spawn(admission: &Mutex<()>, control: &Control, cwd: &std::path::Path,
     names: Option<&[String]>, pulso: Option<&crate::pulso_mcp_config::PulsoMcp>) -> Result<Process> {
     let _guard = lock(admission)?;
     ensure!(!control.stop.load(Ordering::Acquire), "Actor stopped before fork");
-    match names { Some(names) => Process::codex_with_pulso(cwd, names, pulso), None => Process::codex(cwd) }
+    let process = match names { Some(names) => Process::codex_with_pulso(cwd, names, pulso), None => Process::codex(cwd) }?;
+    control.pid.store(process.pid(), Ordering::Release);
+    Ok(process)
 }
 fn boot_rpc(p: &mut Process, c: &Control, end: Instant, id: u64, method: &str, params: Value) -> Result<Value> {
     ensure!(Instant::now() < end && !c.stop.load(Ordering::Acquire), "Boot stopped or expired");

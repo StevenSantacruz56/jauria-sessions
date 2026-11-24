@@ -148,8 +148,26 @@ fn normal_terminal_login_interactive_unicode_cwd_replay_exit_and_stop() {
     app.rpc("resize",json!({"id":"normal","rows":37,"cols":101}));
     app.rpc("input",json!({"id":"normal","data":"/bin/stty size\n"}));
     app.wait_for(||app.contains("normal","37 101"));
+    // A child of the session's shell is attributed to that session (not to the
+    // runner) and its RSS matches what `ps` reports for the same PID.
+    app.rpc("input",json!({"id":"normal","data":"setopt no_bang_hist\n/bin/sleep 30 & print -r -- BG_PID_$!_END\n"}));
+    // The echoed input carries «$!», never digits: only the printed line parses.
+    let background=||String::from_utf8_lossy(&app.output("normal")).split("BG_PID_").skip(1)
+        .find_map(|s|s.split("_END").next().and_then(|n|n.parse::<u64>().ok()));
+    app.wait_for(||background().is_some());
+    let bg=background().unwrap();
     let telemetry=app.rpc("telemetry",json!({}));
-    assert!(telemetry["resources"]["processes"].as_array().unwrap().iter().any(|row|row["pid"]==started["pid"] && row["role"]=="cli"));
+    let rows=telemetry["resources"]["processes"].as_array().unwrap();
+    assert!(rows.iter().any(|row|row["pid"]==started["pid"] && row["role"]=="cli" && row["sessionId"]=="normal"));
+    let child=rows.iter().find(|row|row["pid"]==bg).unwrap_or_else(||panic!("background child {bg} missing: {telemetry}"));
+    assert_eq!(child["sessionId"],"normal");assert_eq!(child["role"],"tool");
+    assert!(rows.iter().any(|row|row["role"]=="runner" && row.get("sessionId").is_none()));
+    assert_ne!(telemetry["resources"]["discovery"]["reason"],"inventory_incomplete","{telemetry}");
+    let ps=std::process::Command::new("/bin/ps").args(["-o","rss=","-p",&bg.to_string()]).output().unwrap();
+    let ps_kib:u64=String::from_utf8_lossy(&ps.stdout).trim().parse().unwrap();
+    let sampled_kib=child["rssBytes"].as_u64().unwrap()/1024;
+    assert!(sampled_kib.abs_diff(ps_kib)<=64,"sampled {sampled_kib} KiB vs ps {ps_kib} KiB");
+    app.rpc("input",json!({"id":"normal","data":"kill %1\n"}));
     let diagnostics=app.rpc("diagnostic_preview",json!({}));
     assert!(diagnostics["sessions"]["byKind"].as_array().unwrap().iter().any(|row|row["kind"]=="terminal" && row["count"]==2));
     assert_eq!(app.rpc("stop",json!({"id":"second"}))["status"],"stopped");

@@ -452,16 +452,29 @@ impl Runner {
         if op == "telemetry" {
             // Only current-generation owned unreaped leaders. Persisted PIDs never
             // confer authority; metrics never send signals. Keep leaders pinned.
-            let mut owned:Vec<_>=self.owned.lock().unwrap().values().cloned().collect();
-            owned.sort_by_key(|child|child.pid);
-            let guards:Vec<_>=owned.iter().map(|child|child.lifecycle.lock().unwrap()).collect();
+            let mut owned:Vec<_>=self.owned.lock().unwrap().iter().map(|(id,child)|(id.clone(),child.clone())).collect();
+            owned.sort_by_key(|(_,child)|child.pid);
+            let guards:Vec<_>=owned.iter().map(|(_,child)|child.lifecycle.lock().unwrap()).collect();
             let discovery=crate::resource_tree::observe(std::process::id());
             let mut pids=vec![std::process::id()];
             if let Some(observed)=discovery["pids"].as_array(){pids.extend(observed.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));}
-            for (child,life) in owned.iter().zip(&guards) { if !life.reaped && !life.uncertain {pids.push(child.pid);} }
+            // Session leaders label their observed descendants (attribution only):
+            // terminal/Claude PTY leaders, and structured Codex provider processes.
+            let mut leaders:HashMap<u32,String>=HashMap::new();
+            let mut cli=std::collections::HashSet::new();
+            for ((id,child),life) in owned.iter().zip(&guards) { if !life.reaped && !life.uncertain {pids.push(child.pid);cli.insert(child.pid);leaders.insert(child.pid,id.clone());} }
+            for (id,job) in self.codex_jobs.lock().unwrap().iter() {
+                let pid=job.control.pid.load(Ordering::Acquire);
+                if id!="query" && pid!=0 && !job.worker.is_finished() {leaders.entry(pid).or_insert_with(||id.clone());}
+            }
+            let sessions=crate::resource_tree::nearest_labels(&discovery,&leaders);
             let mut resources=self.resources.lock().unwrap().sample(&pids);
             if let Some(rows)=resources["processes"].as_array_mut() {
-                for row in rows { row["role"]=json!(if row["pid"]==std::process::id(){"runner"}else if owned.iter().zip(&guards).any(|(child,life)|!life.reaped && !life.uncertain && row["pid"]==child.pid){"cli"}else{"tool"}); }
+                for row in rows {
+                    let pid=row["pid"].as_u64().unwrap_or(0) as u32;
+                    row["role"]=json!(if pid==std::process::id(){"runner"}else if cli.contains(&pid){"cli"}else{"tool"});
+                    if let Some(id)=sessions.get(&pid).or_else(||leaders.get(&pid)) {row["sessionId"]=json!(id);}
+                }
             }
             resources["discovery"]=discovery;
             drop(guards);

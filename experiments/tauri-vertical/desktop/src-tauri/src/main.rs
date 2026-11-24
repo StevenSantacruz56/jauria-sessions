@@ -207,18 +207,33 @@ async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>
     let layout = state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero al runner")?;
     let sampler=state.resources.clone();
     tauri::async_runtime::spawn_blocking(move || {
+    // Interfaz: this process, its own children and the helpers the kernel
+    // attributes to it (WebKit WebContent/GPU/Networking and other XPC services
+    // of the window). The runner subtree is reported by the runner, not here.
     let app_metrics=if op=="telemetry" {
-        let discovery=resource_tree::observe(std::process::id());
+        let discovery=resource_tree::observe_app(std::process::id());
         let mut pids=vec![std::process::id()];
-        if let Some(rows)=discovery["pids"].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));}
-        let mut sample=sampler.lock().map_err(error)?.sample(&pids);sample["discovery"]=discovery;Some(sample)
+        for key in ["pids","helpers"] { if let Some(rows)=discovery[key].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));} }
+        let mut sample=sampler.lock().map_err(error)?.sample(&pids);
+        let helpers:std::collections::HashSet<u64>=discovery["helpers"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+        if let Some(rows)=sample["processes"].as_array_mut(){ for row in rows {
+            let pid=row["pid"].as_u64().unwrap_or(0);
+            row["role"]=json!(if pid==u64::from(std::process::id()){"app"}else if helpers.contains(&pid){"web"}else{"app-child"});
+        } }
+        sample["webEngine"]=discovery.get("helpersStatus").cloned().unwrap_or(json!("unavailable"));
+        sample["discovery"]=discovery;Some(sample)
     }else{None};
         if matches!(op.as_str(),"start_codex"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
         else {
             let mut response=rpc(&layout,&op,args)?;
             if let Some(mut metrics)=app_metrics {
                 let backend:std::collections::HashSet<u64>=response["result"]["resources"]["processes"].as_array().into_iter().flatten().filter_map(|r|r["pid"].as_u64()).collect();
-                if let Some(rows)=metrics["processes"].as_array_mut(){rows.retain(|r|r["pid"].as_u64().is_some_and(|pid|!backend.contains(&pid)));}
+                // A runner started by this window is its child: drop its whole
+                // observed subtree here, even PIDs the runner missed this poll.
+                let runner_pids:std::collections::HashMap<u32,String>=response["result"]["resources"]["processes"].as_array().into_iter().flatten()
+                    .filter(|r|r["role"]=="runner").filter_map(|r|r["pid"].as_u64()).map(|pid|(pid as u32,"runner".to_owned())).collect();
+                let under_runner=resource_tree::nearest_labels(&metrics["discovery"],&runner_pids);
+                if let Some(rows)=metrics["processes"].as_array_mut(){rows.retain(|r|r["pid"].as_u64().is_some_and(|pid|!backend.contains(&pid) && !under_runner.contains_key(&(pid as u32))));}
                 response["result"]["resources"]["app"]=metrics;
             }
             Ok(response)
@@ -454,7 +469,13 @@ async fn preview_diagnostic(state: tauri::State<'_,Bridge>) -> Result<Value> {
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     let response=tauri::async_runtime::spawn_blocking(move||rpc(&layout,"diagnostic_preview",json!({}))).await.map_err(error)??;
     if response["ok"]!=true {return Err("No se pudo preparar diagnóstico".into());}
-    let content=serde_json::to_string_pretty(&response["result"]).map_err(error)?;
+    let mut result=response["result"].clone();
+    // Whether the window's web engine helpers can be attributed (no PIDs).
+    if result["telemetry"].is_object() {
+        let status=tauri::async_runtime::spawn_blocking(||resource_tree::observe_app(std::process::id())["helpersStatus"].clone()).await.map_err(error)?;
+        result["telemetry"]["interfaceWebEngine"]=status;
+    }
+    let content=serde_json::to_string_pretty(&result).map_err(error)?;
     let mut random=[0u8;16];fs::File::open("/dev/urandom").map_err(error)?.read_exact(&mut random).map_err(error)?;
     let id:String=random.iter().map(|b|format!("{b:02x}")).collect();
     *state.diagnostic.lock().map_err(error)?=Some((id.clone(),content.clone()));
