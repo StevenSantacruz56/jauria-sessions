@@ -122,9 +122,13 @@ test('resources: one row per open session with its children, runner, window with
   assert.equal(formatResourceCpu(view.sessions[0]), 'midiendo…');
   assert.equal(formatResourceRam(view.sessions[1]), '150 MiB');
   assert.equal(view.missing, null);
+  // PID 31 could not be measured: counted as such, and the total says it is partial.
+  assert.equal(view.sessions[0].unmeasured, 1);
+  assert.equal(view.total!.unmeasured, 1);
+  assert.equal(view.total!.label, 'Total de Jauría (parcial)');
   // The status bar shows the view's total, same definition.
-  assert.equal(telemetrySummary(view, true), `Jauría · CPU ${formatTelemetryCpu(view.total!.cpu)} · RAM ${formatTelemetryBytes(view.total!.rss)}`);
-  assert.equal(telemetrySummary(view, true), 'Jauría · CPU 21,2 % · RAM 590 MiB');
+  assert.equal(telemetrySummary(view, true), `Jauría · CPU ${formatTelemetryCpu(view.total!.cpu)} · RAM ${formatTelemetryBytes(view.total!.rss)} (parcial)`);
+  assert.equal(telemetrySummary(view, true), 'Jauría · CPU 21,2 % · RAM 590 MiB (parcial)');
   assert.equal(telemetrySummary(null, true), 'Jauría · CPU — · RAM —');
   assert.equal(telemetrySummary(view, false), 'Recursos sin conexión');
   // Unknown session id: a neutral name, never a PID.
@@ -142,4 +146,42 @@ test('resources: the web engine flag, what may be missing, and empty data', () =
   assert.deepEqual([empty.sessions, empty.runner, empty.window, empty.total], [[], null, null, null]);
   assert.equal(formatResourceCpu(null), '—');
   assert.equal(formatResourceRam(null), '—');
+});
+
+test('review: an older runner (role without sessionId) keeps sessions out of «Runner» and never says there are none', () => {
+  // 1.3.x rows: runner, CLI leaders and their descendants as «tool», no sessionId.
+  const snapshot = { resources: { processes: [row(10, 6, 0.5, { role: 'runner' }), row(20, 100, 10, { role: 'cli' }), row(21, 40, 2, { role: 'tool' }), row(30, 70, 1, { role: 'cli' })],
+    app: { processes: [row(1, 100, 1, { role: 'app' })] } } };
+  const pids: Record<number, string> = { 20: 'a' };
+  const view = resourceView(snapshot, id => ({ a: 'Sesión A' } as Record<string, string>)[id] ?? null, pid => pids[pid] ?? null);
+  assert.equal(view.legacy, true);
+  assert.deepEqual(view.sessions.map(s => [s.label, s.rss! / MiB]), [['Sesión', 70], ['Sesión A', 100]]);
+  assert.deepEqual([view.unattributed!.label, view.unattributed!.rss! / MiB], ['Procesos de las sesiones (sin desglose)', 40]);
+  assert.deepEqual([view.runner!.rss! / MiB, view.runner!.processes], [6, 1]);
+  assert.equal(view.total!.rss! / MiB, 6 + 100 + 40 + 70 + 100, 'the total still adds up');
+  // A current runner with no session: not legacy, nothing unattributed.
+  const now = resourceView({ resources: { processes: [row(10, 6, 0, { role: 'runner' }), row(11, 2, 0, { role: 'tool' })] } }, () => null);
+  assert.deepEqual([now.legacy, now.unattributed, now.runner!.rss! / MiB], [false, null, 8]);
+});
+
+test('review: a session whose only process could not be measured is still listed, «sin dato», and the total is partial', () => {
+  const snapshot = { resources: { processes: [row(10, 6, 0, { role: 'runner' }), { pid: 20, available: false, rssBytes: null, cpuPercent: null, cpuAvailable: false, role: 'cli', sessionId: 's' }] } };
+  const view = resourceView(snapshot, () => 'Mi sesión');
+  assert.deepEqual(view.sessions.map(s => [s.label, s.rss, s.unmeasured]), [['Mi sesión', null, 1]]);
+  assert.equal(formatResourceRam(view.sessions[0]), 'sin dato');
+  assert.equal(formatResourceCpu(view.sessions[0]), 'sin dato');
+  assert.equal(view.total!.label, 'Total de Jauría (parcial)');
+  assert.match(telemetrySummary(view, true), /\(parcial\)$/);
+});
+
+test('review: «other» processes are shown apart, never in Interfaz; the web engine note follows the bridge status', () => {
+  const app = (webEngine: string, extra: unknown[] = []) => ({ resources: { processes: [], app: { webEngine, processes: [row(1, 100, 1, { role: 'app' }), ...extra] } } });
+  const withOrphan = resourceView(app('included', [row(2, 200, 2, { role: 'web' }), row(3, 50, 5, { role: 'other' })]), () => null);
+  assert.deepEqual([withOrphan.window!.rss! / MiB, withOrphan.others!.rss! / MiB, withOrphan.others!.label], [300, 50, 'Otros procesos de Jauría']);
+  assert.equal(withOrphan.total!.rss! / MiB, 350);
+  assert.equal(withOrphan.webEngineNote, null);
+  assert.match(resourceView(app('none_found'), () => null).webEngineNote!, /no se encontraron sus procesos/);
+  assert.equal(resourceView(app('none_found'), () => null).webEngine, false);
+  assert.match(resourceView(app('not_attributable'), () => null).webEngineNote!, /no se abre desde el Finder/);
+  assert.match(resourceView(app('unsupported'), () => null).webEngineNote!, /no se pudo atribuir/);
 });

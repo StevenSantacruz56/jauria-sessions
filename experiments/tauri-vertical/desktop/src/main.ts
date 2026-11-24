@@ -2270,7 +2270,10 @@ const telemetryPanel = mountTelemetry({
   // The status bar total is hidden below 1050 px (style.css): no polling for it then.
   wantsSummary: () => !document.hidden && $('#telemetry-summary').getClientRects().length > 0,
   onSummary: summary => text('#telemetry-summary', summary),
-  fallbackFocus: () => $('#open-telemetry'),
+  sessionOfPid: pid => runner?.sessions.find(session => session.pid === pid)?.id ?? null,
+  // Below 860 px the sidebar is a drawer that closes on open: its row is then
+  // hidden, so focus goes to the visible «Mostrar navegación» button instead.
+  fallbackFocus: () => [$('#open-telemetry'), $('#toggle-sidebar'), $('#telemetry-summary')],
 });
 function openTelemetry(from?: HTMLElement) {
   if (disposed || document.querySelector('dialog[open]')) return;

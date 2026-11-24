@@ -157,6 +157,41 @@ try {
         assert.doesNotMatch(await dialogText(page), /Puede faltar|parcial/);
       });
 
+      await t.test('review: narrow window, opened from the sidebar drawer: Escape returns focus to a visible control', async () => {
+        const page = await open({}, 760, 560);
+        await page.locator('#toggle-sidebar').click(); await page.waitForTimeout(300);
+        await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+        const focused = await page.evaluate(() => { const node = document.activeElement as HTMLElement | null;
+          return { id: node?.id, visible: !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' }; });
+        assert.deepEqual(focused, { id: 'toggle-sidebar', visible: true });
+      });
+
+      await t.test('review: an older runner (no sessionId) neither says «Ninguna sesión abierta» nor moves sessions into Runner; an unmeasured process marks the total as partial', async () => {
+        const row = (pid: number, mib: number, cpu: number, extra: any = {}) => ({ pid, available: true, rssBytes: mib * MiB, cpuPercent: cpu, cpuAvailable: true, ...extra });
+        const page = await open({ telemetry: { resources: { discovery: { partial: false }, processes: [row(77, 6, 0.5, { role: 'runner' }), row(200, 100, 10, { role: 'cli' }), row(201, 40, 2, { role: 'tool' }),
+          { pid: 202, available: false, rssBytes: null, cpuPercent: null, cpuAvailable: false, role: 'tool' }],
+          app: { webEngine: 'included', processes: [row(1, 100, 1, { role: 'app' }), row(2, 50, 1, { role: 'web' }), row(3, 20, 3, { role: 'other' })] } } } });
+        await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
+        await page.waitForSelector('tr.telemetry-session');
+        const rows = await page.locator('.telemetry-table tbody tr, .telemetry-table tfoot tr').evaluateAll(trs => trs.map(tr => Array.from(tr.children).map(c => (c as HTMLElement).innerText)));
+        assert.deepEqual(rows, [
+          ['Sesión', '10 %', '100 MiB'],
+          ['Procesos de las sesiones (sin desglose)', '2 %', '40 MiB'],
+          ['Runner (servicio de sesiones)', '0,5 %', '6 MiB'],
+          ['Interfaz (ventana)', '2 %', '150 MiB'],
+          ['Otros procesos de Jauría', '3 %', '20 MiB'],
+          ['Total de Jauría (parcial)', '17,5 %', '316 MiB'],
+        ]);
+        const text = await dialogText(page);
+        assert.doesNotMatch(text, /Ninguna sesión abierta/);
+        assert.match(text, /El total no incluye 1 proceso que no se pudo medir/);
+        assert.match(text, /versión anterior/);
+        assert.equal(await page.locator('#telemetry-summary').innerText(), 'Jauría · CPU 17,5 % · RAM 316 MiB (parcial)');
+      });
+
       await t.test('the palette and the status bar total open the same dialog', async () => {
         const page = await open();
         await page.locator('#open-command-palette').click();

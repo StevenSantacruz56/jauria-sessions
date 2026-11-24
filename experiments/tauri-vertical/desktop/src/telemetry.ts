@@ -135,11 +135,24 @@ export function quotaView(provider: 'claude' | 'codex', raw: unknown, staleTrans
   };
 }
 
-export type ResourceLine = { key: string; label: string; cpu: number | null; cpuPending: boolean; rss: number | null; processes: number };
+/** `unmeasured`: processes listed but not measured (exited or unreadable); their CPU/RAM are not in the sums. */
+export type ResourceLine = { key: string; label: string; cpu: number | null; cpuPending: boolean; rss: number | null; processes: number; unmeasured: number };
 export type ResourceView = {
   sessions: ResourceLine[]; runner: ResourceLine | null; window: ResourceLine | null; total: ResourceLine | null;
-  /** The window's web engine is counted (helpers attributed by macOS). */
-  webEngine: boolean; missing: string | null; observedAt: number | null;
+  /** Older runner (no `sessionId`): session processes without a per-session split. */
+  unattributed: ResourceLine | null;
+  /** Processes macOS attributes to Jauría that are not the window (e.g. a job a session left behind). */
+  others: ResourceLine | null;
+  legacy: boolean;
+  /** The window's web engine is counted (at least one helper attributed by macOS). */
+  webEngine: boolean;
+  /** Why it is not, in plain words; null when counted or no window data. */
+  webEngineNote: string | null;
+  missing: string | null; observedAt: number | null;
+};
+const WEB_ENGINE_NOTE: Record<string, string> = {
+  not_attributable: 'La interfaz no incluye el motor web de la ventana: macOS no permite atribuírselo a Jauría cuando no se abre desde el Finder.',
+  none_found: 'La interfaz no incluye el motor web de la ventana: no se encontraron sus procesos en esta lectura.',
 };
 // Only limits that mean «a process of Jauría may be missing» are told; a
 // process that ended during the read is gone, not missing.
@@ -151,52 +164,69 @@ const MISSING: Record<string, string> = {
   deadline: 'Puede faltar algún proceso: la lectura tardó demasiado. Se reintenta en 3 s.',
   inventory_unavailable: 'No se pudo listar los procesos del equipo. Se reintenta en 3 s.',
 };
+/** A group of rows; a row that could not be measured stays counted in `unmeasured`, never dropped silently. */
 function sum(label: string, key: string, rows: RecordValue[]): ResourceLine | null {
+  if (!rows.length) return null;
   const read = rows.filter(r => r.available !== false && number(r.rssBytes) !== null);
-  if (!read.length) return null;
   const cpu = read.map(r => r.cpuAvailable === false ? null : number(r.cpuPercent));
   const known = cpu.filter((c): c is number => c !== null);
-  return { key, label, rss: read.reduce((t, r) => t + number(r.rssBytes)!, 0), cpu: known.length ? known.reduce((t, c) => t + c, 0) : null,
-    cpuPending: known.length < cpu.length, processes: read.length };
+  return { key, label, rss: read.length ? read.reduce((t, r) => t + number(r.rssBytes)!, 0) : null, cpu: known.length ? known.reduce((t, c) => t + c, 0) : null,
+    cpuPending: known.length < cpu.length, processes: read.length, unmeasured: rows.length - read.length };
 }
 /**
  * Rows of the view from one telemetry snapshot. A process belongs to the
  * session the runner attributed it to (`sessionId`), else to the runner; the
  * window rows come from the bridge (`resources.app`). Sessions the client does
  * not know as open are listed under the title the runner has or «Sesión».
+ * An older runner sends `role: cli` without `sessionId`: a CLI is matched to
+ * its session by PID (`sessionOfPid`) and its descendants, which that runner
+ * cannot split, go to one «sin desglose» row instead of the Runner's.
  */
-export function resourceView(snapshot: TelemetrySnapshot | null, sessionTitle: (id: string) => string | null): ResourceView {
+export function resourceView(snapshot: TelemetrySnapshot | null, sessionTitle: (id: string) => string | null,
+  sessionOfPid: (pid: number) => string | null = () => null): ResourceView {
   const data = record(snapshot?.resources);
   const app = record(data.app);
   const rows = list(data.processes).map(record);
+  const legacy = rows.some(r => r.role === 'cli' && !string(r.sessionId));
   const bySession = new Map<string, RecordValue[]>();
-  const runnerRows: RecordValue[] = [];
+  const runnerRows: RecordValue[] = [], unattributedRows: RecordValue[] = [];
   for (const row of rows) {
-    const id = string(row.sessionId);
-    if (id) bySession.set(id, [...(bySession.get(id) ?? []), row]); else runnerRows.push(row);
+    const pid = number(row.pid);
+    const id = string(row.sessionId) ?? (legacy && row.role === 'cli' ? (pid !== null ? sessionOfPid(pid) : null) ?? `pid:${pid ?? '?'}` : null);
+    if (id) bySession.set(id, [...(bySession.get(id) ?? []), row]);
+    else if (legacy && row.role !== 'runner') unattributedRows.push(row);
+    else runnerRows.push(row);
   }
-  const sessions = [...bySession].map(([id, group]) => sum(sessionTitle(id) ?? 'Sesión', `session:${id}`, group))
+  const sessions = [...bySession].map(([id, group]) => sum((id.startsWith('pid:') ? null : sessionTitle(id)) ?? 'Sesión', `session:${id}`, group))
     .filter((r): r is ResourceLine => r !== null).sort((a, b) => a.label.localeCompare(b.label, 'es'));
   const appRows = list(app.processes).map(record);
+  const otherRows = appRows.filter(r => r.role === 'other');
+  const windowRows = appRows.filter(r => r.role !== 'other');
   const runner = sum('Runner (servicio de sesiones)', 'runner', runnerRows);
-  const window = sum('Interfaz (ventana)', 'window', appRows);
-  const total = sum('Total de Jauría', 'total', [...rows, ...appRows]);
+  const window = sum('Interfaz (ventana)', 'window', windowRows);
+  const others = sum('Otros procesos de Jauría', 'others', otherRows);
+  const unattributed = sum('Procesos de las sesiones (sin desglose)', 'unattributed', unattributedRows);
+  const all = [...rows, ...appRows];
+  const total = sum('Total de Jauría', 'total', all);
+  if (total && total.unmeasured) total.label = 'Total de Jauría (parcial)';
   const reason = [record(data.discovery), record(app.discovery)].map(d => d.partial === true ? string(d.reason) : null).find(r => r && MISSING[r]) ?? null;
-  return { sessions, runner, window, total, webEngine: app.webEngine === 'included', missing: reason ? MISSING[reason] : null,
-    observedAt: timestamp(data.timestampUnixMs ?? data.observedAt) };
+  const engine = string(app.webEngine);
+  return { sessions, runner, window, total, unattributed, others, legacy, webEngine: engine === 'included',
+    webEngineNote: window && engine !== 'included' ? WEB_ENGINE_NOTE[engine ?? ''] ?? 'La interfaz no incluye el motor web de la ventana: no se pudo atribuir a Jauría.' : null,
+    missing: reason ? MISSING[reason] : null, observedAt: timestamp(data.timestampUnixMs ?? data.observedAt) };
 }
 export function formatResourceCpu(line: ResourceLine | null): string {
-  if (!line || line.cpu === null) return line?.cpuPending ? 'midiendo…' : DASH;
+  if (!line || line.cpu === null) return line?.cpuPending ? 'midiendo…' : line?.unmeasured ? 'sin dato' : DASH;
   return formatTelemetryCpu(line.cpu);
 }
 export function formatResourceRam(line: ResourceLine | null): string {
-  return line?.rss == null ? DASH : formatTelemetryBytes(line.rss);
+  return line?.rss == null ? line?.unmeasured ? 'sin dato' : DASH : formatTelemetryBytes(line.rss);
 }
-/** Status bar text: the view's «Total de Jauría», same definition. */
+/** Status bar text: the view's «Total de Jauría», same definition (and «parcial» when it is). */
 export function telemetrySummary(view: ResourceView | null, connected: boolean): string {
   if (!connected) return 'Recursos sin conexión';
   const total = view?.total ?? null;
-  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu)} · RAM ${formatResourceRam(total)}`;
+  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu)} · RAM ${formatResourceRam(total)}${total?.unmeasured ? ' (parcial)' : ''}`;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
@@ -211,12 +241,18 @@ type Options = {
   isConnected: () => boolean;
   /** Title of a session the client knows (open sessions); null otherwise. */
   sessionTitle: (id: string) => string | null;
+  /** Session id of a CLI PID, for older runners that do not send `sessionId`. */
+  sessionOfPid?: (pid: number) => string | null;
   /** Resources are polled while the view is open or while this returns true (the status bar is visible). */
   wantsSummary: () => boolean;
   onSummary?: (text: string) => void;
-  /** Focus target when the element that opened the view is gone (e.g. the palette). */
-  fallbackFocus?: () => HTMLElement | null;
+  /** Focus targets, in order, when the element that opened the view is gone or hidden (the palette, the closed sidebar drawer). */
+  fallbackFocus?: () => (HTMLElement | null)[];
 };
+/** Focusable now: in the document, laid out and not hidden (a closed drawer is `visibility: hidden`). */
+function canFocus(node: HTMLElement | null): node is HTMLElement {
+  return !!node && node.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && !node.closest('[inert]');
+}
 
 /**
  * Cached quotas only: providers are queried only when «Actualizar» is pressed.
@@ -322,23 +358,36 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
   }
 
   function renderResources(staleTransport: boolean) {
-    const view = resourceView(snapshot, options.sessionTitle);
+    const view = resourceView(snapshot, options.sessionTitle, options.sessionOfPid);
     const observedStale = view.observedAt !== null && now() - view.observedAt > RESOURCE_STALE_MS;
     const stale = staleTransport || observedStale;
     table.dataset.stale = String(stale);
     const rows: HTMLElement[] = [];
-    if (!view.sessions.length) {
+    const blank = (key: string, label: string): ResourceLine => ({ key, label, cpu: null, cpuPending: false, rss: null, processes: 0, unmeasured: 0 });
+    // An older runner cannot tell; never claim there are no sessions then.
+    if (!view.sessions.length && !view.unattributed && !view.legacy) {
       const empty = element('tr', 'telemetry-empty'); const cell = element('td', '', 'Ninguna sesión abierta.'); cell.colSpan = 3; empty.append(cell); rows.push(empty);
     }
     for (const line of view.sessions) rows.push(resourceRow(line, 'telemetry-session'));
-    rows.push(view.runner ? resourceRow(view.runner) : resourceRow({ key: 'runner', label: 'Runner (servicio de sesiones)', cpu: null, cpuPending: false, rss: null, processes: 0 }));
-    rows.push(view.window ? resourceRow(view.window) : resourceRow({ key: 'window', label: 'Interfaz (ventana)', cpu: null, cpuPending: false, rss: null, processes: 0 }));
+    if (view.unattributed) rows.push(resourceRow(view.unattributed, 'telemetry-session'));
+    rows.push(resourceRow(view.runner ?? blank('runner', 'Runner (servicio de sesiones)')));
+    rows.push(resourceRow(view.window ?? blank('window', 'Interfaz (ventana)')));
+    if (view.others) {
+      const other = resourceRow(view.others);
+      other.querySelector('th')!.title = 'Procesos que macOS atribuye a Jauría y ya no cuelgan de una sesión, por ejemplo un trabajo que una sesión dejó en marcha al terminar.';
+      rows.push(other);
+    }
     tbody.replaceChildren(...rows);
-    tfoot.replaceChildren(resourceRow(view.total ?? { key: 'total', label: 'Total de Jauría', cpu: null, cpuPending: false, rss: null, processes: 0 }, 'telemetry-total'));
+    tfoot.replaceChildren(resourceRow(view.total ?? blank('total', 'Total de Jauría'), 'telemetry-total'));
     const lines: HTMLElement[] = [];
     if (!snapshot) lines.push(element('p', 'telemetry-note', options.isConnected() ? 'Midiendo…' : 'Sin conexión con el runner.'));
     else if (stale) lines.push(element('p', 'telemetry-note telemetry-warning', `Cifras de ${formatTelemetryAge(receivedAt || view.observedAt, now())}; se reintenta cada 3 s.`));
-    if (snapshot && view.window && !view.webEngine) lines.push(element('p', 'telemetry-note', 'La interfaz no incluye el motor web de la ventana: macOS no permite atribuírselo a Jauría cuando no se abre desde el Finder.'));
+    if (view.total?.unmeasured) {
+      const n = view.total.unmeasured;
+      lines.push(element('p', 'telemetry-note telemetry-warning', `El total no incluye ${n === 1 ? '1 proceso que no se pudo medir' : `${n} procesos que no se pudieron medir`} (pudo terminar durante la lectura).`));
+    }
+    if (view.legacy) lines.push(element('p', 'telemetry-note', 'El runner es de una versión anterior: los procesos que lanzan las sesiones se suman sin desglose por sesión.'));
+    if (snapshot && view.webEngineNote) lines.push(element('p', 'telemetry-note', view.webEngineNote));
     if (view.missing) lines.push(element('p', 'telemetry-note telemetry-warning', view.missing));
     notes.replaceChildren(...lines);
   }
@@ -347,7 +396,7 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
     if (disposed) return;
     const connected = options.isConnected();
     const stale = !connected || pollError || (receivedAt > 0 && now() - receivedAt > RESOURCE_STALE_MS);
-    options.onSummary?.(telemetrySummary(snapshot && !stale ? resourceView(snapshot, options.sessionTitle) : null, connected));
+    options.onSummary?.(telemetrySummary(snapshot && !stale ? resourceView(snapshot, options.sessionTitle, options.sessionOfPid) : null, connected));
     if (!isOpen()) return;
     const refreshing = awaitingRefresh || snapshot?.quotasRefreshing === true;
     refresh.disabled = !connected || refreshQueued || refreshing;
@@ -411,7 +460,7 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
     pollNow();
   }
   function restoreFocus() {
-    const target = opener?.isConnected ? opener : options.fallbackFocus?.() ?? null;
+    const target = [opener, ...(options.fallbackFocus?.() ?? [])].find(canFocus) ?? null;
     opener = null;
     target?.focus();
   }
