@@ -65,23 +65,26 @@ Sigue [la guía de instalación](INSTALLATION.md#actualizar-una-instalación-exi
 
 ## Verificación de la entrega
 
-Baterías del proyecto y últimos resultados conocidos **en la rama `feat/redesign-1.4`, antes del build de la entrega**. Los cambios posteriores (Pulso, Nueva sesión, avisos y Uso y recursos del 24 de noviembre) añadieron pruebas, así que estas cifras se quedan cortas hasta el build final. `scripts/build-macos.py` vuelve a ejecutarlas sobre el commit final; solo esos resultados validan el paquete.
+Resultados del build de la entrega, `python3 scripts/build-macos.py` completo sobre el commit `e37146e` de la rama `feat/redesign-1.4` (24 de noviembre de 2026, Mac Apple Silicon). Solo estos resultados validan el paquete.
 
-| Batería | Último resultado conocido en la rama |
+| Batería | Resultado sobre `e37146e` |
 | --- | --- |
-| Escritorio, unidad (`node --test tests/*.test.ts`) | 185 pasadas, 0 fallidas, 5 salteadas |
-| Navegador (`tests/browser/*.test.ts`, Chrome y WebKit) | 243 pasadas, 0 fallidas |
-| `pulso-panel` (Chrome y WebKit) | 131 pasadas |
-| Configuración y permisos (`settings-panel`, `agent-permissions`) | 64 pasadas |
+| Python (`tests/`) | 24 pasadas |
+| Escritorio, unidad (`node --test tests/*.test.ts`) | 211 pasadas, 0 fallidas, 5 salteadas |
+| Navegador (`tests/browser/*.test.ts`, Chrome y WebKit) | 317 pasadas, 0 fallidas, 0 salteadas |
+| `pulso-panel` (Chrome y WebKit) | 185 pasadas, 0 fallidas |
+| Configuración y permisos (`settings-panel`, `agent-permissions`) | 66 pasadas, 0 fallidas |
 | `attention-consistency` (Chrome + WebKit) | 9 + 9 pasadas |
 | `terminal-stream` (Chrome + WebKit) | 15 + 15 pasadas |
-| Runner (`cargo test --locked` y suites RPC) | 356 pasadas, 0 fallidas, 6 salteadas |
-| Puente nativo (`desktop/src-tauri`, `cargo test --locked`) | 43 pasadas |
-| Python (`tests/`) | 24 pasadas |
+| Runner (`cargo test --locked` y suites RPC del script) | 377 pasadas, 0 fallidas, 7 salteadas |
+| Runner, suites nuevas de avisos (`attention_review_rpc`, `provider_signals_rpc`) | 7 + 5 pasadas; ejecutadas aparte sobre el mismo árbol y añadidas después a `scripts/build-macos.py` |
+| Puente nativo (`desktop/src-tauri`, `cargo test --locked`) | 53 pasadas, 0 fallidas, 1 salteada |
 
-Las 6 pruebas salteadas del runner son mediciones (`listener_latency`, `pulso_latency`, ráfaga del PTY y escalas de Pulso) y la comprobación de vuelta atrás, que necesita el binario de la versión anterior; se activan a mano con `--ignored`.
+Las pruebas salteadas del runner son mediciones (`listener_latency`, `pulso_latency`, ráfaga del PTY y escalas de Pulso) y la comprobación de vuelta atrás, que necesita el binario de la versión anterior; se activan a mano con `--ignored`. La salteada del puente es la verificación manual de atribución de procesos con una app propia.
 
-**Build de la entrega (23 de noviembre de 2026, commit `964b2aa`).** `python3 scripts/build-macos.py` terminó sin fallos en un Mac Apple Silicon y produjo el bundle `Jauria.app` 1.4.0 sin firma. Ejecutó, sobre ese commit: Python 24 pasadas; escritorio, unidad 185 pasadas, 0 fallidas, 5 salteadas; navegador 243 pasadas, 0 fallidas; `pulso-panel` 131 pasadas; Configuración y permisos 64 pasadas; `attention-consistency` 9 + 9 pasadas; `terminal-stream` 15 + 15 pasadas; runner 356 pasadas, 0 fallidas, 6 salteadas; puente nativo 43 pasadas. Un build anterior de esta misma versión se hizo sobre `ad87506`, antes de la barra lateral ajustable, la Configuración nueva y el ciclo de vida de las sesiones. No se generó DMG ni checksum: esta entrega no está empaquetada para distribución.
+El build produjo el bundle `Jauria.app` 1.4.0 sin firma. Builds anteriores de esta misma versión se hicieron sobre `ad87506`, `964b2aa`, `bc68ebb` y `ad7a618`, antes de los cambios de Pulso, Nueva sesión, avisos y Uso y recursos del 24 de noviembre. No se generó DMG ni checksum: esta entrega no está empaquetada para distribución.
+
+**Sin verificar con herramientas reales** (las pruebas usan una frontera sintética y ejecutables simulados): los avisos por sesión de Claude Code y de Codex contra las CLI reales, el clic en una notificación de macOS en la app empaquetada, y un runner 1.3.3 real leyendo los ajustes escritos por 1.4.0. Los pasos de comprobación manual están en [SESSION_ALERTS.md](SESSION_ALERTS.md).
 
 La versión de frontend, runner, puente y bundle es 1.4.0 (`python3 scripts/version.py --check`).
 
