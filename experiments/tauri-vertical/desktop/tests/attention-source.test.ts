@@ -243,6 +243,21 @@ function harness(options: Any = {}) {
     assert.equal(calls.length, 1);
   });
 
+  test('structured Codex: an end of turn (no frame) arriving in the attended pane is seen; in the background it is not (H1)', async () => {
+    const { source, env, calls, settle } = harness();
+    source.ingestStatus(status([{ id: 's1', agent: agent() }, { id: 'cx2', agent: agent({ epoch: 3 }) }]));
+    source.paint(['s1']);
+    source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { finished: { seq: 1 } } }) }, { id: 'cx2', agent: agent({ epoch: 3, alertSeq: 1, pending: { finished: { seq: 1 } } }) }]));
+    source.paint(['s1']); await settle();
+    assert.deepEqual(calls.map((c: Any) => c.items), [[{ id: 's1', epoch: 77, through: 1 }]]);
+    // At connection (no earlier record in this window) a pending finish is not assumed seen.
+    const fresh = harness();
+    fresh.source.ingestStatus(status([{ id: 's1', agent: agent({ alertSeq: 1, pending: { finished: { seq: 1 } } }) }]));
+    fresh.source.paint(['s1']); await fresh.settle();
+    assert.equal(fresh.calls.length, 0);
+    void env;
+  });
+
   test('hasMore: a record the next status omits is dropped, not kept as pending; the hidden count stays exact', () => {
     const { source } = harness();
     const pendingRecord = agent({ alertSeq: 1, pending: { finished: { seq: 1, frame: 2 } } });

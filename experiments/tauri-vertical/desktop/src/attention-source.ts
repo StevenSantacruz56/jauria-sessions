@@ -193,6 +193,8 @@ export class RunnerAttentionSource implements AttentionSource {
   private retained = new Map<string, { keys: string[]; at: number }>();
   /** Sessions whose process end this window observed while attended: their `ended` (no frame) was seen on screen. */
   private endedOnScreen = new Set<string>();
+  /** Frameless alerts (structured Codex end of turn) that arrived while their pane was attended. */
+  private seenOnScreen = new Set<string>();
   /** Pending sessions `status` did not list, from that same status: a mark_seen answer never changes it (only the next status). */
   private hidden = 0;
   private generation: string | null = null;
@@ -261,6 +263,10 @@ export class RunnerAttentionSource implements AttentionSource {
     const old = this.agents.get(id);
     if (next === null) return this.agents.delete(id);
     if (!force && !fresher(old, next)) return false;
+    // Structured Codex has no frames: an end of turn that arrives while its pane is attended was seen there.
+    const finished = next.pending.finished;
+    if (old && finished && finished.frame === null && old.pending.finished?.seq !== finished.seq && this.hooks.isAttended(id) && this.hooks.canMark(id))
+      this.seenOnScreen.add(agentKey(id, 'finished', next.epoch, finished.seq));
     this.agents.set(id, next);
     if (this.baselineFirstSight && this.unlistedAtConnect.delete(id) && !this.baseline.has(id)) this.baseline.set(id, { epoch: next.epoch, seq: next.alertSeq });
     return !old || JSON.stringify(old) !== JSON.stringify(next);
@@ -347,13 +353,15 @@ export class RunnerAttentionSource implements AttentionSource {
     const live = new Set<string>();
     for (const [id, a] of this.painted) for (const kind of agentAlertKinds) { const p = a.pending[kind]; if (p) live.add(agentKey(id, kind, a.epoch, p.seq)); }
     for (const key of this.optimistic) if (!live.has(key)) this.optimistic.delete(key);
+    for (const key of this.seenOnScreen) if (!live.has(key)) this.seenOnScreen.delete(key);
     for (const id of attended) {
       const a = this.painted.get(id);
       if (!a || !this.hooks.isAttended(id) || !this.hooks.canMark(id)) continue;
       const consumed = this.hooks.consumedFrame(id);
       const pending = this.pending(id, a);
       // A frame alert once xterm consumed its frame; a process end (no frame) once this window saw it happen here.
-      const ready = (kind: AgentAlertKind, p: AgentAlert) => p.frame !== null ? consumed !== null && consumed >= p.frame : kind === 'ended' && this.endedOnScreen.has(id);
+      const ready = (kind: AgentAlertKind, p: AgentAlert) => p.frame !== null ? consumed !== null && consumed >= p.frame
+        : (kind === 'ended' && this.endedOnScreen.has(id)) || this.seenOnScreen.has(agentKey(id, kind, a.epoch, p.seq));
       const blocked = pending.filter(([kind, p]) => !ready(kind, p)).map(([, p]) => p.seq);
       const through = blocked.length ? Math.min(...blocked) - 1 : a.alertSeq;
       const marked = pending.filter(([kind, p]) => ready(kind, p) && p.seq <= through);
@@ -427,7 +435,7 @@ export class RunnerAttentionSource implements AttentionSource {
     this.token++; this.flying = false;
     this.agents.clear(); this.painted.clear(); this.optimistic.clear(); this.wanted.clear(); this.sent.clear();
     this.baseline.clear(); this.baselined = false; this.baselineFirstSight = false; this.generation = null; this.volatileSeen = false;
-    this.unlistedAtConnect.clear(); this.liveSince.clear(); this.retained.clear(); this.endedOnScreen.clear(); this.hidden = 0;
+    this.unlistedAtConnect.clear(); this.liveSince.clear(); this.retained.clear(); this.endedOnScreen.clear(); this.seenOnScreen.clear(); this.hidden = 0;
   }
 }
 

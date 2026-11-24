@@ -469,6 +469,36 @@ impl Attention {
         self.prune(&mut m);
     }
 
+    /// Structured Codex (app-server): a native `turn/completed` the runner
+    /// confirmed. `completed` and `failed` raise `finished` (as a PTY
+    /// `working → done`); `interrupted` (a cancel) does not. The caller calls
+    /// it once per turn (the actor's terminal flag), so retries never repeat it.
+    pub fn structured_turn_finished(&self, id: &str, status: &str) {
+        if !matches!(status, "completed" | "failed") { return; }
+        let now = (self.clock)();
+        let mut m = lock(&self.inner);
+        let record = self.entry(&mut m, id);
+        record.raise(Kind::Finished, None);
+        record.updated_at = now.0;
+        self.touch(&mut m, id);
+    }
+
+    /// Structured Codex: the connection's final state was stored. Same rules
+    /// as a PTY end (`stop_requested` included), without the PTY seal.
+    pub fn structured_ended(&self, id: &str, status: &str) {
+        let now = (self.clock)();
+        let mut m = lock(&self.inner);
+        let requested = m.stop_requested.remove(id);
+        let confirmed = matches!(status, "exited" | "stopped" | "failed");
+        let alert = confirmed && !(requested && status == "stopped");
+        if !alert && !m.records.contains_key(id) { return; }
+        let record = self.entry(&mut m, id);
+        if confirmed { record.finished_process = true; record.supersede(Kind::Needs); }
+        if alert { record.raise(Kind::Ended, None); }
+        record.updated_at = now.0;
+        self.touch(&mut m, id);
+    }
+
     /// The PTY reader of `id` stopped for good (EOF, EIO or error): no later
     /// `pty` call can come from it, so its seal is no longer needed. If the
     /// process end is still unpublished, remember it so the end seals nothing.
@@ -868,6 +898,30 @@ mod tests {
         // Runner shutdown never calls stop_requested: its stopped sessions keep `ended`.
         a.process_ended("s", "stopped");
         assert!(agent(&a, "s")["pending"]["ended"].is_object());
+    }
+
+    #[test]
+    fn structured_codex_end_follows_the_pty_rules() {
+        let fake = Fake::new();
+        let a = memory(&fake);
+        a.structured_ended("c1", "exited");
+        assert!(agent(&a, "c1")["pending"]["ended"].is_object());
+        a.structured_ended("c2", "failed");
+        assert!(agent(&a, "c2")["pending"]["ended"].is_object());
+        // Terminar on a structured session: no ended; runner shutdown (no request): ended.
+        a.stop_requested("c3");
+        a.structured_ended("c3", "stopped");
+        assert!(a.snapshot("c3").is_none());
+        a.structured_ended("c4", "stopped");
+        assert!(agent(&a, "c4")["pending"]["ended"].is_object());
+        // Custody in doubt is not a confirmed end.
+        a.structured_ended("c5", "needs_attention");
+        assert!(a.snapshot("c5").is_none());
+        // A permission still unseen survives the end.
+        a.permission("c6", "00000000-0000-4000-8000-000000000009", 2);
+        a.structured_ended("c6", "exited");
+        let v = agent(&a, "c6");
+        assert!(v["pending"]["permission"].is_object() && v["pending"]["ended"].is_object());
     }
 
     #[test]

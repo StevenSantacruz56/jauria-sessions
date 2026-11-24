@@ -330,8 +330,11 @@ impl Actor<'_> {
                 let status = text(&v["turn"],"status")?;
                 ensure!(["completed","failed","interrupted"].contains(&status), "Nonterminal completion");
                 let t = self.turn.as_mut().unwrap();
+                let first = !t.terminal;
                 let mut end = t.identity.clone(); end["nativeTurnId"] = json!(native); end["status"] = json!(status);
                 ledger::finish_turn(&lock(self.db)?.0,&end)?; t.terminal = true; self.approvals.clear();
+                // Committed end of turn: «Turno terminado» for whoever is not looking (once per turn).
+                if first { if let Some(attention)=&self.control.attention { attention.structured_turn_finished(self.sid,status); } }
                 // Native completion is authoritative even when an interrupt ACK
                 // is late or rejects an already-finished turn. Retire exact IDs
                 // so a late reply cannot affect any subsequent turn.
@@ -428,8 +431,11 @@ pub fn run(db: Arc<Mutex<Store>>, admission: Arc<Mutex<()>>, control: Control,
     let mut store = lock(&db)?;
     if wait_confirmed { ledger::close_session(&store.0,&session_id,control.generation)?; }
     let stopped = result.is_ok() && control.stop.load(Ordering::Acquire);
-    store.state(&session_id,if !wait_confirmed || (result.is_err() && thread_requested){"needs_attention"}else if result.is_err(){"failed"}else if stopped{"stopped"}else{"exited"},
+    let final_status=if !wait_confirmed || (result.is_err() && thread_requested){"needs_attention"}else if result.is_err(){"failed"}else if stopped{"stopped"}else{"exited"};
+    store.state(&session_id,final_status,
         json!({"waitConfirmed":wait_confirmed,"generation":control.generation,"fault":result.is_err(),"reason":result.as_ref().err().map(|error|error.to_string().chars().take(240).collect::<String>())}))?;
+    drop(store);
+    if let Some(attention)=&control.attention { attention.structured_ended(&session_id,final_status); }
     ensure!(wait_confirmed, "Owned process quiescence unconfirmed; retain resource fence");
     result
 }
@@ -552,6 +558,21 @@ mod tests {
         assert_eq!(ledger::get_session(&lock(&db).unwrap().0,"s").unwrap()["status"],"idle");
         assert!(a.response(RpcId::Number(5),Some(json!({"turn":{"id":"native"}}))).is_err());
         assert!(a.bind("other").is_err());
+    }
+    #[test] fn structured_turn_completion_is_one_finished_alert_and_a_cancel_is_none() {
+        use crate::agent_attention::{Attention, Config, system_clock};
+        for (status, alerts) in [("completed", 1), ("failed", 1), ("interrupted", 0)] {
+            let (db,mut c,id)=fixture();
+            let attention=Attention::open(None,"g".into(),&[],system_clock(),Config::default());
+            c.attention=Some(attention.clone());
+            let mut a=actor(&db,&c,id);
+            a.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"native","status":status}})).unwrap();
+            // A repeated delivery of the same completion never raises a second alert.
+            let _=a.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"native","status":status}}));
+            let seq=attention.snapshot("s").map_or(0,|v|v["alertSeq"].as_u64().unwrap());
+            assert_eq!(seq,alerts,"{status}");
+            if alerts==1 { assert!(attention.snapshot("s").unwrap()["pending"]["finished"].is_object()); }
+        }
     }
     #[test] fn wrong_thread_and_oversized_output_fail_without_event_loss() {
         let (db,c,id)=fixture(); let mut a=actor(&db,&c,id); a.bind("native").unwrap();

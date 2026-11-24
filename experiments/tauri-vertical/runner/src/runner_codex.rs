@@ -105,7 +105,7 @@ impl Runner {
             let stored=self.db.lock().unwrap().session(id)?.context("Sesión desconocida")?;
             ensure!(stored["codex"]["generation"]==generation,"La conexión cambió; la detención no se aplica a otra generación");
             if let Some(pulso)=&self.pulso {let _=pulso.revoke_session(id);}
-            if let Some(job)=jobs.get(id){ensure!(job.control.generation==generation,"La conexión cambió");job.control.ready.store(false,Ordering::Release);job.control.stop.store(true,Ordering::Release);}
+            if let Some(job)=jobs.get(id){ensure!(job.control.generation==generation,"La conexión cambió");self.attention.stop_requested(id);job.control.ready.store(false,Ordering::Release);job.control.stop.store(true,Ordering::Release);}
             else {ensure!(matches!(stored["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released")),"Sesión sin custodia; no se envían señales");return Ok(stored);}
         }
         let until=Instant::now()+Duration::from_secs(10);
