@@ -29,6 +29,24 @@
 //! fields: only PID/PPID/effective UID/start time and exit status are inspected;
 //! its name/user-data fields are never accessed, copied out or exported.
 //!
+//! `parents[i]` is the observed PPID of `pids[i]`, so the caller can attribute
+//! a descendant to the nearest owned ancestor (e.g. a session leader) without
+//! a second inventory. Processes of other users are outside the scope: the
+//! kernel denies PROC_PIDTBSDINFO across users (EPERM), so the inventory reads
+//! their UID with PROC_PIDT_SHORTBSDINFO and skips them; a process that exits
+//! between the listing and its read (ESRCH) is skipped as well. Neither makes
+//! the inventory partial: only an unreadable same-user process does.
+//!
+//! `observe_app` additionally reports `helpers`: same-user processes parented
+//! by launchd whose *responsible* process (the kernel's attribution of XPC
+//! services, e.g. WebKit WebContent/GPU/Networking, to the app that launched
+//! them) is the root. This uses `responsibility_get_pid_responsible_for_pid`,
+//! exported by libSystem but undocumented, looked up with dlsym at run time.
+//! It is only meaningful when the root is responsible for itself (an app
+//! launched by LaunchServices); a binary started from a terminal shares the
+//! terminal's responsibility, so `helpersStatus` is then `not_attributable` and
+//! no helper is claimed. `unsupported` when the symbol is missing.
+//!
 //! Standalone: only std, libc and serde_json; also usable via `#[path = "..."]`
 //! in the GUI bridge. No integration or manifest edits required here.
 
@@ -49,17 +67,25 @@ struct Process {
     start: (u64, u64),
 }
 
+/// `read` errors: `process_exited` and `foreign_uid` mean "outside the scope"
+/// during inventory; any other error is an unreadable process (partial).
 trait Source {
     fn expired(&self) -> bool;
     fn read(&mut self, pid: u32) -> Result<Process, &'static str>;
     fn list(&mut self) -> Result<Vec<u32>, &'static str>;
+    /// The kernel's responsible PID; None when unknown or unsupported.
+    fn responsible(&mut self, pid: u32) -> Option<u32>;
+    fn responsibility_supported(&self) -> bool;
 }
 
-fn output(root: u32, pids: Vec<u32>, reason: Option<&'static str>) -> Value {
+fn output(root: u32, selected: Vec<Process>, reason: Option<&'static str>) -> Value {
+    let pids: Vec<u32> = selected.iter().map(|p| p.pid).collect();
+    let parents: Vec<u32> = selected.iter().map(|p| p.ppid).collect();
     let mut value = json!({
         "root": root,
         "available": !pids.is_empty(),
         "pids": pids,
+        "parents": parents,
         "partial": reason.is_some(),
         "scope": SCOPE,
     });
@@ -69,28 +95,71 @@ fn output(root: u32, pids: Vec<u32>, reason: Option<&'static str>) -> Value {
     value
 }
 
+/// Map every observed PID to the label of its nearest labelled ancestor (itself
+/// included), walking `parents` within the observed tree only. PIDs with no
+/// labelled ancestor are absent. Labels are attribution, never authority.
+pub fn nearest_labels(tree: &Value, labels: &HashMap<u32, String>) -> HashMap<u32, String> {
+    let pids: Vec<u32> = tree["pids"].as_array().into_iter().flatten()
+        .filter_map(|p| p.as_u64().map(|p| p as u32)).collect();
+    let parents: Vec<u32> = tree["parents"].as_array().into_iter().flatten()
+        .filter_map(|p| p.as_u64().map(|p| p as u32)).collect();
+    if pids.len() != parents.len() { return HashMap::new(); }
+    let parent: HashMap<u32, u32> = pids.iter().copied().zip(parents).collect();
+    let mut out = HashMap::new();
+    for &pid in &pids {
+        let mut current = pid;
+        // The tree is acyclic after selection; the depth cap still bounds it.
+        for _ in 0..=MAX_DEPTH + 1 {
+            if let Some(label) = labels.get(&current) { out.insert(pid, label.clone()); break; }
+            match parent.get(&current) { Some(&next) => current = next, None => break }
+        }
+    }
+    out
+}
+
 fn valid_pid(pid: u32) -> bool {
     pid != 0 && pid <= i32::MAX as u32
 }
 
 /// Observe only current same-effective-UID ancestry; see module contract.
+/// Used by the runner (the GUI bridge uses `observe_app`).
+#[allow(dead_code)]
 pub fn observe(root: u32) -> Value {
+    observe_root(root, false)
+}
+
+/// `observe` plus the launchd-parented helpers the kernel attributes to `root`.
+/// Used by the GUI bridge (this file is shared with it by `#[path]`).
+#[allow(dead_code)]
+pub fn observe_app(root: u32) -> Value {
+    observe_root(root, true)
+}
+
+fn observe_root(root: u32, helpers: bool) -> Value {
     if !valid_pid(root) {
         return output(root, vec![], Some("invalid_root"));
     }
     #[cfg(target_os = "macos")]
     {
-        let mut source = Kernel { deadline: std::time::Instant::now()
-            + std::time::Duration::from_millis(100) };
         // SAFETY: geteuid has no arguments, memory access or side effects.
-        observe_with(root, unsafe { libc::geteuid() }, &mut source)
+        let uid = unsafe { libc::geteuid() };
+        let mut source = Kernel { uid, deadline: std::time::Instant::now()
+            + std::time::Duration::from_millis(100) };
+        observe_with(root, uid, &mut source, helpers)
     }
     #[cfg(not(target_os = "macos"))]
-    output(root, vec![], Some("unsupported_platform"))
+    {
+        let _ = helpers;
+        output(root, vec![], Some("unsupported_platform"))
+    }
 }
 
-fn observe_with(root: u32, uid: u32, source: &mut impl Source) -> Value {
-    let fail = |reason| output(root, vec![], Some(reason));
+fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) -> Value {
+    let fail = |reason| {
+        let mut value = output(root, vec![], Some(reason));
+        if helpers { value["helpers"] = json!([]); value["helpersStatus"] = json!("unavailable"); }
+        value
+    };
     if !valid_pid(root) {
         return fail("invalid_root");
     }
@@ -122,7 +191,28 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source) -> Value {
         match source.read(pid) {
             Ok(p) if p.pid == pid && p.uid == uid => { forest.insert(pid, p); }
             Ok(p) if p.pid == pid => {} // Different UID is outside this scope.
+            // Another user's process (denied across users) or one that exited
+            // after the listing cannot belong to this tree: not incompleteness.
+            Err("foreign_uid" | "process_exited") => {}
             _ => { reason.get_or_insert("inventory_incomplete"); }
+        }
+    }
+    // Helpers: launchd-parented, same user, and attributed by the kernel to a
+    // root that is responsible for itself. Never inferred from names.
+    let helper_status = if !helpers { None }
+        else if !source.responsibility_supported() { Some("unsupported") }
+        else if source.responsible(root) != Some(root) { Some("not_attributable") }
+        else { Some("included") };
+    let mut helper_candidates = Vec::new();
+    if helper_status == Some("included") {
+        let mut candidates: Vec<Process> = forest.values()
+            .filter(|p| p.pid != root && p.ppid == 1).copied().collect();
+        candidates.sort_unstable_by_key(|p| p.pid);
+        for process in candidates {
+            if source.expired() {
+                return fail("deadline");
+            }
+            if source.responsible(process.pid) == Some(root) { helper_candidates.push(process); }
         }
     }
     // Do not quietly insert the root into an inventory that missed/reused it.
@@ -133,7 +223,7 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source) -> Value {
     // Validate every identity AND PPID before export. Children whose ancestor
     // failed revalidation are excluded even if their own metadata still matches.
     let mut validated = HashSet::new();
-    let mut pids = Vec::new();
+    let mut kept = Vec::new();
     for process in selected {
         if source.expired() {
             return fail("deadline");
@@ -145,10 +235,20 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source) -> Value {
         match source.read(process.pid) {
             Ok(current) if current == process => {
                 validated.insert(process.pid);
-                pids.push(process.pid);
+                kept.push(process);
             }
             _ if process.pid == root => return fail("root_changed_or_exited"),
             _ => { reason.get_or_insert("descendant_changed_or_exited"); }
+        }
+    }
+    // A helper that exited or changed since the inventory is simply dropped.
+    let mut helper_pids = Vec::new();
+    for process in helper_candidates {
+        if source.expired() {
+            return fail("deadline");
+        }
+        if source.read(process.pid) == Ok(process) && source.responsible(process.pid) == Some(root) {
+            helper_pids.push(process.pid);
         }
     }
     if source.expired() {
@@ -161,7 +261,12 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source) -> Value {
     if source.expired() {
         return fail("deadline");
     }
-    output(root, pids, reason)
+    let mut value = output(root, kept, reason);
+    if let Some(status) = helper_status {
+        value["helpers"] = json!(helper_pids);
+        value["helpersStatus"] = json!(status);
+    }
+    value
 }
 
 // Pure forest selection apart from the injected budget check. BFS guarantees
@@ -223,7 +328,20 @@ fn select(
 
 #[cfg(target_os = "macos")]
 struct Kernel {
+    uid: u32,
     deadline: std::time::Instant,
+}
+
+/// `pid_t responsibility_get_pid_responsible_for_pid(pid_t)`, resolved once.
+#[cfg(target_os = "macos")]
+fn responsibility_fn() -> Option<extern "C" fn(libc::pid_t) -> libc::pid_t> {
+    static ADDRESS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let address = *ADDRESS.get_or_init(|| {
+        // SAFETY: NUL-terminated literal; RTLD_DEFAULT searches loaded images.
+        unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"responsibility_get_pid_responsible_for_pid".as_ptr()) as usize }
+    });
+    // SAFETY: the libSystem symbol has this C signature (pid in, pid out).
+    (address != 0).then(|| unsafe { std::mem::transmute::<usize, extern "C" fn(libc::pid_t) -> libc::pid_t>(address) })
 }
 
 #[cfg(target_os = "macos")]
@@ -260,6 +378,28 @@ impl Source for Kernel {
                 info.as_mut_ptr().cast(), size)
         };
         if count != size {
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            if errno == Some(libc::ESRCH) {
+                return Err("process_exited");
+            }
+            if errno == Some(libc::EPERM) {
+                // Cross-user reads of the full struct are denied; the short
+                // struct still carries the UID (its name field is not read).
+                let mut short = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+                let short_size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
+                // SAFETY: as above, exact writable buffer for this flavor.
+                let read = unsafe {
+                    libc::proc_pidinfo(pid as i32, libc::PROC_PIDT_SHORTBSDINFO, 0,
+                        short.as_mut_ptr().cast(), short_size)
+                };
+                if read == short_size {
+                    // SAFETY: exact-size successful kernel result.
+                    let short = unsafe { short.assume_init() };
+                    if short.pbsi_pid == pid && short.pbsi_uid != self.uid {
+                        return Err("foreign_uid");
+                    }
+                }
+            }
             return Err("metadata_unavailable");
         }
         // SAFETY: exact-size successful kernel result, integer/byte-array fields.
@@ -275,6 +415,17 @@ impl Source for Kernel {
             start: (info.pbi_start_tvsec, info.pbi_start_tvusec),
         })
     }
+
+    fn responsible(&mut self, pid: u32) -> Option<u32> {
+        let f = responsibility_fn()?;
+        if !valid_pid(pid) { return None; }
+        let responsible = f(pid as libc::pid_t);
+        (responsible > 0).then_some(responsible as u32)
+    }
+
+    fn responsibility_supported(&self) -> bool {
+        responsibility_fn().is_some()
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +439,10 @@ mod tests {
         change: Option<(u32, usize, Option<Process>)>,
         expired: bool,
         expire_after_reads: Option<usize>,
+        /// Read errors returned for listed PIDs absent from the forest.
+        errors: HashMap<u32, &'static str>,
+        /// Kernel responsibility; None models a missing symbol.
+        responsible: Option<HashMap<u32, u32>>,
     }
 
     fn p(pid: u32, ppid: u32) -> Process {
@@ -297,7 +452,7 @@ mod tests {
     fn fixture(processes: &[Process]) -> Fixture {
         Fixture { forest: processes.iter().map(|p| (p.pid, *p)).collect(),
             inventory: None, reads: HashMap::new(), change: None, expired: false,
-            expire_after_reads: None }
+            expire_after_reads: None, errors: HashMap::new(), responsible: None }
     }
 
     impl Source for Fixture {
@@ -321,8 +476,77 @@ mod tests {
                     return replacement.ok_or("exited");
                 }
             }
+            if let Some(error) = self.errors.get(&pid) {
+                return Err(error);
+            }
             self.forest.get(&pid).copied().ok_or("missing")
         }
+        fn responsible(&mut self, pid: u32) -> Option<u32> {
+            self.responsible.as_ref()?.get(&pid).copied()
+        }
+        fn responsibility_supported(&self) -> bool { self.responsible.is_some() }
+    }
+
+    #[test]
+    fn descendants_take_the_label_of_their_nearest_labelled_ancestor() {
+        // runner 1 → session leaders 2 (a) and 3 (b); 4 under 2; 5 under 4;
+        // 6 is a runner helper without a session.
+        let value = observe_with(1, 7, &mut fixture(&[p(1, 0), p(2, 1), p(3, 1), p(4, 2), p(5, 4), p(6, 1)]), false);
+        let labels = HashMap::from([(2, "a".to_owned()), (3, "b".to_owned())]);
+        let got = nearest_labels(&value, &labels);
+        assert_eq!(got.get(&2).map(String::as_str), Some("a"));
+        assert_eq!(got.get(&4).map(String::as_str), Some("a"));
+        assert_eq!(got.get(&5).map(String::as_str), Some("a"));
+        assert_eq!(got.get(&3).map(String::as_str), Some("b"));
+        assert!(!got.contains_key(&1) && !got.contains_key(&6));
+        assert!(nearest_labels(&json!({"pids":[1,2],"parents":[0]}), &labels).is_empty());
+    }
+
+    #[test]
+    fn other_users_and_exited_processes_do_not_make_the_inventory_partial() {
+        // The idle false positive: every root/system process used to fail its
+        // read (EPERM across users) and flag the whole inventory as partial.
+        let mut f = fixture(&[p(1, 0), p(2, 1)]);
+        f.inventory = Some(vec![1, 2, 50, 51, 52]);
+        f.errors = HashMap::from([(50, "foreign_uid"), (51, "foreign_uid"), (52, "process_exited")]);
+        let value = observe_with(1, 7, &mut f, false);
+        assert_eq!(value["pids"], json!([1, 2]));
+        assert_eq!(value["parents"], json!([0, 1]));
+        assert_eq!(value["partial"], false, "{value}");
+        // A same-user process that cannot be read still is incompleteness.
+        f.errors.insert(53, "metadata_unavailable");
+        f.inventory = Some(vec![1, 2, 50, 53]);
+        let value = observe_with(1, 7, &mut f, false);
+        assert_eq!(value["reason"], "inventory_incomplete");
+    }
+
+    #[test]
+    fn helpers_require_a_self_responsible_root_and_launchd_parent() {
+        // 5: app launched by launchd (PID 1) and responsible for itself; 6: its
+        // child; 10, 11: launchd-parented helpers attributed to the app; 12:
+        // another app's helper; 13: app-attributed but already in the tree.
+        let processes = [p(5, 1), p(6, 5), p(10, 1), p(11, 1), p(12, 1), p(13, 6)];
+        let mut f = fixture(&processes);
+        f.responsible = Some(HashMap::from([(5, 5), (6, 5), (10, 5), (11, 5), (12, 99), (13, 5)]));
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!(value["pids"], json!([5, 6, 13]));
+        assert_eq!(value["helpersStatus"], "included");
+        assert_eq!(value["helpers"], json!([10, 11]));
+        assert_eq!(value["partial"], false);
+        // A helper that changes before revalidation is dropped, silently.
+        let mut f = fixture(&processes);
+        f.responsible = Some(HashMap::from([(5, 5), (10, 5), (11, 5)]));
+        f.change = Some((11, 2, None));
+        assert_eq!(observe_with(5, 7, &mut f, true)["helpers"], json!([10]));
+        // Started from a terminal (responsible is the terminal): nothing claimed.
+        let mut f = fixture(&processes);
+        f.responsible = Some(HashMap::from([(5, 500), (10, 500)]));
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!(value["helpersStatus"], "not_attributable");
+        assert_eq!(value["helpers"], json!([]));
+        let value = observe_with(5, 7, &mut fixture(&processes), true);
+        assert_eq!(value["helpersStatus"], "unsupported");
+        assert!(observe_with(5, 7, &mut fixture(&processes), false).get("helpers").is_none());
     }
 
     #[test]
@@ -331,17 +555,18 @@ mod tests {
         foreign.uid = 8;
         let mut f = fixture(&[p(1, 0), p(3, 2), p(2, 1), foreign,
             p(5, 4), p(6, 0), p(8, 9), p(9, 8)]);
-        let value = observe_with(1, 7, &mut f);
+        let value = observe_with(1, 7, &mut f, false);
         assert_eq!(value["pids"], json!([1, 2, 3]));
         assert_eq!(value["available"], true);
         assert_eq!(value["partial"], false);
         assert_eq!(value["scope"], SCOPE);
-        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value["parents"], json!([0, 1, 2]));
+        assert_eq!(value.as_object().unwrap().len(), 6);
     }
 
     #[test]
     fn cycles_are_bounded_and_partial() {
-        let value = observe_with(1, 7, &mut fixture(&[p(1, 2), p(2, 1)]));
+        let value = observe_with(1, 7, &mut fixture(&[p(1, 2), p(2, 1)]), false);
         assert_eq!(value["pids"], json!([1, 2]));
         assert_eq!(value["reason"], "ancestry_cycle");
     }
@@ -349,12 +574,12 @@ mod tests {
     #[test]
     fn root_missing_foreign_or_invalid_has_no_available_pids() {
         for root in [0, u32::MAX, 99] {
-            let value = observe_with(root, 7, &mut fixture(&[p(1, 0)]));
+            let value = observe_with(root, 7, &mut fixture(&[p(1, 0)]), false);
             assert_eq!(value["pids"], json!([]));
             assert_eq!(value["available"], false);
             assert_eq!(value["partial"], true);
         }
-        let value = observe_with(1, 8, &mut fixture(&[p(1, 0)]));
+        let value = observe_with(1, 8, &mut fixture(&[p(1, 0)]), false);
         assert_eq!(value["available"], false);
     }
 
@@ -364,7 +589,7 @@ mod tests {
             for replacement in [None, Some(Process { start: (101, 0), ..p(1, 0) })] {
                 let mut f = fixture(&[p(1, 0), p(2, 1)]);
                 f.change = Some((1, at, replacement));
-                let value = observe_with(1, 7, &mut f);
+                let value = observe_with(1, 7, &mut f, false);
                 assert_eq!(value["pids"], json!([]), "{value}");
                 assert_eq!(value["partial"], true);
             }
@@ -375,19 +600,19 @@ mod tests {
     fn incomplete_inventory_never_claims_complete_coverage() {
         let mut f = fixture(&[p(1, 0), p(2, 1)]);
         f.inventory = Some(vec![2]);
-        let value = observe_with(1, 7, &mut f);
+        let value = observe_with(1, 7, &mut f, false);
         assert_eq!(value["reason"], "root_missing_or_changed");
         assert_eq!(value["pids"], json!([]));
 
         f.inventory = Some(vec![1, 2, 99]);
-        let value = observe_with(1, 7, &mut f);
+        let value = observe_with(1, 7, &mut f, false);
         assert_eq!(value["pids"], json!([1, 2]));
         assert_eq!(value["reason"], "inventory_incomplete");
 
         // A full buffer is partial even if duplicates reduce the selected set.
         // No OS processes are created for this cap test.
         f.inventory = Some(vec![1; PID_CAP]);
-        let value = observe_with(1, 7, &mut f);
+        let value = observe_with(1, 7, &mut f, false);
         assert_eq!(value["pids"], json!([1]));
         assert_eq!(value["reason"], "pid_cap");
     }
@@ -397,7 +622,7 @@ mod tests {
         for limit in 1..=8 {
             let mut f = fixture(&[p(1, 0), p(2, 1), p(3, 2)]);
             f.expire_after_reads = Some(limit);
-            let value = observe_with(1, 7, &mut f);
+            let value = observe_with(1, 7, &mut f, false);
             assert_eq!(value["pids"], json!([]), "limit={limit}: {value}");
             assert_eq!(value["reason"], "deadline");
         }
@@ -409,7 +634,7 @@ mod tests {
             Some(p(2, 99)), Some(Process { uid: 8, ..p(2, 1) })] {
             let mut f = fixture(&[p(1, 0), p(2, 1), p(3, 2), p(4, 1)]);
             f.change = Some((2, 2, replacement));
-            let value = observe_with(1, 7, &mut f);
+            let value = observe_with(1, 7, &mut f, false);
             assert_eq!(value["pids"], json!([1, 4]));
             assert_eq!(value["partial"], true);
         }
@@ -418,7 +643,7 @@ mod tests {
     #[test]
     fn older_child_cannot_attach_to_reused_parent() {
         let older = Process { start: (99, 0), ..p(2, 1) };
-        let value = observe_with(1, 7, &mut fixture(&[p(1, 0), older]));
+        let value = observe_with(1, 7, &mut fixture(&[p(1, 0), older]), false);
         assert_eq!(value["pids"], json!([1]));
         assert_eq!(value["reason"], "ancestor_identity_inconsistent");
     }
@@ -426,17 +651,17 @@ mod tests {
     #[test]
     fn depth_and_descendant_caps_and_deadline_are_explicit() {
         let chain: Vec<_> = (1..=35).map(|pid| p(pid, pid - 1)).collect();
-        let value = observe_with(1, 7, &mut fixture(&chain));
+        let value = observe_with(1, 7, &mut fixture(&chain), false);
         assert_eq!(value["pids"].as_array().unwrap().len(), 33);
         assert_eq!(value["reason"], "depth_cap");
         let mut wide = vec![p(1, 0)];
         wide.extend((2..=131).map(|pid| p(pid, 1)));
-        let value = observe_with(1, 7, &mut fixture(&wide));
+        let value = observe_with(1, 7, &mut fixture(&wide), false);
         assert_eq!(value["pids"].as_array().unwrap().len(), 129);
         assert_eq!(value["reason"], "descendant_cap");
         let mut f = fixture(&[p(1, 0)]);
         f.expired = true;
-        let value = observe_with(1, 7, &mut f);
+        let value = observe_with(1, 7, &mut f, false);
         assert_eq!(value["reason"], "deadline");
         assert_eq!(value["available"], false);
         assert!(f.reads.is_empty());
@@ -457,10 +682,43 @@ mod tests {
         assert!(status.success());
         assert_eq!(value["available"], true, "{value}");
         assert!(value["pids"].as_array().unwrap().contains(&json!(child_pid)), "{value}");
+        // Other users' processes (root daemons, always present) are not an
+        // incomplete inventory. Parallel tests may still race descendants.
+        assert_ne!(value["reason"], "inventory_incomplete", "{value}");
+        assert_eq!(value["parents"].as_array().unwrap().len(), value["pids"].as_array().unwrap().len());
         assert_eq!(owned["pids"], json!([child_pid]), "{owned}");
         let exited = observe(child_pid);
         assert_eq!(exited["available"], false);
         assert_eq!(exited["partial"], true);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_launchd_is_another_user_not_an_unreadable_process() {
+        // SAFETY: no arguments or side effects.
+        let uid = unsafe { libc::geteuid() };
+        if uid == 0 { return; } // root reads every process; nothing to show.
+        let mut kernel = Kernel { uid, deadline: std::time::Instant::now() + std::time::Duration::from_secs(1) };
+        assert_eq!(kernel.read(1), Err("foreign_uid"));
+        assert_eq!(kernel.read(i32::MAX as u32), Err("process_exited"));
+        let own = std::process::id();
+        assert_eq!(kernel.read(own).map(|p| p.pid), Ok(own));
+        // A test binary started by cargo is not responsible for itself.
+        if kernel.responsibility_supported() {
+            assert_ne!(kernel.responsible(own), None);
+            assert_eq!(observe_app(own)["helpersStatus"], "not_attributable");
+        }
+    }
+
+    /// Manual check against a WKWebView app you launched with `open` (not a
+    /// terminal): `JAURIA_OBSERVE_APP_PID=<pid> cargo test observe_app_manual
+    /// -- --ignored --nocapture`, then compare `helpers` with `ps -o pid,ppid`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn observe_app_manual() {
+        let pid: u32 = std::env::var("JAURIA_OBSERVE_APP_PID").unwrap().parse().unwrap();
+        println!("{}", observe_app(pid));
     }
 
     #[cfg(not(target_os = "macos"))]
