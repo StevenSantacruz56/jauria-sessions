@@ -53,8 +53,11 @@
 //! proc_pidpath for these launchd-parented candidates only and never exported,
 //! is under the system's `/System/Library/…/XPCServices/` (WebKit WebContent,
 //! GPU, Networking; Metal, audio…). The rest go to `others`: kernel-attributed
-//! to the app but not part of the window. `helpersStatus` is `included` only
-//! when at least one helper was found, else `none_found`.
+//! to the app but not part of the window. `webkit` lists the helpers whose
+//! executable is WebKit's WebContent/GPU/Networking. `helpersStatus` is
+//! `included` only when at least one of those was found, else `none_found`
+//! (other system services still count as the window's); `disabled` when
+//! RESPONSIBILITY_ATTRIBUTION is off.
 //!
 //! Standalone: only std, libc and serde_json; also usable via `#[path = "..."]`
 //! in the GUI bridge. No integration or manifest edits required here.
@@ -85,16 +88,33 @@ trait Source {
     /// The kernel's responsible PID; None when unknown or unsupported.
     fn responsible(&mut self, pid: u32) -> Option<u32>;
     fn responsibility_supported(&self) -> bool;
-    /// Whether the executable is a system XPC service; None when unreadable.
-    fn system_service(&mut self, pid: u32) -> Option<bool>;
+    /// False when RESPONSIBILITY_ATTRIBUTION is off: the private API is never called.
+    fn attribution_enabled(&self) -> bool;
+    /// What the executable is (system XPC service, WebKit's or not); None when unreadable.
+    fn service(&mut self, pid: u32) -> Option<Service>;
 }
+
+/// Single switch for the window's helper attribution, which relies on the
+/// undocumented `responsibility_get_pid_responsible_for_pid`. Set to `false`
+/// to ship without it: `observe_app` then reports `helpersStatus: "disabled"`
+/// (no helpers, no others), and the view says the web engine is not included
+/// and marks the total as partial. Pending Steven's decision on the private API.
+pub const RESPONSIBILITY_ATTRIBUTION: bool = true;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Service { WebKit, System, Other }
 
 /// System XPC service executables (also in the OS cryptex used by Rapid
 /// Security Responses). Compared only, never exported.
-fn is_system_service_path(path: &str) -> bool {
-    ["/System/Library/", "/System/Cryptexes/OS/System/Library/", "/System/Volumes/Preboot/Cryptexes/OS/System/Library/"]
+fn service_of_path(path: &str) -> Service {
+    let system = ["/System/Library/", "/System/Cryptexes/OS/System/Library/", "/System/Volumes/Preboot/Cryptexes/OS/System/Library/"]
         .iter().any(|prefix| path.starts_with(prefix))
-        && path.contains(".xpc/Contents/MacOS/") && path.contains("/XPCServices/")
+        && path.contains(".xpc/Contents/MacOS/") && path.contains("/XPCServices/");
+    if !system { return Service::Other; }
+    // WebContent (and its variants), GPU and Networking of WebKit.framework.
+    let webkit = path.contains("/WebKit.framework/") && path.rsplit('/').next()
+        .is_some_and(|name| ["com.apple.WebKit.WebContent", "com.apple.WebKit.GPU", "com.apple.WebKit.Networking"].iter().any(|p| name.starts_with(p)));
+    if webkit { Service::WebKit } else { Service::System }
 }
 
 fn output(root: u32, selected: Vec<Process>, reason: Option<&'static str>) -> Value {
@@ -162,7 +182,7 @@ fn observe_root(root: u32, helpers: bool) -> Value {
     {
         // SAFETY: geteuid has no arguments, memory access or side effects.
         let uid = unsafe { libc::geteuid() };
-        let mut source = Kernel { uid, deadline: std::time::Instant::now()
+        let mut source = Kernel { uid, attribution: RESPONSIBILITY_ATTRIBUTION, deadline: std::time::Instant::now()
             + std::time::Duration::from_millis(100) };
         observe_with(root, uid, &mut source, helpers)
     }
@@ -176,7 +196,7 @@ fn observe_root(root: u32, helpers: bool) -> Value {
 fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) -> Value {
     let fail = |reason| {
         let mut value = output(root, vec![], Some(reason));
-        if helpers { value["helpers"] = json!([]); value["others"] = json!([]); value["helpersStatus"] = json!("unavailable"); }
+        if helpers { value["helpers"] = json!([]); value["webkit"] = json!([]); value["others"] = json!([]); value["helpersStatus"] = json!("unavailable"); }
         value
     };
     if !valid_pid(root) {
@@ -219,6 +239,7 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) ->
     // Helpers: launchd-parented, same user, and attributed by the kernel to a
     // root that is responsible for itself. Never inferred from names.
     let helper_status = if !helpers { None }
+        else if !source.attribution_enabled() { Some("disabled") }
         else if !source.responsibility_supported() { Some("unsupported") }
         else if source.responsible(root) != Some(root) { Some("not_attributable") }
         else { Some("included") };
@@ -264,14 +285,18 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) ->
     // Only system XPC services are the window's; the rest (e.g. a job a
     // session left behind) are reported apart, never as the web engine.
     let mut helper_pids = Vec::new();
+    let mut webkit_pids = Vec::new();
     let mut other_pids = Vec::new();
     for process in helper_candidates {
         if source.expired() {
             return fail("deadline");
         }
         if source.read(process.pid) == Ok(process) && source.responsible(process.pid) == Some(root) {
-            if source.system_service(process.pid) == Some(true) { helper_pids.push(process.pid); }
-            else { other_pids.push(process.pid); }
+            match source.service(process.pid) {
+                Some(Service::WebKit) => { helper_pids.push(process.pid); webkit_pids.push(process.pid); }
+                Some(Service::System) => helper_pids.push(process.pid),
+                _ => other_pids.push(process.pid),
+            }
         }
     }
     if source.expired() {
@@ -286,9 +311,11 @@ fn observe_with(root: u32, uid: u32, source: &mut impl Source, helpers: bool) ->
     }
     let mut value = output(root, kept, reason);
     if let Some(status) = helper_status {
-        // «included» only when something was actually counted.
-        let status = if status == "included" && helper_pids.is_empty() { "none_found" } else { status };
+        // «included» only when a WebKit process was found and counted; other
+        // system services (Metal, audio…) still count as the window's.
+        let status = if status == "included" && webkit_pids.is_empty() { "none_found" } else { status };
         value["helpers"] = json!(helper_pids);
+        value["webkit"] = json!(webkit_pids);
         value["others"] = json!(other_pids);
         value["helpersStatus"] = json!(status);
     }
@@ -355,6 +382,8 @@ fn select(
 #[cfg(target_os = "macos")]
 struct Kernel {
     uid: u32,
+    /// RESPONSIBILITY_ATTRIBUTION; false never resolves nor calls the private API.
+    attribution: bool,
     deadline: std::time::Instant,
 }
 
@@ -443,6 +472,7 @@ impl Source for Kernel {
     }
 
     fn responsible(&mut self, pid: u32) -> Option<u32> {
+        if !self.attribution { return None; }
         let f = responsibility_fn()?;
         if !valid_pid(pid) { return None; }
         let responsible = f(pid as libc::pid_t);
@@ -450,17 +480,19 @@ impl Source for Kernel {
     }
 
     fn responsibility_supported(&self) -> bool {
-        responsibility_fn().is_some()
+        self.attribution && responsibility_fn().is_some()
     }
 
-    fn system_service(&mut self, pid: u32) -> Option<bool> {
+    fn attribution_enabled(&self) -> bool { self.attribution }
+
+    fn service(&mut self, pid: u32) -> Option<Service> {
         if !valid_pid(pid) { return None; }
         let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         // SAFETY: writable buffer of exactly the size passed; returns bytes written.
         let written = unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
         if written <= 0 || written as usize > buffer.len() { return None; }
         let path = std::str::from_utf8(&buffer[..written as usize]).ok()?;
-        Some(is_system_service_path(path))
+        Some(service_of_path(path))
     }
 }
 
@@ -479,8 +511,10 @@ mod tests {
         errors: HashMap<u32, &'static str>,
         /// Kernel responsibility; None models a missing symbol.
         responsible: Option<HashMap<u32, u32>>,
-        /// System XPC service executables; absent PIDs are not services.
-        services: HashSet<u32>,
+        /// Executable kind per PID; absent PIDs are not system services.
+        services: HashMap<u32, Service>,
+        /// RESPONSIBILITY_ATTRIBUTION for the fixture.
+        attribution: bool,
     }
 
     fn p(pid: u32, ppid: u32) -> Process {
@@ -490,7 +524,7 @@ mod tests {
     fn fixture(processes: &[Process]) -> Fixture {
         Fixture { forest: processes.iter().map(|p| (p.pid, *p)).collect(),
             inventory: None, reads: HashMap::new(), change: None, expired: false,
-            expire_after_reads: None, errors: HashMap::new(), responsible: None, services: HashSet::new() }
+            expire_after_reads: None, errors: HashMap::new(), responsible: None, services: HashMap::new(), attribution: true }
     }
 
     impl Source for Fixture {
@@ -523,20 +557,63 @@ mod tests {
             self.responsible.as_ref()?.get(&pid).copied()
         }
         fn responsibility_supported(&self) -> bool { self.responsible.is_some() }
-        fn system_service(&mut self, pid: u32) -> Option<bool> { Some(self.services.contains(&pid)) }
+        fn attribution_enabled(&self) -> bool { self.attribution }
+        fn service(&mut self, pid: u32) -> Option<Service> { Some(self.services.get(&pid).copied().unwrap_or(Service::Other)) }
     }
 
     #[test]
-    fn only_system_xpc_paths_are_window_services() {
+    fn only_system_xpc_paths_are_window_services_and_only_webkit_ones_are_the_web_engine() {
         for path in ["/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
-            "/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc/Contents/MacOS/MTLCompilerService",
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.EnhancedSecurity.xpc/Contents/MacOS/com.apple.WebKit.WebContent.EnhancedSecurity",
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
             "/System/Cryptexes/OS/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU"] {
-            assert!(is_system_service_path(path), "{path}");
+            assert_eq!(service_of_path(path), Service::WebKit, "{path}");
+        }
+        for path in ["/System/Library/Frameworks/Metal.framework/Versions/A/XPCServices/MTLCompilerService.xpc/Contents/MacOS/MTLCompilerService",
+            "/System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc/Contents/MacOS/com.apple.audio.SandboxHelper",
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Other.xpc/Contents/MacOS/com.apple.WebKit.Other"] {
+            assert_eq!(service_of_path(path), Service::System, "{path}");
         }
         for path in ["/bin/sleep", "/opt/homebrew/bin/node", "/Applications/Jauria.app/Contents/MacOS/aw-vertical-desktop",
-            "/Users/x/System/Library/Fake.xpc/Contents/MacOS/x", "/Applications/Other.app/Contents/XPCServices/A.xpc/Contents/MacOS/A"] {
-            assert!(!is_system_service_path(path), "{path}");
+            "/Users/x/System/Library/Fake.xpc/Contents/MacOS/x", "/Applications/Other.app/Contents/XPCServices/A.xpc/Contents/MacOS/A",
+            "/Applications/X.app/Contents/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"] {
+            assert_eq!(service_of_path(path), Service::Other, "{path}");
         }
+    }
+
+    #[test]
+    fn included_requires_a_webkit_process_and_the_switch_can_turn_attribution_off() {
+        let processes = [p(5, 1), p(10, 1), p(11, 1)];
+        // Only Metal/audio-like services: counted as helpers, but the web engine was not found.
+        let mut f = fixture(&processes);
+        f.responsible = Some(HashMap::from([(5, 5), (10, 5), (11, 5)]));
+        f.services = HashMap::from([(10, Service::System), (11, Service::System)]);
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!(value["helpers"], json!([10, 11]));
+        assert_eq!(value["webkit"], json!([]));
+        assert_eq!(value["helpersStatus"], "none_found");
+        f.services.insert(11, Service::WebKit);
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!((value["helpersStatus"].clone(), value["webkit"].clone()), (json!("included"), json!([11])));
+        // RESPONSIBILITY_ATTRIBUTION = false: the private API is never asked.
+        let mut f = fixture(&processes);
+        f.attribution = false;
+        f.responsible = Some(HashMap::from([(5, 5), (10, 5), (11, 5)]));
+        f.services = HashMap::from([(10, Service::WebKit)]);
+        let value = observe_with(5, 7, &mut f, true);
+        assert_eq!(value["helpersStatus"], "disabled");
+        assert_eq!((value["helpers"].clone(), value["others"].clone()), (json!([]), json!([])));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kernel_with_attribution_off_never_resolves_responsibility() {
+        // SAFETY: no arguments or side effects.
+        let uid = unsafe { libc::geteuid() };
+        let mut kernel = Kernel { uid, attribution: false, deadline: std::time::Instant::now() + std::time::Duration::from_secs(1) };
+        assert!(!kernel.responsibility_supported() && !kernel.attribution_enabled());
+        assert_eq!(kernel.responsible(std::process::id()), None);
+        assert_eq!(observe_with(std::process::id(), uid, &mut kernel, true)["helpersStatus"], "disabled");
     }
 
     #[test]
@@ -582,7 +659,7 @@ mod tests {
         let processes = [p(5, 1), p(6, 5), p(10, 1), p(11, 1), p(12, 1), p(13, 6), p(14, 1)];
         let mut f = fixture(&processes);
         f.responsible = Some(HashMap::from([(5, 5), (6, 5), (10, 5), (11, 5), (12, 99), (13, 5), (14, 5)]));
-        f.services = HashSet::from([10, 11, 12]);
+        f.services = HashMap::from([(10, Service::WebKit), (11, Service::System), (12, Service::WebKit)]);
         let value = observe_with(5, 7, &mut f, true);
         assert_eq!(value["pids"], json!([5, 6, 13]));
         assert_eq!(value["helpersStatus"], "included");
@@ -598,7 +675,7 @@ mod tests {
         assert_eq!(value["others"], json!([14]));
         // A helper that changes before revalidation is dropped, silently.
         let mut f = fixture(&processes);
-        f.services = HashSet::from([10, 11]);
+        f.services = HashMap::from([(10, Service::WebKit), (11, Service::WebKit)]);
         f.responsible = Some(HashMap::from([(5, 5), (10, 5), (11, 5)]));
         f.change = Some((11, 2, None));
         assert_eq!(observe_with(5, 7, &mut f, true)["helpers"], json!([10]));
@@ -762,7 +839,7 @@ mod tests {
         // SAFETY: no arguments or side effects.
         let uid = unsafe { libc::geteuid() };
         if uid == 0 { return; } // root reads every process; nothing to show.
-        let mut kernel = Kernel { uid, deadline: std::time::Instant::now() + std::time::Duration::from_secs(1) };
+        let mut kernel = Kernel { uid, attribution: true, deadline: std::time::Instant::now() + std::time::Duration::from_secs(1) };
         assert_eq!(kernel.read(1), Err("foreign_uid"));
         assert_eq!(kernel.read(i32::MAX as u32), Err("process_exited"));
         let own = std::process::id();
