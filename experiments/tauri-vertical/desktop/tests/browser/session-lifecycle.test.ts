@@ -32,6 +32,11 @@ const lifecycle: WorkbenchOptions = {
 const paneSession = (page: Page, pane = 1) => page.evaluate(pane => (document.querySelector(`#session-${pane - 1}`) as HTMLElement).dataset.sessionId ?? '', pane);
 const listIds = (page: Page, selector: string) => page.locator(selector).evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.sessionId));
 const stored = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('jauria:session-dismissed:/synthetic-profile') ?? 'null'));
+/** Rule (1.4.0): a continuation counts once two consecutive status reads see it running. */
+async function confirmRunning(page: Page, id: string) {
+  await page.evaluate(id => (window as any).workbench.setStatus(id, 'running'), id);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('jauria:session-dismissed:/synthetic-profile') ?? 'null') !== null, undefined, { timeout: 6000 });
+}
 const focusIn = (page: Page) => page.evaluate(() => {
   const a = document.activeElement; if (!a || a === document.body) return 'body';
   return a.id || (a as HTMLElement).dataset.recovery || a.className;
@@ -116,8 +121,10 @@ try {
         await recovery.locator('[data-recovery="primary"]').click();
         await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
         const next = await paneSession(page);
-        assert.deepEqual(await page.evaluate(() => (window as any).workbench.native.filter((c: any) => c[0] === 'resume_native')), [['resume_native', 'crash-claude']]);
+        assert.deepEqual(await page.evaluate(() => (window as any).workbench.native.filter((c: any) => c[0] === 'resume_native').map((c: any) => c[1])), ['crash-claude']);
         assert.deepEqual(await page.evaluate(() => (window as any).workbench.inputs), [], 'nothing is pasted or sent');
+        assert.equal(await stored(page), null, 'not marked while the new session is only starting');
+        await confirmRunning(page, next);
         assert.deepEqual(await stored(page), { schemaVersion: 1, sessions: [['crash-claude', next]] }, 'the original is marked continued');
         assert.deepEqual(await listIds(page, '.session-group-interrupted .session-item'), ['crash-codex']);
         await page.locator('button[data-filter="closed"]').click();
@@ -157,8 +164,12 @@ try {
           boardItems: [{ id: 'item-7', projectId: 'p1', title: 'Fase sintética', status: 'doing', session: { id: 'crash-claude', source: 'link' }, checkpointCount: 0 }] });
         await page.locator('#session-list .session-item[data-session-id="crash-claude"]').click();
         await page.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
-        await page.waitForFunction(() => (window as any).workbench.links.length === 2);
+        await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
         const next = await paneSession(page);
+        await page.waitForTimeout(1500);
+        assert.deepEqual(await page.evaluate(() => (window as any).workbench.links), [], 'no link before the new session is confirmed running');
+        await confirmRunning(page, next);
+        await page.waitForFunction(() => (window as any).workbench.links.length === 2);
         assert.deepEqual(await page.evaluate(() => (window as any).workbench.links), [
           { projectId: 'p0', sessionId: next, requestId: `resume-link-${next}-project-p0` },
           { itemId: 'item-7', sessionId: next, requestId: `resume-link-${next}-item-item-7` },
@@ -166,6 +177,56 @@ try {
         await page.waitForFunction(() => /vinculada en Pulso como la original/.test(document.querySelector('#notice-text')?.textContent ?? ''));
         assert.match(await page.locator('#notice-text').innerText(), /Proyecto sintético 1.*una fase de «Proyecto sintético 2»/);
         assert.deepEqual(await page.evaluate(() => (window as any).workbench.inputs), []);
+      });
+
+      await t.test('a continuation that fails to start is never accepted: the original stays, a retry is a new request (Codex ronda 2, 1)', async () => {
+        const page = await open();
+        await page.evaluate(() => (window as any).workbench.resumeMode('failed'));
+        await page.locator('#session-list .session-item[data-session-id="crash-claude"]').click();
+        await page.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
+        await page.waitForFunction(() => document.querySelector('#notice')?.classList.contains('error'));
+        assert.match(await page.locator('#notice-text').innerText(), /no llegó a arrancar.*sigue en Interrumpidas/);
+        assert.equal(await paneSession(page), 'crash-claude', 'the pane keeps the original');
+        assert.equal(await stored(page), null, 'the original is not marked continued');
+        await page.evaluate(() => (window as any).workbench.resumeMode('ok'));
+        await page.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
+        await page.waitForFunction(() => (window as any).workbench.native.filter((c: any) => c[0] === 'resume_native').length === 2);
+        const ids = await page.evaluate(() => (window as any).workbench.native.filter((c: any) => c[0] === 'resume_native').map((c: any) => c[2]));
+        assert.notEqual(ids[0], ids[1], 'the retry asks for a new session, not the failed row');
+        await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
+      });
+
+      await t.test('a continuation that ends right after starting is not marked nor linked; the original stays in Interrumpidas (Codex ronda 2, 3)', async () => {
+        const page = await open({ ...lifecycle, pulsoLinks: [{ sessionId: 'crash-claude', projectId: 'p0', via: 'project' }] });
+        await page.locator('#session-list .session-item[data-session-id="crash-claude"]').click();
+        await page.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
+        await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
+        const next = await paneSession(page);
+        await page.evaluate(id => (window as any).workbench.setStatus(id, 'running'), next);
+        await page.waitForTimeout(1100);
+        await page.evaluate(id => (window as any).workbench.setStatus(id, 'exited'), next);
+        await page.waitForFunction(() => /terminó al arrancar/.test(document.querySelector('#notice-text')?.textContent ?? ''), undefined, { timeout: 6000 });
+        assert.equal(await stored(page), null);
+        assert.deepEqual(await page.evaluate(() => (window as any).workbench.links), []);
+        assert.deepEqual(await listIds(page, '.session-group-interrupted .session-item'), ['crash-codex', 'crash-claude']);
+      });
+
+      await t.test('Pulso inheritance is honest: a summary with more projects and a link that fails are named (Codex ronda 2, 2)', async () => {
+        const page = await open({ ...lifecycle, summaryHasMore: true });
+        await page.locator('#session-list .session-item[data-session-id="crash-claude"]').click();
+        await page.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
+        await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
+        await confirmRunning(page, await paneSession(page));
+        await page.waitForFunction(() => /No se pudo comprobar el vínculo de Pulso en todos los proyectos/.test(document.querySelector('#notice-text')?.textContent ?? ''));
+        const other = await open({ ...lifecycle, failLinks: ['p1'], pulsoLinks: [{ sessionId: 'crash-claude', projectId: 'p0', via: 'project' }, { sessionId: 'crash-claude', projectId: 'p1', via: 'project' }] });
+        await other.locator('#session-list .session-item[data-session-id="crash-claude"]').click();
+        await other.locator('.pane:nth-child(1) [data-recovery="primary"]').click();
+        await other.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
+        await confirmRunning(other, await paneSession(other));
+        await other.waitForFunction(() => /no se pudo vincular/i.test(document.querySelector('#notice-text')?.textContent ?? ''));
+        const text = await other.locator('#notice-text').innerText();
+        assert.match(text, /Proyecto sintético 1/); assert.match(text, /no se pudo vincular.*Proyecto sintético 2/i);
+        assert.equal(await other.evaluate(() => (window as any).workbench.links.length), 1);
       });
 
       await t.test('a Terminada opens the Historial view: search, copy, back; zero resize entering and leaving', async () => {
@@ -219,6 +280,7 @@ try {
         await resume.click();
         await page.waitForFunction(() => (document.querySelector('#session-0') as HTMLElement).dataset.sessionId?.startsWith('claude-'));
         assert.equal(await page.locator('#history-view').isVisible(), false);
+        await confirmRunning(page, await paneSession(page));
         assert.deepEqual(await page.evaluate(() => (window as any).workbench.inputs), []);
       });
 

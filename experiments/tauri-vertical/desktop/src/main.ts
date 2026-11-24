@@ -401,19 +401,45 @@ async function continueConversation(id: string, target?: Pane): Promise<string> 
   bindingKnown.set(id, native.binding ? 'present' : 'none');
   if (native.activeSessionId) {
     const active = views.get(native.activeSessionId);
-    if (active && isLive(active.session)) { presentSession(active.session, pane); markContinued(id, active.session.id); return active.session.id; }
+    if (active && isLive(active.session)) { presentSession(active.session, pane); if (dismissed.get(id) !== active.session.id) awaitConfirmation(id, active.session.id, original.title); return active.session.id; }
     throw new Error('La conversación ya tiene una sesión activa o sin confirmar. Revisa su estado antes de continuar.');
   }
   if (!native.binding) { refresh(); throw new Error('No se registró la identidad de esta conversación. Usa Empezar de nuevo aquí.'); }
   if (!resumeAttempts.has(id)) requireSessionCapacity();
   const next = resumeAttempts.get(id) ?? `claude-${crypto.randomUUID()}`; resumeAttempts.set(id, next);
   const session = await request<Session>('resume_native', { id: next, sourceId: id, rows: 24, cols: 80 }); check();
+  // The attempt id is spent either way: a retry must be a new request, never the same (failed) row.
   resumeAttempts.delete(id);
+  if (!isLive(session)) {
+    ensure(session); refresh();
+    throw new Error(`La continuación de ${original.title} no llegó a arrancar. La original sigue en Interrumpidas; reintenta o usa Empezar de nuevo aquí.`);
+  }
   presentSession(session, pane);
-  markContinued(id, session.id);
+  awaitConfirmation(id, session.id, original.title);
   announce(`Continuando ${original.title} en una sesión nueva…`);
-  void inheritPulsoLinks(id, session.id);
   return session.id;
+}
+/*
+ * A continuation counts only when it works (1.4.0): the original is marked
+ * continued (it leaves Interrumpidas) and its Pulso links are inherited once
+ * two consecutive `status` reads see the new session `running` (about one
+ * second apart). If it is seen closed, Sin confirmar or failed before that,
+ * nothing is marked or linked and the person is told; the original stays.
+ */
+const pendingContinuations = new Map<string, { from: string; title: string; running: number }>();
+function awaitConfirmation(from: string, next: string, title: string) { pendingContinuations.set(next, { from, title, running: 0 }); }
+function confirmContinuations(status: RunnerStatus) {
+  for (const [next, pending] of [...pendingContinuations]) {
+    const session = status.sessions.find(s => s.id === next); if (!session) continue;
+    if (session.status === 'running') {
+      if (++pending.running < 2) continue;
+      pendingContinuations.delete(next); markContinued(pending.from, next); void inheritPulsoLinks(pending.from, next);
+    } else if (session.status === 'starting') pending.running = 0;
+    else {
+      pendingContinuations.delete(next);
+      notice(`La continuación de ${pending.title} terminó al arrancar. La original sigue en Interrumpidas; revisa su salida o usa Empezar de nuevo aquí.`, true);
+    }
+  }
 }
 function rememberDismissed(next: DismissedSessions) {
   dismissed = next;
@@ -430,7 +456,7 @@ function dismissSession(id: string, afterFocus?: () => void) {
   afterFocus?.();
   notice(`${session.title} pasó a Terminadas. Sigue en Historial; no se borró nada.`);
 }
-type PulsoSummary = { projects?: { id: string; title: string; mainSessionId: string | null }[]; links?: { projectId?: string | null; sessionId: string; via?: 'project' | 'item' }[]; linksTruncated?: boolean };
+type PulsoSummary = { projects?: { id: string; title: string; mainSessionId: string | null }[]; hasMore?: boolean; links?: { projectId?: string | null; sessionId: string; via?: 'project' | 'item' }[]; linksTruncated?: boolean };
 type PulsoBoard = { columns?: Record<string, { items?: { id: string; session?: { id: string } | null }[] }> };
 /**
  * Owner decision (1.4.0): the continuation inherits the original's Pulso
@@ -450,25 +476,35 @@ async function inheritPulsoLinks(from: string, to: string) {
     const projectLinks = new Set<string>(), phaseProjects = new Set<string>();
     for (const project of summary.projects ?? []) if (project.mainSessionId === from) projectLinks.add(project.id);
     for (const link of summary.links ?? []) if (link.sessionId === from && link.projectId) (link.via === 'item' ? phaseProjects : projectLinks).add(link.projectId);
+    // sidebar_summary lists the first projects only (hasMore) and may cut the links: say what was not checked.
+    const partial = !!summary.hasMore || !!summary.linksTruncated;
     if (!projectLinks.size && !phaseProjects.size) {
-      if (summary.linksTruncated) notice('Conversación continuada. Pulso devolvió sus vínculos incompletos: si la original estaba vinculada, vincula la nueva desde Pulso.');
+      if (partial) notice('Conversación continuada. No se pudo comprobar el vínculo de Pulso en todos los proyectos; vincúlala a mano si hace falta.');
       return;
     }
-    const linked: string[] = [], missing: string[] = [];
-    for (const projectId of projectLinks) {
-      await requestPulso('link', { projectId, sessionId: to, requestId: `resume-link-${to}-project-${projectId}` });
-      linked.push(`«${projects.get(projectId) ?? projectId}»`);
-    }
+    const linked: string[] = [], missing: string[] = [], failed: string[] = [];
+    const name = (projectId: string) => `«${projects.get(projectId) ?? projectId}»`;
+    const link = async (args: Record<string, string>, label: string) => {
+      try { await requestPulso('link', args); return true; } catch { failed.push(label); return false; }
+    };
+    for (const projectId of projectLinks) if (await link({ projectId, sessionId: to, requestId: `resume-link-${to}-project-${projectId}` }, name(projectId))) linked.push(name(projectId));
     for (const projectId of phaseProjects) {
-      const board = runner?.pulsoBoardCardsVersion === 1 ? await requestPulso('board', { projectId }) as PulsoBoard : null;
-      const phases = Object.values(board?.columns ?? {}).flatMap(column => column.items ?? []).filter(item => item.session?.id === from);
-      if (!phases.length) { missing.push(`«${projects.get(projectId) ?? projectId}»`); continue; }
-      for (const phase of phases) await requestPulso('link', { itemId: phase.id, sessionId: to, requestId: `resume-link-${to}-item-${phase.id}` });
-      linked.push(`${phases.length === 1 ? 'una fase' : `${phases.length} fases`} de «${projects.get(projectId) ?? projectId}»`);
+      let phases: { id: string }[] = [];
+      try {
+        const board = runner?.pulsoBoardCardsVersion === 1 ? await requestPulso('board', { projectId }) as PulsoBoard : null;
+        phases = Object.values(board?.columns ?? {}).flatMap(column => column.items ?? []).filter(item => item.session?.id === from);
+      } catch { /* Counted as not found below. */ }
+      if (!phases.length) { missing.push(name(projectId)); continue; }
+      let done = 0;
+      for (const phase of phases) if (await link({ itemId: phase.id, sessionId: to, requestId: `resume-link-${to}-item-${phase.id}` }, `una fase de ${name(projectId)}`)) done++;
+      if (done) linked.push(`${done === 1 ? 'una fase' : `${done} fases`} de ${name(projectId)}`);
     }
     loadSidebarProjects();
+    const problems = failed.length || missing.length;
     notice([linked.length ? `Conversación continuada y vinculada en Pulso como la original: ${linked.join(', ')}.` : 'Conversación continuada.',
-      missing.length ? `No se encontró su fase en ${missing.join(', ')}; vincúlala desde Pulso.` : ''].filter(Boolean).join(' '), missing.length ? true : false);
+      failed.length ? `No se pudo vincular a ${failed.join(', ')}; hazlo desde Pulso.` : '',
+      missing.length ? `No se encontró su fase en ${missing.join(', ')}; vincúlala desde Pulso.` : '',
+      partial ? 'No se pudo comprobar el vínculo de Pulso en todos los proyectos; vincúlala a mano si hace falta.' : ''].filter(Boolean).join(' '), problems ? true : false);
   } catch (e) {
     notice(`La conversación continúa en la sesión nueva, pero no se pudo heredar su vínculo con Pulso: ${message(e)} Vincúlala desde Pulso.`, true);
   }
@@ -972,6 +1008,7 @@ function ensure(session: Session): View {
 function updateStatus(status: RunnerStatus) {
   if (runner && runner.generation !== status.generation) throw new Error('El runner cambió de generación. Pulsa Conectar / Reintentar para reconstruir desde cero.');
   runner = status;
+  confirmContinuations(status);
   if ((source = status.agentAttentionVersion === 1 ? runnerAttention : windowAttention) === runnerAttention) runnerAttention.ingestStatus(status);
   for (const session of status.sessions) { const metadata = streamMetadata(session); const existing = views.get(session.id); if (existing?.stream && metadata && existing.stream.generation !== metadata.generation) throw new Error('Terminal generation changed'); const previous = views.get(session.id)?.session.status; if (!replaying && !streamReplaying(existing) && previous && session.transport !== 'app-server') source.observeEnd(session.id, previous, session.status); ensure(session);if(!isLive(session)){stopping.delete(session.id);windowAttention.forget(session.id);}if(finalStatus(session.status))stopUncertain.delete(session.id);}
   refresh();

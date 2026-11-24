@@ -22,6 +22,9 @@ export type WorkbenchOptions = {
   pulsoLinks?: any[];
   mainSessions?: Record<string, string>;
   boardItems?: any[];
+  /** sidebar_summary says there are more projects than it lists; `link` fails for these targets. */
+  summaryHasMore?: boolean;
+  failLinks?: string[];
 };
 
 export async function installWorkbench(page: Page, options: WorkbenchOptions = {}) {
@@ -34,6 +37,7 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
     for (const extra of options.sessions ?? []) sessions.push({ rows: 24, cols: 80, ...extra });
     const projects = Array.from({ length: options.projects ?? 3 }, (_, i) => ({ id: `p${i}`, title: `Proyecto sintético ${i + 1}`, mainSessionId: options.mainSessions?.[`p${i}`] ?? null, done: i % 3, total: 4 }));
     const links: any[] = [];
+    let resumeMode: 'ok' | 'failed' = 'ok';
     const events: any[] = []; const resizes: any[] = []; const inputs: any[] = []; const calls: any[] = []; const native: any[] = [];
     let settings: any = { schemaVersion: 2, maxConcurrentSessions: options.limit ?? 8, maxSupportedSessions: 8, pulsoAutoAccess: true };
     if (options.settingsVersion === 1) settings = { schemaVersion: 1, maxConcurrentSessions: 8, maxSupportedSessions: 8 };
@@ -43,7 +47,8 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       normalTerminalVersion: 1, sessionRenameVersion: 1, ...(options.nativeResume ? { nativeResumeVersion: 1, pulsoBoardCardsVersion: 1 } : {}), telemetryVersion: 1, codexVersion: 1, terminalSessionVersion: 1, claudeNativeConfigVersion: 1, terminalStreamVersion: undefined, nativePermissionsVersion: 1,
       ...(options.settingsVersion === null ? {} : { settingsVersion: options.settingsVersion ?? 2, settings }), sessions, lastSeq: events.length });
     let failNextStart = false; let stopMode: 'stopped' | 'needs_attention' | 'hang' | 'reject' = 'stopped';
-    w.workbench = { out, resizes, inputs, calls, native, sessions, links, get settings() { return settings; },
+    w.workbench = { out, resizes, inputs, calls, native, sessions, links, resumeMode(mode: typeof resumeMode) { resumeMode = mode; },
+      remove(id: string) { const index = sessions.findIndex(s => s.id === id); if (index >= 0) sessions.splice(index, 1); }, get settings() { return settings; },
       setStatus(id: string, value: string) { sessions.find(s => s.id === id).status = value; }, failStart() { failNextStart = true; }, stopMode(mode: typeof stopMode) { stopMode = mode; } };
     w.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, async invoke(cmd: string, a: any) {
       if (cmd === 'connect_runner') { native.push(cmd); return { dataDir: '/synthetic-profile', socket: '/synthetic.sock', status: status(), smoke: false }; }
@@ -57,7 +62,8 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
       if (cmd === 'confirm_history') { native.push([cmd, a.op]); return { ok: false, error: 'Cancelado' }; }
       if (cmd === 'pulso_request') {
         calls.push(a.op);
-        if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: false, pendingOpen: 2, links: structuredClone(options.pulsoLinks ?? []), linksTruncated: false } };
+        if (a.op === 'sidebar_summary') return { ok: true, result: a.args.ifRevision === 1 ? { revision: 1, unchanged: true } : { revision: 1, projects: structuredClone(projects), hasMore: !!options.summaryHasMore, pendingOpen: 2, links: structuredClone(options.pulsoLinks ?? []), linksTruncated: false } };
+        if (a.op === 'link' && (options.failLinks ?? []).includes(a.args.projectId ?? a.args.itemId)) return { ok: false, error: 'Pulso no confirmó el vínculo sintético.' };
         if (a.op === 'link') { links.push(structuredClone(a.args)); return { ok: true, result: { link: { id: `link-${links.length}`, ...a.args } } }; }
         if (a.op === 'revision') return { ok: true, result: { revision: 1 } };
         if (a.op === 'projects') return { ok: true, result: { projects: projects.map(p => ({ id: p.id, title: p.title, plan: '', mainSessionId: null, revision: 1, archived: false, createdAt: 1, updatedAt: 1 })), revision: 1, totalCount: projects.length, hasMore: false } };
@@ -77,9 +83,11 @@ export async function installWorkbench(page: Page, options: WorkbenchOptions = {
         if (a.op === 'input') { inputs.push(structuredClone(a.args)); return { ok: true, result: {} }; }
         if (a.op === 'native_binding') return { ok: true, result: { binding: (options.bindings ?? []).includes(a.args.id) ? { provider: 'claude', conversationId: `conv-${a.args.id}`, source: 'reserved', resumedFrom: null } : null, activeSessionId: null } };
         if (a.op === 'resume_native') {
-          native.push(['resume_native', a.args.sourceId]);
+          native.push(['resume_native', a.args.sourceId, a.args.id]);
+          // The runner's exact repetition rule: the same id returns the same row (also a failed one).
+          const existing = sessions.find(s => s.id === a.args.id); if (existing) return { ok: true, result: structuredClone(existing) };
           const from = sessions.find(s => s.id === a.args.sourceId);
-          const s = { id: a.args.id, title: from.title, kind: 'claude', cwd: from.cwd, status: 'starting', pid: 900, rows: a.args.rows, cols: a.args.cols };
+          const s = { id: a.args.id, title: from.title, kind: 'claude', cwd: from.cwd, status: resumeMode === 'failed' ? 'failed' : 'starting', pid: 900, rows: a.args.rows, cols: a.args.cols };
           sessions.push(s); return { ok: true, result: structuredClone(s) };
         }
         if (a.op === 'interrupt') return { ok: true, result: {} };
