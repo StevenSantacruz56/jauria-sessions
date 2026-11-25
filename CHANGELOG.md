@@ -4,7 +4,7 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-11-23
+## [1.4.0] - 2026-11-25
 
 Rediseño de la ventana, paleta de comandos, Pulso conectado con las sesiones y estado de los agentes guardado en el runner. Se retiran Repositorios y tareas Git. Capturas, compatibilidad y verificación en [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
 

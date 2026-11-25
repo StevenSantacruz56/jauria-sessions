@@ -2,11 +2,11 @@
 
 La distribución actual es para Mac con Apple Silicon (arm64/aarch64). La configuración de la app declara macOS 11.0 como mínimo; la compatibilidad solo se ha validado en el Mac actual de pruebas, no en todas las versiones desde macOS 11. No hay paquete Intel ni Windows en esta distribución.
 
-## Descargar e instalar 1.3.3
+## Descargar e instalar 1.4.0
 
-La [release v1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) ofrece el código fuente y un DMG verificado para Apple Silicon. El DMG **no tiene firma Developer ID ni notarización**; lee la sección de firma antes de instalarlo.
+La [release v1.4.0](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0) ofrece el código fuente y un DMG verificado para Apple Silicon. El DMG **no tiene firma Developer ID ni notarización**; lee la sección de firma antes de instalarlo.
 
-1. Descarga de esa misma release `Jauria_1.3.3_aarch64_unsigned.dmg`, `SHA256SUMS` y `Jauria_1.3.3_aarch64_unsigned.dmg.receipt.json`. Conserva los tres juntos; describen la misma imagen y sus verificaciones.
+1. Descarga de esa misma release `Jauria_1.4.0_aarch64_unsigned.dmg`, `SHA256SUMS` y `Jauria_1.4.0_aarch64_unsigned.dmg.receipt.json`. Conserva los tres juntos; describen la misma imagen y sus verificaciones.
 2. Para comprobar el archivo, ejecuta desde esa carpeta:
 
    ```sh
@@ -21,7 +21,7 @@ Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en
 
 Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Configuración → Acerca de y diagnóstico → Comprobar** (o **Comprobar otra vez** en Nueva sesión) si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
 
-Descarga siempre el DMG, checksum y recibo de la **misma** [release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3). El checksum identifica el archivo; no aporta firma de editor ni notarización. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
+Descarga siempre el DMG, checksum y recibo de la **misma** [release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0). El checksum identifica el archivo; no aporta firma de editor ni notarización. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
 
 ## Estado de firma de esta distribución
 

@@ -11,11 +11,11 @@
 
 Jauria es una aplicación de escritorio para macOS que reúne **Codex, Claude Code y terminales zsh**. Abre sesiones en cualquier carpeta, organízalas, consulta su historial y trabaja con dos paneles lado a lado. Puedes ejecutar hasta 8 sesiones simultáneas configurables; ver dos paneles no limita el número de sesiones abiertas. Para editar un mismo repositorio en paralelo, usa un worktree Git distinto por sesión.
 
-**Versión 1.4.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.4.0](docs/RELEASE_1.4.0.md). La última release publicada en GitHub es la [1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) ([notas](docs/RELEASE_1.3.3.md)). El DMG se publica sin firma Developer ID ni notarización; consulta sus límites antes de instalarlo.
+**Versión 1.4.0 · macOS Apple Silicon · código GPLv3.** Consulta [VERSION](VERSION), el [changelog](CHANGELOG.md) y las [notas de 1.4.0](docs/RELEASE_1.4.0.md). La última release publicada en GitHub es la [1.4.0](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0). El DMG se publica sin firma Developer ID ni notarización; consulta sus límites antes de instalarlo.
 
 Proyecto independiente, sin afiliación con OpenAI ni Anthropic.
 
-> **1.4.0 preparada, aún sin publicar:** esta rama (`feat/redesign-1.4`) tiene `VERSION` 1.4.0, pero todavía no hay etiqueta `v1.4.0`, DMG ni release de GitHub. La release publicada sigue siendo 1.3.3; su app no puede guardar **Configuración** con su propio runner, lo que corrige 1.4.0 (ver [CHANGELOG](CHANGELOG.md)).
+> **Si vienes de 1.3.3:** esa app no puede guardar **Configuración** con su propio runner; 1.4.0 lo corrige (ver [CHANGELOG](CHANGELOG.md)).
 
 ## Para qué sirve
 
@@ -85,7 +85,7 @@ Cuando un programa emite explícitamente **OSC 7501**, la barra lateral, la pest
 
 El tablero consulta un snapshot acotado con contadores y páginas por columna; no hay polling de Pulso oculto. Desde 1.4, con un runner 1.4, la barra lateral y el tablero se actualizan en un segundo o menos cuando un agente edita Pulso, y cada fase muestra en su pie la sesión vinculada y sus checkpoints; pulsarlo abre esa sesión. Se conservan los presupuestos locales de 1.1.0 y el respaldo consistente de SQLite. Consulta [la guía de Pulso](docs/PULSO.md), [la revisión de Herdr y decisiones](docs/HERDR_REVIEW.md), [las reglas de estados de 1.3.1](docs/RELEASE_1.3.1.md) y [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
 
-La release publicada **1.3.3** incluye un DMG verificado para Apple Silicon en GitHub Releases ([pruebas y límites](docs/RELEASE_1.3.3.md)). Las pruebas y límites de 1.4.0 están en [sus notas](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); las pruebas anteriores de Pulso, en [la validación de 1.3.0](docs/PULSO_VALIDATION_1.3.0.md). Las capturas utilizan datos sintéticos.
+La release publicada **1.4.0** incluye un DMG verificado para Apple Silicon en GitHub Releases; sus pruebas y límites están en [sus notas](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); las pruebas anteriores de Pulso, en [la validación de 1.3.0](docs/PULSO_VALIDATION_1.3.0.md). Las capturas utilizan datos sintéticos.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pulso-1.4.0-oscuro.png">
@@ -191,7 +191,7 @@ Para sesiones reales, instala y autentica las CLI por separado. El backend actua
 
 La instalación para otros usuarios se prepara como un archivo **`.dmg` para Apple Silicon**: abre la imagen y arrastra **Jauria** a **Aplicaciones**. Jauria no requiere instalar Rust ni Node para abrir la app; las CLI de los proveedores y su acceso se preparan por separado. Consulta [la guía de instalación](docs/INSTALLATION.md).
 
-La [release v1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) incluye código fuente y `Jauria_1.3.3_aarch64_unsigned.dmg`, `SHA256SUMS` y el recibo JSON. Comprueba el checksum antes de instalar. La app incluida **no tiene firma Developer ID ni notarización**: macOS puede bloquear su apertura. No desactives Gatekeeper ni elimines la cuarentena; si se bloquea, espera una entrega firmada y notarizada. Consulta [la guía de instalación](docs/INSTALLATION.md).
+La [release v1.4.0](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0) incluye código fuente y `Jauria_1.4.0_aarch64_unsigned.dmg`, `SHA256SUMS` y el recibo JSON. Comprueba el checksum antes de instalar. La app incluida **no tiene firma Developer ID ni notarización**: macOS puede bloquear su apertura. No desactives Gatekeeper ni elimines la cuarentena; si se bloquea, espera una entrega firmada y notarizada. Consulta [la guía de instalación](docs/INSTALLATION.md).
 
 ## Compilar y abrir
 

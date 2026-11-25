@@ -4,9 +4,9 @@
 
 Jauria is a macOS desktop app for managing **Claude Code, OpenAI Codex and zsh terminal sessions**. Organize sessions by working directory, inspect local history, and view two sessions side by side. Jauria is built with Tauri and Rust and is independent of OpenAI and Anthropic.
 
-> **1.4.0 prepared, not yet published:** this branch (`feat/redesign-1.4`) has `VERSION` 1.4.0, but there is no `v1.4.0` tag, DMG or GitHub release yet. The published release is still 1.3.3, whose app cannot save **Configuración** against its own runner; 1.4.0 fixes that (see the [changelog](CHANGELOG.md)).
+> **Coming from 1.3.3:** that app cannot save **Configuración** against its own runner; 1.4.0 fixes that (see the [changelog](CHANGELOG.md)).
 
-**Version 1.4.0** — read the [1.4.0 notes](docs/RELEASE_1.4.0.md) (Spanish). The latest published [GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) is 1.3.3, with source and a verified Apple Silicon DMG. The app is unsigned for Developer ID distribution and is not notarized; read the [installation limits](docs/INSTALLATION.md) before downloading. Original code is licensed under [GPL-3.0-only](LICENSE). The app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
+**Version 1.4.0** — read the [1.4.0 notes](docs/RELEASE_1.4.0.md) (Spanish). The latest published [GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0) is 1.4.0, with source and a verified Apple Silicon DMG. The app is unsigned for Developer ID distribution and is not notarized; read the [installation limits](docs/INSTALLATION.md) before downloading. Original code is licensed under [GPL-3.0-only](LICENSE). The app declares macOS 11.0 as its minimum, with testing limited to the current development Mac. Intel, Linux and Windows are not supported by this release.
 
 ## What you can do
 
@@ -43,7 +43,7 @@ Explicit **OSC 7501** reports appear in the sidebar, the session tab and the pan
 
 The board uses bounded snapshots with counts and pages per column, with no hidden Pulso polling. Existing storage budgets and consistent SQLite backup guidance still apply. Read the [Pulso guide](docs/PULSO.md), [Herdr review and decisions](docs/HERDR_REVIEW.md), [1.3.1 activity implementation](docs/RELEASE_1.3.1.md), and [1.4.0 release notes](docs/RELEASE_1.4.0.md) (Spanish).
 
-The published **1.3.3** DMG is verified with a SHA-256 checksum and JSON receipt ([validation and limits](docs/RELEASE_1.3.3.md)). The 1.4.0 test results and known limits are in [its notes](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); see also [the activity implementation](docs/RELEASE_1.3.1.md) and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md).
+The published **1.4.0** DMG is verified with a SHA-256 checksum and JSON receipt; its test results and known limits are in [its notes](docs/RELEASE_1.4.0.md#verificación-de-la-entrega); see also [the activity implementation](docs/RELEASE_1.3.1.md) and [earlier Pulso validation](docs/PULSO_VALIDATION_1.3.0.md).
 
 See the [screenshots and full usage guide](README.md#capturas). All screenshots below show the 1.4.0 interface with synthetic data: no real profile, session, path or task.
 
@@ -75,7 +75,7 @@ See the [screenshots and full usage guide](README.md#capturas). All screenshots 
 
 ## Install and start
 
-The [v1.3.3 GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3) includes source, `Jauria_1.3.3_aarch64_unsigned.dmg`, `SHA256SUMS`, and a JSON receipt. Verify the checksum before use. The app lacks a Developer ID signature and notarization, so macOS may block it. Do not disable Gatekeeper or remove quarantine; if blocked, wait for a signed and notarized build. See the [installation and update guide](docs/INSTALLATION.md).
+The [v1.4.0 GitHub release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.4.0) includes source, `Jauria_1.4.0_aarch64_unsigned.dmg`, `SHA256SUMS`, and a JSON receipt. Verify the checksum before use. The app lacks a Developer ID signature and notarization, so macOS may block it. Do not disable Gatekeeper or remove quarantine; if blocked, wait for a signed and notarized build. See the [installation and update guide](docs/INSTALLATION.md).
 
 Jauria itself does not require Rust or Node to run from an app bundle. Provider CLIs must be installed and authenticated separately. This release expects Codex at `/opt/homebrew/bin/codex` and Claude Code at `~/.local/bin/claude`; Terminal uses `/bin/zsh -il`.
 

@@ -67,7 +67,7 @@ Fecha: 18 de noviembre de 2026. Alcance: cambios desde 1.3.1, nuevas capturas si
 - GitHub mantiene una alerta moderada para GLib en el lockfile Rust. `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` no encontró ese paquete en el destino macOS soportado. La alerta no se declara corregida para Linux/BSD.
 - El DMG verificado contiene LICENSE, NOTICE, la guía de instalación y referencia al código fuente de la misma versión. No incluye el perfil de datos del usuario. No hay firma Developer ID ni notarización, y no se probó Gatekeeper en otro Mac.
 
-## Preparación de 1.4.0 (sin publicar)
+## Preparación de 1.4.0
 
 Fecha: 23 de noviembre de 2026. Rama `feat/redesign-1.4`, con `VERSION` 1.4.0; sin fusionar en `main`, sin etiqueta, DMG ni release. Esta sección registra lo que cambió respecto a 1.3.3 y lo que **todavía no se ha verificado**; no declara la entrega lista.
 
@@ -77,4 +77,15 @@ Fecha: 23 de noviembre de 2026. Rama `feat/redesign-1.4`, con `VERSION` 1.4.0; s
 - **Funciones retiradas.** Repositorios y tareas Git (registro, worktree por tarea, revisión, verificación con confirmación nativa y relevo) ya no existen: el runner responde `unknown operation` a esas operaciones y `status` deja de anunciarlas. Menos superficie expuesta; los datos antiguos del perfil se conservan sin leerse y no se borran worktrees ni ramas.
 - **Datos nuevos.** `status` y `terminal_live` publican el estado declarado y los cursores de avisos de cada sesión, sin texto del terminal, títulos ni rutas. `sidebar_summary` y el pie de tarjeta de `board` quedan reservados a la credencial de la interfaz; un permiso de agente recibe `unauthorized`.
 - **Capturas.** Las diez capturas `docs/screenshots/*-1.4.0*.png` se generaron con el frontend real y una frontera Tauri sintética (rutas `/Users/demo/…` y `/synthetic/…` inventadas), se inspeccionaron visualmente y no contienen chunks PNG de texto ni EXIF. Las capturas históricas se conservan.
-- **Pendiente antes de publicar.** Gitleaks y `npm audit` no se han vuelto a ejecutar sobre los cambios de 1.4; hay que hacerlo sobre el commit final. La alerta de Dependabot por GLib 0.18.5 sigue igual que en 1.3.3 (grafo Linux/BSD; `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` no encuentra dependientes). El DMG seguirá sin firma Developer ID ni notarización. Las revisiones de cada entrega con Codex no son una auditoría integral de seguridad.
+- **Pendiente antes de publicar (cerrado el 25 de noviembre, ver «Publicación de 1.4.0»).** Gitleaks y `npm audit` no se habían vuelto a ejecutar sobre los cambios de 1.4. La alerta de Dependabot por GLib 0.18.5 sigue igual que en 1.3.3 (grafo Linux/BSD; `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` no encuentra dependientes). El DMG seguirá sin firma Developer ID ni notarización. Las revisiones de cada entrega con Codex no son una auditoría integral de seguridad.
+
+## Publicación de 1.4.0
+
+Fecha: 25 de noviembre de 2026. La rama `feat/redesign-1.4` se fusionó en `main` (commit de fusión `6db3a20`) y la entrega se etiquetó `v1.4.0`.
+
+- **CI.** «macOS native checks» (job `native`, con las suites de navegador en Chrome y WebKit) pasó en sus dos ejecuciones, push y pull request, sobre `eae6670`. Antes hubo ejecuciones fallidas por cinco pruebas sensibles al tiempo del runner de GitHub (paridad de xterm, eco de tecla, línea base de desplazamiento, foco al cerrar un diálogo y geometría inicial); se corrigieron las pruebas, no el producto.
+- **Secretos.** Gitleaks con redacción completa sobre los 171 commits de `v1.3.3..6db3a20`: sin hallazgos.
+- **Dependencias.** `npm audit --package-lock-only --ignore-scripts`, con y sin `--omit=dev`: cero alertas. `cargo tree --offline --locked --target aarch64-apple-darwin -i glib` sigue sin encontrar GLib en el destino macOS, en el runner y en el puente; la alerta de Dependabot no se declara corregida para Linux/BSD.
+- **Paquete.** `Jauria_1.4.0_aarch64_unsigned.dmg`, SHA-256 `ff21cd4f7ea1ed9137993d7cd8a76061a5efa3ac93d6eded833788eb52db32b3`, con `SHA256SUMS` y recibo JSON. Contiene la app, LICENSE, NOTICE, la guía de instalación, la referencia al código fuente y `docs/DEPENDENCIES.md`; no incluye ningún perfil de datos. Sin firma Developer ID ni notarización; no se probó Gatekeeper en otro Mac.
+- **App real.** Con el build empaquetado instalado, una sesión de Claude Code y otra de Codex registraron «Trabajando» y «Turno terminado». Siguen sin comprobar en la app real: «Te necesita» ante un permiso, el clic en una notificación de macOS, Guardar Configuración contra el runner real y la lectura de ajustes por un runner 1.3.3.
+- Las revisiones con Codex de esta entrega no son una auditoría integral de seguridad.
