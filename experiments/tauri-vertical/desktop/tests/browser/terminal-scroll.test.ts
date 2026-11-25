@@ -35,10 +35,15 @@ try {
       const reproduced = (await state()).scroll === 0;
       const originalY = (await state()).y;
       await page.locator('.xterm').hover();
+      // The engine can also sync between that sample and the wheel, so the baseline never fails the run:
+      // it is reported either way, and the wheel is undone before the fixed path is checked.
+      let inert = false;
       if (reproduced) {
         await page.mouse.wheel(0, -160); await page.waitForTimeout(100);
-        assert.equal((await state()).y, originalY, 'baseline reproduces inert upward wheel');
-      } else console.log(`${engine.name()}: baseline not reproduced (viewport already synced); fixed path still checked`);
+        inert = (await state()).y === originalY;
+        if (!inert) { await run('f => f.term.scrollToBottom()'); await page.waitForTimeout(100); }
+      }
+      if (!inert) console.log(`${engine.name()}: baseline not reproduced (viewport synced by the engine); fixed path still checked`);
       await run('f => f.attach("first")'); await page.waitForTimeout(100);
       await until(s => s.scroll > 0, 'viewport syncs after attachment');
       await page.mouse.wheel(0, -160);
