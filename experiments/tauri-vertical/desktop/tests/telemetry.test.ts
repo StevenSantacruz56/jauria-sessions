@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   formatQuotaLine, formatResourceCpu, formatResourceRam, formatTelemetryAge, formatTelemetryBytes, formatTelemetryCpu, formatTelemetryPercent,
-  formatTelemetryTime, formatTelemetryWindow, quotaView, resourceView, telemetrySummary, QUOTA_STALE_MS,
+  formatTelemetryTime, formatTelemetryWindow, quotaView, resourceView, telemetrySummary, cpuScaleNote, QUOTA_STALE_MS,
 } from '../src/telemetry.ts';
 
 const MiB = 1024 ** 2;
@@ -205,4 +205,30 @@ test('honest total: without the web engine (any status but «included», or none
     assert.equal(view.window!.rss! / MiB, 130);
   }
   assert.equal(resourceView(null, () => null).partial, false, 'no data: nothing to call partial');
+});
+
+test('CPU as a share of the machine: with the core count 125 % of one core on 10 cores reads 12,5 %; without it the per-core figure stays', () => {
+  const resources = (extra: Record<string, unknown>, app: Record<string, unknown> = {}) => ({ resources: { ...extra,
+    processes: [row(10, 6, 2, { role: 'runner' }), row(20, 100, 100, { role: 'cli', sessionId: 'a' }), row(21, 50, 18, { role: 'tool', sessionId: 'a' })],
+    app: { webEngine: 'included', ...app, processes: [row(1, 100, 5, { role: 'app' })] } } });
+  const legacy = resourceView(resources({}), () => 'Sesión A');
+  assert.equal(legacy.cores, null);
+  assert.equal(formatResourceCpu(legacy.total), '125 %');
+  assert.equal(telemetrySummary(legacy, true), 'Jauría · CPU 125 % · RAM 256 MiB', 'older runner and bridge: unchanged');
+  assert.match(cpuScaleNote(null), /un núcleo completo/);
+  // The bridge is always this app's version, so its count wins over the runner's.
+  const view = resourceView(resources({ cpuCount: 4 }, { cpuCount: 10 }), () => 'Sesión A');
+  assert.equal(view.cores, 10);
+  assert.equal(formatResourceCpu(view.total, view.cores), '12,5 %');
+  assert.equal(formatResourceCpu(view.sessions[0], view.cores), '11,8 %');
+  assert.equal(formatResourceCpu(view.runner, view.cores), '0,2 %');
+  assert.equal(telemetrySummary(view, true), 'Jauría · CPU 12,5 % (sesiones 11,8 %) · RAM 256 MiB');
+  assert.equal(cpuScaleNote(10), 'CPU: porcentaje de la capacidad de todo el equipo (10 núcleos).');
+  assert.equal(resourceView(resources({ cpuCount: 8 }), () => null).cores, 8, 'runner count when the bridge has none');
+  for (const bad of [0, -2, 1.5, '10', null, 1e9]) assert.equal(resourceView(resources({ cpuCount: bad }), () => null).cores, null, String(bad));
+  assert.equal(formatTelemetryCpu(0.3, 10), '< 0,1 %', 'a small non-zero share is not shown as 0');
+  assert.equal(formatTelemetryCpu(0, 10), '0 %');
+  // No sessions: nothing to split out.
+  const idle = resourceView({ resources: { cpuCount: 10, processes: [row(10, 6, 2, { role: 'runner' })], app: { webEngine: 'included', processes: [row(1, 100, 5, { role: 'app' })] } } }, () => null);
+  assert.equal(telemetrySummary(idle, true), 'Jauría · CPU 0,7 % · RAM 106 MiB');
 });

@@ -177,6 +177,32 @@ try {
         assert.doesNotMatch(await dialogText(page), /Puede faltar|parcial/);
       });
 
+      await t.test('CPU is a share of the whole machine when the core count is known: the bar splits out the sessions and the dialog says the scale', async () => {
+        const row = (pid: number, mib: number, cpu: number, extra: any = {}) => ({ pid, available: true, rssBytes: mib * MiB, cpuPercent: cpu, cpuAvailable: true, ...extra });
+        const telemetry = { resources: { cpuCount: 10, discovery: { partial: false },
+          processes: [row(77, 6, 2, { role: 'runner' }), row(200, 100, 100, { role: 'cli', sessionId: 'unknown-session' }), row(201, 50, 18, { role: 'tool', sessionId: 'unknown-session' })],
+          app: { cpuCount: 10, webEngine: 'included', discovery: { partial: false }, processes: [row(1, 100, 5, { role: 'app' })] } } };
+        // The narrowest window that still shows the total (it hides at 1050 px): nothing in the status bar overlaps.
+        const narrow = await open({ telemetry }, 1060, 700);
+        await narrow.waitForFunction(() => document.querySelector('#telemetry-summary')?.textContent?.includes('sesiones'));
+        const fit = await narrow.locator('#telemetry-summary').evaluate(node => {
+          const bar = node.parentElement!; const boxes = Array.from(bar.children).filter(c => (c as HTMLElement).offsetParent !== null).map(c => c.getBoundingClientRect());
+          return { overflow: bar.scrollWidth > bar.clientWidth, overlap: boxes.some((b, i) => i > 0 && b.left < boxes[i - 1].right - 0.5) };
+        });
+        assert.deepEqual(fit, { overflow: false, overlap: false });
+        const page = await open({ telemetry });
+        await page.waitForFunction(() => document.querySelector('#telemetry-summary')?.textContent?.includes('sesiones'));
+        assert.equal(await page.locator('#telemetry-summary').innerText(), 'Jauría · CPU 12,5 % (sesiones 11,8 %) · RAM 256 MiB');
+        const box = await page.locator('#telemetry-summary').boundingBox();
+        assert.ok(box && box.x >= 0 && box.x + box.width <= page.viewportSize()!.width, 'the longer total still fits in the status bar');
+        await page.locator('#open-telemetry').click(); await page.waitForSelector('#telemetry-dialog[open]');
+        await page.waitForSelector('.telemetry-scale');
+        assert.equal(await page.locator('tr.telemetry-total').innerText().then(t => t.replace(/\s+/g, ' ')), 'Total de Jauría 12,5 % 256 MiB');
+        assert.equal(await page.locator('tr.telemetry-session').innerText().then(t => t.replace(/\s+/g, ' ')), 'Sesión 11,8 % 150 MiB');
+        assert.equal(await page.locator('.telemetry-scale').innerText(), 'CPU: porcentaje de la capacidad de todo el equipo (10 núcleos).');
+        assert.equal(await page.locator('.telemetry-table th', { hasText: 'CPU' }).getAttribute('title'), 'CPU: porcentaje de la capacidad de todo el equipo (10 núcleos).');
+      });
+
       await t.test('review: narrow window, opened from the sidebar drawer: Escape returns focus to a visible control', async () => {
         const page = await open({}, 760, 560);
         await page.locator('#toggle-sidebar').click(); await page.waitForTimeout(300);

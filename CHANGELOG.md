@@ -4,6 +4,10 @@ Los cambios de cada versión de Jauria se registran aquí. El trabajo pendiente 
 
 ## [Unreleased]
 
+### Uso y recursos
+
+- **La CPU se muestra como porcentaje de todo el equipo**, no con 100 % por núcleo: en un Mac de 10 núcleos, lo que antes se leía «CPU 125 %» ahora es «12,5 %». La barra de estado añade cuánto de ese total es de las sesiones, por ejemplo «Jauría · CPU 12,5 % (sesiones 11,8 %) · RAM 3,2 GiB», y el diálogo dice la escala en una línea bajo la tabla. Una cifra pequeña que no es cero se muestra «< 0,1 %». El muestreo del runner y de la ventana publica el número de núcleos (`cpuCount`); si ninguno lo informa, se conserva la escala anterior.
+
 ## [1.4.0] - 2026-11-25
 
 Rediseño de la ventana, paleta de comandos, Pulso conectado con las sesiones y estado de los agentes guardado en el runner. Se retiran Repositorios y tareas Git. Capturas, compatibilidad y verificación en [las notas de 1.4.0](docs/RELEASE_1.4.0.md).
