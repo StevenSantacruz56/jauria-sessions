@@ -1,12 +1,13 @@
 import type { ITheme } from '@xterm/xterm';
 
-// Native Claude reference: quiet charcoal, blue-gray, readable semantic ANSI.
+// Native Claude reference: quiet charcoal, readable semantic ANSI. The
+// background matches --terminal in style.css (#16191d); change both together.
 // These map palette slots only; provider truecolor and SGR remain untouched.
 export const terminalTheme: ITheme = {
-  background: '#292f3a',
+  background: '#16191d',
   foreground: '#e9edf3',
   cursor: '#f0b323',
-  cursorAccent: '#292f3a',
+  cursorAccent: '#16191d',
   selectionBackground: '#465369',
   selectionInactiveBackground: '#3c4655',
   selectionForeground: '#ffffff',

@@ -381,7 +381,13 @@ pub fn get_request(db: &Connection, rid: &str) -> Result<Value> {
 }
 /// Persist a permission request, deduplicated by local UUID and typed native id.
 /// No request insertion authorizes a response. Unknown native methods stay opaque.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn record_request(db: &Connection, v: &Value) -> Result<Value> {
+    record_request_reporting(db, v).map(|(value, _)| value)
+}
+/// Same as record_request; the flag is true only for a new insertion that the
+/// caller's autocommit savepoint released, never for a deduplicated retry.
+pub fn record_request_reporting(db: &Connection, v: &Value) -> Result<(Value, bool)> {
     keys(v,&["id","sessionId","turnId","attemptId","generation","nativeRpcId","method","payload"])?;
     let rid=id(v,"id")?; request_uuid(rid)?;
     let sid=id(v,"sessionId")?; let tid=id(v,"turnId")?; let aid=id(v,"attemptId")?; let gen_=generation(v)?;
@@ -393,14 +399,14 @@ pub fn record_request(db: &Connection, v: &Value) -> Result<Value> {
         if let Some(existing)=duplicate {
             let old=get_request(db,&existing)?;
             for field in ["id","sessionId","turnId","attemptId","generation","nativeRpcId","method","payload"] { ensure!(old[field]==v[field],"Request identity/payload conflict: {field}"); }
-            return Ok(old);
+            return Ok((old,false));
         }
         live(db,v)?;
         ensure!(count(db,"provider_requests")?<4096,"Request retained row quota");
         let pending:i64=db.query_row("SELECT count(*) FROM provider_requests WHERE status NOT IN ('delivered','invalidated')",[],|r|r.get(0))?;
         ensure!(pending<256,"Pending approval quota (256)"); budget(db,4096+payload.len() as i64)?;
         db.execute("INSERT INTO provider_requests VALUES(?,?,?,?,?,?,?,?,'pending',NULL)",params![rid,sid,tid,aid,gen_,native,method,payload])?;
-        get_request(db,rid)
+        Ok((get_request(db,rid)?,true))
     })
 }
 /// One-shot permission CAS. Exact retries return shouldSend:false; opposite
@@ -617,6 +623,22 @@ mod tests {
     fn answer() -> Value { let mut v=request(); v.as_object_mut().unwrap().remove("method");v.as_object_mut().unwrap().remove("payload");v["decision"]=json!("deny");v }
     fn finish(status: &str) -> Value { json!({"sessionId":"s","turnId":"t","attemptId":"a","generation":1,"status":status}) }
     fn live_db() -> Connection { let db=db();attach(&db);start_turn(&db,&start()).unwrap();db }
+
+    #[test]
+    fn record_request_reports_only_new_committed_insertions() {
+        let db=live_db();
+        let (first,new)=record_request_reporting(&db,&request()).unwrap();
+        assert!(new && db.is_autocommit());
+        // Deduplicated retries (same id, or same session/generation/native id) are not new.
+        let (again,duplicate)=record_request_reporting(&db,&request()).unwrap();
+        assert!(!duplicate);assert_eq!(first,again);
+        // A rejected insertion is neither new nor recorded.
+        let mut bad=request();bad["id"]=json!("00000000-0000-4000-8000-0000000000ff");
+        assert!(record_request_reporting(&db,&bad).is_err());
+        // Invalidating (resolved elsewhere) keeps the row: a retry is still a duplicate.
+        invalidate_request(&db,RID,"s",1).unwrap();
+        assert!(!record_request_reporting(&db,&request()).unwrap().1);
+    }
 
     #[test]
     fn schema_exact_readonly_partial_and_nested_init() {

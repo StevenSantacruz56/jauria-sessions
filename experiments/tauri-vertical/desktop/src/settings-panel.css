@@ -1,4 +1,4 @@
-/* Local additions to the incumbent session dialog and brand tokens. */
+/* Local additions to the session dialog; colors and radii come from style.css tokens. */
 .session-dialog.settings-dialog {
   width: min(760px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
@@ -11,15 +11,21 @@
 .settings-dialog .dialog-heading { flex: 0 0 auto; margin: 0; padding: 24px 24px 16px; border-bottom: 1px solid var(--border); }
 .settings-dialog-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 20px 24px 24px; }
 .settings-dialog-section + .settings-dialog-section {
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
 }
-.settings-dialog-section h3 { margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-.settings-dialog-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.settings-dialog-row label { font-size: 12px; font-weight: 500; }
-.settings-dialog-row select { width: 160px; flex: 0 0 auto; min-height: 36px; }
-.settings-dialog-row input { width: 88px; flex: 0 0 auto; min-height: 36px; font-variant-numeric: tabular-nums; }
+.settings-dialog-section h3 { margin-bottom: 8px; color: var(--dim); font-size: 11px; font-weight: 500; }
+/* Compact row: label + one line of help, control on the right. */
+.settings-dialog-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; }
+.settings-row-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-row-help { color: var(--muted); font-size: 12px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-dialog-row label { font-size: 13px; font-weight: 500; }
+.settings-dialog-row select { width: 160px; flex: 0 0 auto; min-height: 32px; }
+.settings-dialog-row input { width: 88px; flex: 0 0 auto; min-height: 32px; font-variant-numeric: tabular-nums; }
+.settings-more { margin-top: 2px; }
+.settings-more > summary { width: max-content; padding: 2px 0; color: var(--muted); font-size: 12px; cursor: pointer; }
+.settings-more > .settings-dialog-help { margin-top: 4px; }
 .settings-dialog-help, .settings-dialog-version, .settings-dialog-status, .settings-dialog-warning {
   margin-top: 8px;
   max-width: 72ch;
@@ -33,13 +39,13 @@
 .settings-dialog-status { margin-top: 0; }
 .settings-dialog-status:empty { display: none; }
 .settings-dialog .form-error + button { margin-top: 10px; }
-.settings-dialog .dialog-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; margin: 0; padding: 14px 24px 18px; }
+.settings-dialog .dialog-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin: 0; padding: 14px 24px 18px; }
 .settings-dialog-messages { min-width: 0; max-height: 7rem; overflow-y: auto; }
 .settings-dialog-messages .form-error { margin: 0 8px 0 0; }
 @media (max-width: 480px) {
   .settings-dialog .dialog-heading { padding: 18px 20px 14px; }
   .settings-dialog-content { padding: 16px 20px 20px; }
-  .settings-dialog .dialog-footer { grid-template-columns: minmax(0, 1fr) auto auto; padding: 12px 20px 16px; }
+  .settings-dialog .dialog-footer { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 20px 16px; }
   .settings-dialog-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .settings-dialog-row select { width: 100%; }
   .settings-dialog .dialog-footer > button { min-height: 40px; }
@@ -49,15 +55,13 @@
 #session-alerts .session-alerts-count {
   min-width: 18px;
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   color: var(--selected-text);
   background: var(--selected);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
 }
-#open-settings { margin: 4px 12px; justify-content: flex-start; }
-#open-settings kbd { margin-left: auto; }
 
 .settings-permissions > .settings-dialog-row { margin-top: 12px; }
 .settings-permissions .settings-dialog-row select { width: min(340px, 55%); min-width: 0; }
@@ -71,19 +75,13 @@
 .settings-permissions-result label { display: block; margin-top: 12px; font-size: 12px; }
 .settings-permissions-result textarea { width: 100%; min-height: 80px; margin: 8px 0; resize: vertical; overflow-wrap: anywhere; }
 .settings-dialog .settings-section { margin: 0 0 12px; }
-.settings-pulso {
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface, var(--panel));
-}
-.settings-pulso.settings-dialog-section { margin-top: 20px; }
-.settings-pulso-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; font-weight: 600; }
+/* No nested card: Pulso is a plain section like the others. */
+.settings-pulso-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; cursor: pointer; font-size: 13px; font-weight: 500; }
 .settings-pulso-switch input { appearance: none; position: relative; width: 42px; height: 24px; margin: 0; flex: 0 0 auto; border: 1px solid var(--control-border); border-radius: 999px; background: var(--hover); cursor: pointer; }
 .settings-pulso-switch input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 25%); transition: transform .15s ease; }
-.settings-pulso-switch input:checked { border-color: var(--accent); background: var(--accent); }
+.settings-pulso-switch input:checked { border-color: var(--focus); background: var(--focus); }
 .settings-pulso-switch input:checked::before { transform: translateX(18px); }
-.settings-pulso-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-pulso-switch input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .settings-pulso-switch input:disabled { cursor: default; opacity: .6; }
 @media (prefers-reduced-motion: reduce) { .settings-pulso-switch input::before { transition: none; } }
 .settings-pulso .settings-dialog-help { margin-bottom: 0; }
@@ -92,3 +90,21 @@
 @media (max-width: 480px) {
   .settings-permissions .settings-dialog-row select { width: 100%; }
 }
+
+/* 1.4.0: rows whose help may wrap, plain-label rows, the manual access block and Acerca de y diagnóstico. */
+.settings-row-label { font-size: 13px; font-weight: 500; }
+.settings-row-help.settings-wrap { white-space: normal; overflow: visible; }
+.settings-dialog-row > button { flex: 0 0 auto; }
+.settings-pulso-state { margin-top: -4px; }
+.settings-unavailable { color: var(--muted); }
+.settings-manual { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.settings-manual h4 { font-size: 12px; font-weight: 600; }
+.settings-manual > .settings-permissions-details { margin-top: 8px; }
+.settings-permissions-empty { color: var(--muted); }
+.settings-notifications .settings-dialog-help, .settings-about-controls .settings-dialog-help { margin-top: 4px; }
+.settings-about-controls .settings-dialog-row { align-items: flex-start; padding-top: 8px; }
+.settings-app-version { margin-top: 0; color: var(--text); font-weight: 500; }
+.settings-diagnostic-preview { max-height: 160px; margin: 8px 0 0; overflow: auto; }
+.settings-diagnostic-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.settings-diagnostic-actions .settings-dialog-help { margin-top: 0; }
+#runner-state { color: var(--text); }

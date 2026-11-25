@@ -4,7 +4,7 @@ use crate::{codex_store as ledger,codex_runtime::{self,Control,Intent}};
 
 impl Runner {
     pub(super) fn codex_request(self:&Arc<Self>,op:&str,args:&Value)->Result<Value>{
-        let id=args["id"].as_str().context("Falta sesión o tarea")?;validate_id(id)?;
+        let id=args["id"].as_str().context("Falta sesión")?;validate_id(id)?;
         if op=="codex_state" {let jobs=self.codex_jobs.lock().unwrap();let db=self.db.lock().unwrap();let mut result=ledger::summary(&db.0,id)?;let session=db.session(id)?.context("Sesión desconocida")?;result["acceptingTurns"]=json!(result["status"]=="idle" && jobs.get(id).is_some_and(|job|job.control.generation==result["generation"].as_i64().unwrap_or(0) && !job.worker.is_finished() && !job.control.stop.load(Ordering::Acquire) && job.control.ready.load(Ordering::Acquire)));result["connectionStatus"]=session["status"].clone();result["connectionDetail"]=session["detail"].clone();return Ok(result);}
         if op=="codex_command" {
             let db=self.db.lock().unwrap();let cid=args["commandId"].as_str().context("Falta comando")?;
@@ -22,8 +22,8 @@ impl Runner {
             let request=ledger::get_request(&self.db.lock().unwrap().0,args["requestId"].as_str().context("Falta permiso")?)?;
             ensure!(request["sessionId"]==id,"El permiso pertenece a otra sesión");return Ok(request);
         }
-        if matches!(op,"start_codex"|"start_codex_task"|"codex_resume"){
-            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Operación de proyecto en curso; consulta su estado"))?;
+        if matches!(op,"start_codex"|"codex_resume"){
+            let _workspace=self.workspace_mutations.try_lock().map_err(|_|anyhow::anyhow!("Hay otra apertura de sesión en curso; consulta su estado"))?;
             ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
             if op=="codex_resume" {
                 let current=ledger::get_session(&self.db.lock().unwrap().0,id)?;
@@ -36,20 +36,8 @@ impl Runner {
                 }
                 let session=self.db.lock().unwrap().session(id)?.context("Sesión desconocida")?;
                 ensure!(matches!(session["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released")),"Inspecciona y libera la sesión incierta antes de reanudar");
-                if let Some(task)=session["taskId"].as_str(){crate::workflow::writable(&self.db,task)?;crate::projects::ready(&self.db,task)?;}
                 let _guard=self.mutations.lock().unwrap();
                 return self.launch_codex(id,&session,Some(current["generation"].as_i64().context("Generación inválida")?));
-            }
-            if op=="start_codex_task" {
-                let sid=args["sessionId"].as_str().context("Falta sesión")?;validate_id(sid)?;
-                if let Some(session)=self.db.lock().unwrap().session(sid)? {
-                    ensure!(session["taskId"]==id && session["transport"]=="app-server","El ID de sesión tiene otro contenido");return Ok(session);
-                }
-                crate::handoff::session_admission(&self.db.lock().unwrap().0,sid,&Value::Null,None)?;
-                crate::workflow::writable(&self.db,id)?;
-                let task=crate::projects::ready(&self.db,id)?;
-                let _guard=self.mutations.lock().unwrap();
-                return self.launch_codex(sid,&json!({"id":sid,"title":task["title"],"kind":"codex","cwd":task["worktreePath"],"taskId":id,"rows":args["rows"],"cols":args["cols"]}),None);
             }
             let _guard=self.mutations.lock().unwrap();
             return self.launch_codex(id,args,None);
@@ -108,7 +96,7 @@ impl Runner {
     fn codex_control(&self,id:&str,generation:i64)->Result<Control>{
         let jobs=self.codex_jobs.lock().unwrap();let job=jobs.get(id).context("La conexión no está bajo custodia de este runner; no se reenvía la instrucción")?;
         ensure!(!job.worker.is_finished() && job.control.generation==generation && !job.control.stop.load(Ordering::Acquire),"La conexión cambió o se está cerrando");
-        Ok(Control{stop:job.control.stop.clone(),ready:job.control.ready.clone(),tx:job.control.tx.clone(),generation})
+        Ok(Control{stop:job.control.stop.clone(),ready:job.control.ready.clone(),tx:job.control.tx.clone(),generation,attention:job.control.attention.clone(),pid:job.control.pid.clone()})
     }
     pub(super) fn stop_codex(&self,id:&str,generation:i64)->Result<Value>{
         {
@@ -117,7 +105,7 @@ impl Runner {
             let stored=self.db.lock().unwrap().session(id)?.context("Sesión desconocida")?;
             ensure!(stored["codex"]["generation"]==generation,"La conexión cambió; la detención no se aplica a otra generación");
             if let Some(pulso)=&self.pulso {let _=pulso.revoke_session(id);}
-            if let Some(job)=jobs.get(id){ensure!(job.control.generation==generation,"La conexión cambió");job.control.ready.store(false,Ordering::Release);job.control.stop.store(true,Ordering::Release);}
+            if let Some(job)=jobs.get(id){ensure!(job.control.generation==generation,"La conexión cambió");self.attention.stop_requested(id);job.control.ready.store(false,Ordering::Release);job.control.stop.store(true,Ordering::Release);}
             else {ensure!(matches!(stored["status"].as_str(),Some("exited"|"stopped"|"failed"|"interrupted"|"released")),"Sesión sin custodia; no se envían señales");return Ok(stored);}
         }
         let until=Instant::now()+Duration::from_secs(10);
@@ -134,25 +122,18 @@ impl Runner {
     }
     /// Caller owns workspace -> mutations through registration, never execution.
     pub(super) fn launch_codex(self:&Arc<Self>,id:&str,args:&Value,resume:Option<i64>)->Result<Value>{
-        self.launch_codex_claimed(id,args,resume,None)
-    }
-    // Internal handoff capability is separate from renderer-controlled fields.
-    pub(super) fn launch_codex_claimed(self:&Arc<Self>,id:&str,args:&Value,resume:Option<i64>,grant:Option<&crate::handoff::ClaimedStart>)->Result<Value>{
         ensure!(!self.quitting.load(Ordering::Acquire),"runner is shutting down");
-        if grant.is_some(){ensure!(resume.is_none(),"Handoff cannot resume an existing connection");crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;}
-        if resume.is_none(){if let Some(old)=self.db.lock().unwrap().session(id)?{ensure!(old["kind"]=="codex" && old["transport"]=="app-server" && old["title"]==args["title"] && old["cwd"]==args["cwd"] && old["taskId"]==args["taskId"],"El ID tiene otro contenido");return Ok(old);}}
-        if resume.is_none(){crate::handoff::session_admission(&self.db.lock().unwrap().0,id,args,grant)?;}
+        if resume.is_none(){if let Some(old)=self.db.lock().unwrap().session(id)?{ensure!(old["kind"]=="codex" && old["transport"]=="app-server" && old["title"]==args["title"] && old["cwd"]==args["cwd"],"El ID tiene otro contenido");return Ok(old);}}
         let cwd=fs::canonicalize(args["cwd"].as_str().context("Selecciona una carpeta")?)?;
         ensure!(cwd.is_dir() && cwd.to_str()==args["cwd"].as_str(),"Selecciona una carpeta canónica existente");
-        ensure!(!cwd.starts_with(self.data_dir.join("worktrees")) || args["taskId"].is_string(),"Inicia esta carpeta desde su tarea");
         let workspace=workspace_for(&cwd)?;
         let db=self.db.lock().unwrap();let others=db.sessions_with_live(&self.terminal_streams.sessions())?.into_iter().filter(|s|s["id"]!=id).collect::<Vec<_>>();
-        ensure_workspace_available(&workspace,&others)?;crate::verification::ensure_path_available(&db.0,&workspace)?;db.ensure_capacity()?;
+        ensure_workspace_available(&workspace,&others)?;crate::legacy_tasks::ensure_no_live_verification(&db.0,&workspace)?;db.ensure_capacity()?;
         ensure!(occupied_slots(&others)<self.settings.limit(),"concurrency limit is {}",self.settings.limit());drop(db);
         let size=dimensions(args)?;let title=args["title"].as_str().context("Falta título")?;ensure!(title.len()<=512,"Título demasiado largo");
         let mut db=self.db.lock().unwrap();
         let attached=if resume.is_none(){
-            db.insert_codex(&json!({"id":id,"kind":"codex","title":title,"status":"starting","pid":null,"rows":size.rows,"cols":size.cols,"cwd":cwd,"workspace":workspace,"taskId":args["taskId"]}))?
+            db.insert_codex(&json!({"id":id,"kind":"codex","title":title,"status":"starting","pid":null,"rows":size.rows,"cols":size.cols,"cwd":cwd,"workspace":workspace}))?
         }else{
             db.restarting(id)?;
             match ledger::attach_session(&db.0,&json!({"sessionId":id,"expectedGeneration":resume.unwrap(),"nativeThreadId":null})){
@@ -171,7 +152,7 @@ impl Runner {
                 Some(crate::pulso_mcp_config::PulsoMcp::new(std::env::current_exe()?,self.data_dir.join("pulso-grants").join(format!("{id}.json")))?)
             }else{None}
         }else{None};
-        let (control,rx)=codex_runtime::channel(generation);let worker_control=Control{stop:control.stop.clone(),ready:control.ready.clone(),tx:control.tx.clone(),generation};let owner=self.clone();let sid=id.to_owned();
+        let (control,rx)=codex_runtime::channel(generation);let worker_control=Control{stop:control.stop.clone(),ready:control.ready.clone(),tx:control.tx.clone(),generation,attention:Some(self.attention.clone()),pid:control.pid.clone()};let owner=self.clone();let sid=id.to_owned();
         let worker=thread::Builder::new().name("jauria-codex".into()).spawn(move||{
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||codex_runtime::run(owner.db.clone(),owner.mutations.clone(),worker_control,rx,sid.clone(),cwd,pulso_mcp)));
             if let Some(pulso)=&owner.pulso {let _=pulso.revoke_session(&sid);}

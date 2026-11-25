@@ -27,24 +27,25 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     row.append(title, input); host.append(row); return input;
   }
   function option(value: string, title: string) { const node = el('option', title); node.value = value; return node; }
-  const heading = el('h3', 'Permisos de agentes'); heading.tabIndex = -1; heading.id = prefix;
+  const heading = el('h4', 'Acceso a Pulso para una sesión abierta'); heading.tabIndex = -1; heading.id = prefix;
   host.setAttribute('aria-labelledby', prefix);
-  host.append(heading, el('p', 'Elige una sesión y un proyecto, o permite crear proyectos propios. Después copia las instrucciones y pégalas en esa conversación para que el agente registre el plan. Claude y Codex conservan sus permisos nativos.', 'settings-dialog-help'));
-  const session = select('Sesión que recibirá permiso', 'session');
-  const scope = select('Alcance del permiso', 'scope');
+  host.append(heading, el('p', '1. Elige la sesión. 2. Elige qué puede hacer: trabajar solo en un proyecto o crear proyectos nuevos. 3. Pulsa Dar acceso y pega las instrucciones en esa conversación. Claude Code y Codex conservan sus propios permisos para archivos, comandos y red.', 'settings-dialog-help'));
+  const session = select('Sesión que recibe el acceso', 'session');
+  const scope = select('Qué puede hacer', 'scope');
   const rememberLabel = el('label', '', 'settings-permissions-check');
   const remember = el('input'); remember.type = 'checkbox';
-  rememberLabel.append(remember, el('span', 'Recordar para futuras sesiones de esta herramienta en esta carpeta'));
+  rememberLabel.append(remember, el('span', 'Recordar para las próximas sesiones de esta herramienta en esta carpeta'));
   const status = el('p', '', 'settings-dialog-help'); status.setAttribute('role', 'status');
   const result = el('div', '', 'settings-permissions-result');
   const actions = el('div', '', 'settings-permissions-actions');
-  const grant = button('Conceder acceso y ver comando', () => { void write('grant'); });
-  const revoke = button('Revocar permiso de la sesión', () => { void write('revoke'); });
-  const retry = button('Actualizar permisos y proyectos', () => { void read(); });
+  const grant = button('Dar acceso', () => { void write('grant'); });
+  const revoke = button('Quitar el acceso de esta sesión', () => { void write('revoke'); });
+  const retry = button('Volver a consultar', () => { void read(); });
   const more = button('Más proyectos', () => { void readMoreProjects(); }); more.hidden = true;
   actions.append(grant, revoke, retry, more);
   const policies = el('div');
-  host.append(rememberLabel, el('p', 'Recordar es opcional y se guarda al conceder. Abajo solo aparecen permisos recordados.', 'settings-dialog-help'), actions, status, result, policies);
+  const empty = el('p', '', 'settings-dialog-help settings-permissions-empty'); empty.hidden = true;
+  host.append(rememberLabel, el('p', 'Si lo recuerdas, la próxima sesión de esa herramienta en esa carpeta recibe el mismo acceso sin pedirlo. Se guarda al pulsar Dar acceso.', 'settings-dialog-help'), actions, empty, status, result, policies);
   let active = false, disposed = false, writing = false, reading = false, generation = 0;
   let connectionInterrupted = false;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -69,6 +70,8 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     grant.disabled ||= !loaded || !live().some(s => s.id === session.value) || !validScope(scope.value);
     revoke.disabled ||= !live().some(s => s.id === session.value);
     more.hidden = !hasMoreProjects;
+    empty.hidden = live().length > 0;
+    empty.textContent = 'No hay sesiones de Claude Code o Codex abiertas. Las sesiones nuevas que abras desde Jauría reciben el acceso automático si está activado arriba.';
     if (unavailable) {
       connectionInterrupted = true;
       status.textContent = 'Conexión temporalmente no disponible. El comando mostrado se conserva; espera a reconectar.';
@@ -76,7 +79,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       connectionInterrupted = false;
       status.textContent = result.querySelector('textarea')
         ? 'Conexión restablecida. El comando anterior sigue visible; comprueba la sesión antes de usarlo.'
-        : 'Conexión restablecida. Pulsa Actualizar permisos y proyectos para comprobar el estado.';
+        : 'Conexión restablecida. Pulsa Volver a consultar para comprobar el estado.';
     }
     onBusyChange();
   }
@@ -91,15 +94,15 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
     sync();
   }
   function renderPolicies() {
-    const title = el('h4', 'Permisos recordados'); title.tabIndex = -1;
+    const title = el('h4', 'Accesos recordados'); title.tabIndex = -1;
     policies.replaceChildren(title);
-    if (!saved.length) policies.append(el('p', 'No hay permisos recordados.', 'settings-dialog-help'));
+    if (!saved.length) policies.append(el('p', 'No hay accesos recordados. Las sesiones nuevas solo reciben el acceso automático, si está activado.', 'settings-dialog-help'));
     for (const entry of saved) {
       const p = entry.policy; const row = el('div', '', 'settings-permissions-policy');
       row.append(el('p', `${p.provider ?? 'Herramienta sin especificar'} · ${p.cwd ?? 'Carpeta sin especificar'}`, 'settings-dialog-help'),
         el('p', p.projectId ? `Proyecto: ${projects.find(project => project.id === p.projectId)?.title ?? p.projectId}` : 'Sin proyecto asignado', 'settings-dialog-help'),
-        el('p', p.canCreateProjects ? 'Puede crear proyectos propios.' : 'No puede crear proyectos propios.', 'settings-dialog-help'),
-        button('Revocar permiso recordado', () => { void write('revoke_policy', entry.id); }));
+        el('p', p.canCreateProjects ? 'Puede crear proyectos nuevos.' : 'No puede crear proyectos nuevos.', 'settings-dialog-help'),
+        button('Olvidar este acceso', () => { void write('revoke_policy', entry.id); }));
       policies.append(row);
     }
   }
@@ -114,7 +117,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
   }
   function renderScopes(selected: string) {
     const placeholder = option('', 'Elegir alcance'); placeholder.disabled = true;
-    scope.replaceChildren(placeholder, option(ownProjectsScope, 'Crear proyectos propios'), ...projects.map(p => option(p.id, p.title)));
+    scope.replaceChildren(placeholder, option(ownProjectsScope, 'Crear proyectos nuevos y editar los que cree'), ...projects.map(p => option(p.id, `Solo el proyecto ${p.title}`)));
     loaded = validScope(selected);
     if (selected && !loaded) {
       const unknown = option(selected, `Proyecto no disponible: ${selected}`); unknown.disabled = true; scope.prepend(unknown);
@@ -122,7 +125,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
         ? 'El proyecto solicitado no está entre los proyectos cargados. Pulsa Más proyectos para buscarlo o elige otro alcance antes de conceder permiso.'
         : 'El proyecto solicitado no está disponible en la lista. Elige otro alcance antes de conceder permiso.';
     } else if (!selected) {
-      status.textContent = 'Elige un proyecto o la opción de crear proyectos propios antes de conceder acceso.';
+      status.textContent = 'Elige un proyecto o la opción de crear proyectos nuevos antes de dar acceso.';
     } else status.textContent = hasMoreProjects
       ? `Se muestran ${projects.length} proyectos. Pulsa Más proyectos para cargar hasta 50 más.`
       : `Se muestran todos los proyectos disponibles (${projects.length}).`;
@@ -178,7 +181,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
       completed = true;
       if (op === 'grant') {
         remember.checked = false;
-        status.textContent = 'Acceso concedido. Copia las instrucciones y pégalas en la sesión elegida; después describe el plan.';
+        status.textContent = 'Acceso dado. Copia las instrucciones y pégalas en la sesión elegida; después describe el plan.';
         // Only the bridge's safe command string is displayable. Never render
         // response objects, opaque handles, tokens, guidance or raw RPC errors.
         if (typeof data?.command === 'string' && data.command) {
@@ -194,7 +197,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
             void navigator.clipboard.writeText(instruction).then(() => { if (valid(token)) status.textContent = 'Instrucciones copiadas. Pégalas en esa conversación y describe el plan.'; }, () => { if (valid(token)) status.textContent = 'No se pudieron copiar. Selecciona el comando para compartirlo con el agente.'; });
           }));
         } else status.textContent = 'Permiso concedido, pero el runner no devolvió un comando de registro. Consulta los permisos antes de volver a intentarlo.';
-      } else status.textContent = op === 'revoke' ? 'Permiso de la sesión revocado.' : 'Permiso recordado revocado. Las futuras sesiones necesitarán autorización.';
+      } else status.textContent = op === 'revoke' ? 'Acceso quitado: esa sesión ya no puede usar Pulso.' : 'Acceso olvidado. Las próximas sesiones de esa carpeta ya no lo reciben.';
       if (op !== 'revoke') {
         const response = await options.request('policies', {});
         if (!valid(token)) return;
@@ -207,7 +210,7 @@ export function mountAgentPermissions(host: HTMLElement, options: PermissionsOpt
           ? hasCommand
             ? 'Acceso concedido. No se pudo actualizar la lista de permisos recordados. Copia las instrucciones y consulta la lista sin volver a conceder el permiso.'
             : 'Permiso concedido, pero no se recibió un comando ni se pudo actualizar la lista. Consulta los permisos antes de volver a intentarlo.'
-          : 'Permiso recordado revocado. No se pudo actualizar la lista. Pulsa Actualizar permisos y proyectos para consultarla.')
+          : 'Acceso olvidado. No se pudo actualizar la lista. Pulsa Volver a consultar para verla.')
         : 'No se pudo confirmar la operación. Consulta la lista antes de volver a intentarlo.';
     }
     finally {

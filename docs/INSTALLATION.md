@@ -15,11 +15,11 @@ La [release v1.3.3](https://github.com/StevenSantacruz56/jauria-sessions/release
 
 3. Abre el DMG y arrastra **Jauria.app** al acceso directo **Applications**.
 4. Expulsa la imagen y abre Jauria desde Aplicaciones. No ejecutes la app directamente desde el DMG.
-5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y selecciona la carpeta de trabajo. No necesitas registrar un proyecto para abrir una sesión.
+5. Pulsa **Nueva sesión**, elige Codex, Claude Code o Terminal y la carpeta de trabajo, y pulsa **Abrir sesión**. Vincularla a un proyecto de Pulso es opcional.
 
 Conserva una sola `Jauria.app` en **/Applications**. Los bundles que aparecen en `target/debug` o `target/release` al compilar son salidas de desarrollo, no instalaciones adicionales; macOS puede mostrarlos como apps si se abrieron durante pruebas. Retira o archiva copias antiguas sin borrar el perfil de datos. La lista reciente de un lanzador puede tardar en reflejar la limpieza aunque Spotlight y Launch Services ya apunten a la app instalada.
 
-Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Información → Diagnóstico → Comprobar CLI** si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
+Para ejecutar Jauria no necesitas Rust, Cargo, Node ni npm. Las CLI de proveedores se instalan y autentican por separado; Jauria no hace login ni importa sus credenciales. Esta versión busca Codex en `/opt/homebrew/bin/codex` y Claude Code en `~/.local/bin/claude`; comprueba **Configuración → Acerca de y diagnóstico → Comprobar** (o **Comprobar otra vez** en Nueva sesión) si no aparecen disponibles. Terminal usa `/bin/zsh -il` y no necesita un proveedor de IA.
 
 Descarga siempre el DMG, checksum y recibo de la **misma** [release](https://github.com/StevenSantacruz56/jauria-sessions/releases/tag/v1.3.3). El checksum identifica el archivo; no aporta firma de editor ni notarización. Las releases anteriores no sustituyen la verificación de versión y checksum del paquete que instales.
 
@@ -35,7 +35,7 @@ Los nombres `_signed.dmg` y `_notarized.dmg` solo se usan si el script valida la
 
 Guarda tu trabajo y termina de forma controlada las sesiones y procesos de trabajo administrados por Jauria antes de reemplazar la app o reiniciar el runner. Cierra la interfaz, reemplaza Jauria.app en Aplicaciones y vuelve a abrirla. Cerrar la interfaz no garantiza que el runner ni los procesos hayan terminado: comprueba su estado y usa la acción de reiniciar runner solo después de terminar el trabajo activo.
 
-Las funciones nuevas del backend requieren un runner actualizado. Si aparece el aviso de runner anterior en Información → Diagnóstico, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
+Las funciones nuevas del backend requieren un runner actualizado. Si **Configuración → Acerca de y diagnóstico** avisa de que las versiones no coinciden o de un runner anterior, usa **Reiniciar runner…** solo después de terminar el trabajo activo. Las sesiones antiguas no cambian de ejecutable ni de permisos al instalar la app.
 
 Desde 1.0.1, el código propio se licencia bajo GPL-3.0-only. El bundle incorpora LICENSE y NOTICE; el DMG añade ambos textos y `SOURCE_REFERENCE.txt`, con enlaces a la etiqueta y al archivo de fuente de su misma versión. Esa referencia no entrega automáticamente el código ni certifica cumplimiento de GPL. Si redistribuyes binarios, proporciona la fuente correspondiente y los materiales de compilación conforme a [LICENSE](../LICENSE); el destinatario debe poder acceder al código. Un repositorio privado inaccesible para él no basta.
 

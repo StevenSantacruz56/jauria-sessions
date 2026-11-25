@@ -1,19 +1,9 @@
-//! Storage-only fixtures; real project/workflow initializers are retained.
+//! Storage-only fixtures; the retained legacy task schema initializer is real.
 #![allow(dead_code)]
 #[path = "../src/storage.rs"] mod storage;
-#[path = "../src/verification.rs"] mod verification;
 #[path = "../src/codex_store.rs"] mod codex_store;
-#[path = "../src/projects.rs"] mod projects;
-#[path = "../src/workflow.rs"] mod workflow;
-#[path = "../src/git_worktree.rs"] mod git_worktree;
-
-// Snapshot capture is outside these storage fixtures. Fail if accidentally called;
-// keep the real projects/workflow schema and recovery initializers above.
-mod snapshots {
-    pub fn capture(_: &std::path::Path, _: &str) -> anyhow::Result<serde_json::Value> {
-        anyhow::bail!("Snapshot capture is outside storage fixtures")
-    }
-}
+#[path = "../src/legacy_tasks.rs"] mod legacy_tasks;
+#[path = "../src/process_custody.rs"] mod process_custody;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -373,8 +363,7 @@ fn storage_v2_known_layout_migrates_and_recounts_markers() -> Result<()> {
     let db=Connection::open(&path)?;
     db.execute_batch("CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,pid INTEGER,rows INTEGER NOT NULL,cols INTEGER NOT NULL,cwd TEXT,workspace TEXT,task_id TEXT);
         CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL);")?;
-    projects::init(&db)?;
-    workflow::init(&db)?;
+    legacy_tasks::init(&db)?;
     db.execute_batch(include_str!("storage_v2.sql"))?;
     db.execute_batch("INSERT INTO sessions VALUES('a','a','fixture','exited',NULL,24,80,NULL,NULL,NULL);
         INSERT INTO events(session_id,kind,data) VALUES('a','state','{}'),('a','output','discarded'),('a','output','keep');
@@ -508,7 +497,7 @@ fn storage_v3_to_v5_preserves_limits_counters_rejection_and_private_backup() -> 
     let db=Store::open(&path)?;let after=db.retention()?;
     assert_eq!(after["schemaVersion"],5);
     let mut expected=before;expected["schemaVersion"]=json!(5);assert_eq!(after,expected);
-    verification::validate_schema(&db.0)?;
+    legacy_tasks::validate_verification_schema(&db.0)?;
     let backups=std::fs::read_dir(tmp.path())?.filter_map(|e|e.ok()).filter(|e|e.file_name().to_string_lossy().starts_with(".storage-backup-")).collect::<Vec<_>>();
     assert_eq!(backups.len(),1);
     use std::os::unix::fs::PermissionsExt;

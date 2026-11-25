@@ -55,7 +55,7 @@ fn first_launch_default_without_any_writes() -> Result<()> {
     let settings = AppSettings::open(p.path())?;
     assert_eq!(settings.limit(), 2);
     assert_eq!(settings.snapshot(), json!({"schemaVersion":2,"maxConcurrentSessions":2,
-        "maxSupportedSessions":8,"pulsoAutoAccess":true,"warning":null}));
+        "maxSupportedSessions":8,"pulsoAutoAccess":true,"providerSignals":true,"warning":null}));
     assert_eq!(fs::read_dir(p.path())?.count(), 0);
     assert_eq!(fs::metadata(p.path())?.modified()?, before.modified()?);
     Ok(())
@@ -302,5 +302,66 @@ fn migrates_old_settings_and_persists_pulso_preference() -> Result<()> {
     assert_eq!(reopened.limit(), 4);
     assert_eq!(reopened.update(Some(5), Some(true))?["pulsoAutoAccess"], true);
     assert_eq!(AppSettings::open(p.path())?.limit(), 5);
+    Ok(())
+}
+
+/// What a 1.3.x runner accepts (its app_settings::load): schema 1 with two
+/// keys or schema 2 with exactly schemaVersion, maxConcurrentSessions 1..=8
+/// and a boolean pulsoAutoAccess. Anything else falls back to limit 2 and
+/// Pulso on, which would silently re-enable access the person turned off.
+fn readable_by_1_3(bytes: &[u8]) -> Option<(u64, bool)> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let object = value.as_object()?;
+    if object.get("schemaVersion")?.as_u64()? != 2 || object.len() != 3 { return None; }
+    let limit = object.get("maxConcurrentSessions")?.as_u64().filter(|n| (1..=8).contains(n))?;
+    Some((limit, object.get("pulsoAutoAccess")?.as_bool()?))
+}
+
+#[test]
+fn provider_signals_off_is_a_file_and_settings_stay_readable_by_1_3() -> Result<()> {
+    let p = Profile::new()?;
+    p.seed(br#"{"schemaVersion":2,"maxConcurrentSessions":3,"pulsoAutoAccess":false}"#)?;
+    let settings = AppSettings::open(p.path())?;
+    assert!(settings.provider_signals(), "on by default");
+    // Off: only the profile file; app-settings.json is untouched and a 1.3.x runner still reads 3 and Pulso off.
+    let before = fs::read(p.file())?;
+    assert_eq!(settings.set_provider_signals(false)?["providerSignals"], false);
+    assert!(p.0.join("provider-signals-off").exists());
+    assert_eq!(fs::read(p.file())?, before);
+    assert_eq!(readable_by_1_3(&fs::read(p.file())?), Some((3, false)));
+    let reopened = AppSettings::open(p.path())?;
+    assert!(!reopened.provider_signals());
+    // A later limit change keeps it off and the file readable by 1.3.x.
+    reopened.update(Some(4), None)?;
+    assert_eq!(readable_by_1_3(&fs::read(p.file())?), Some((4, false)));
+    assert!(!AppSettings::open(p.path())?.provider_signals());
+    // On: the off file goes away; repeating either way is harmless.
+    reopened.set_provider_signals(true)?;
+    reopened.set_provider_signals(true)?;
+    assert!(!p.0.join("provider-signals-off").exists());
+    assert!(AppSettings::open(p.path())?.provider_signals());
+    Ok(())
+}
+
+#[test]
+fn schema_3_written_by_an_early_build_is_migrated_on_open() -> Result<()> {
+    let p = Profile::new()?;
+    p.seed(br#"{"schemaVersion":3,"maxConcurrentSessions":5,"pulsoAutoAccess":false,"providerSignals":false}"#)?;
+    let settings = AppSettings::open(p.path())?;
+    assert!(!settings.provider_signals());
+    assert_eq!((settings.limit(), settings.pulso_auto_access()), (5, false));
+    assert!(p.0.join("provider-signals-off").exists(), "off moved to the file");
+    assert_eq!(readable_by_1_3(&fs::read(p.file())?), Some((5, false)), "back to schema 2");
+    // A schema 3 with providerSignals true migrates without an off file.
+    let q = Profile::new()?;
+    q.seed(br#"{"schemaVersion":3,"maxConcurrentSessions":2,"pulsoAutoAccess":true,"providerSignals":true}"#)?;
+    assert!(AppSettings::open(q.path())?.provider_signals());
+    assert!(!q.0.join("provider-signals-off").exists());
+    assert_eq!(readable_by_1_3(&fs::read(q.file())?), Some((2, true)));
+    // An invalid schema 3 is not migrated: defaults and a warning, the bytes kept.
+    let r = Profile::new()?;
+    r.seed(br#"{"schemaVersion":3,"maxConcurrentSessions":3,"pulsoAutoAccess":true,"providerSignals":"no"}"#)?;
+    assert!(AppSettings::open(r.path())?.snapshot()["warning"].is_string());
+    assert!(fs::read_to_string(r.file())?.contains("\"no\""));
     Ok(())
 }

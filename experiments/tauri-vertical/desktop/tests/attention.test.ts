@@ -16,10 +16,32 @@ try {
     const a = new SessionAttention(); const sessions = [session('claude', 'needs_attention')];
     assert.equal(a.list(sessions)[0].unseen, false);
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
-    a.see(a.list(sessions)); assert.equal(a.list(sessions)[0].unseen, false);
+    // 1.4.0: a seen failure leaves the alerts (it stays in the sidebar's Interrumpidas).
+    a.see(a.list(sessions)); assert.deepEqual(a.list(sessions), []);
     sessions[0].status = 'running'; assert.deepEqual(a.list(sessions), []);
     sessions[0].status = 'failed'; assert.equal(a.list(sessions)[0].unseen, true);
     assert.equal(a.list([session('unknown', 'future')]).length, 1);
+  });
+  test('1.4.0: interrupted and failed leave the alerts once seen or dismissed; needs_attention does not', () => {
+    const a = new SessionAttention();
+    const sessions = [session('crash', 'interrupted'), session('boot', 'failed'), session('custody', 'needs_attention'), session('gone', 'interrupted')];
+    const retired = new Set(['gone']); a.retired = (id: string) => retired.has(id);
+    // First contact is quiet: listed as seen, not counted, until the person looks at it.
+    const first = a.list(sessions);
+    assert.deepEqual(first.map((item: { id: string }) => item.id), ['crash', 'boot', 'custody'], 'a dismissed one is never an alert');
+    assert.equal(first.every((item: { unseen: boolean }) => !item.unseen), true);
+    assert.match(first.find((item: { id: string }) => item.id === 'boot').reason, /Interrumpida · No llegó a iniciarse/);
+    // Opening one acknowledges only that one.
+    a.see(first.filter((item: { id: string }) => item.id === 'crash'));
+    assert.deepEqual(a.list(sessions).map((item: { id: string }) => item.id), ['boot', 'custody']);
+    // «Marcar vistos»: the failure leaves too; custody in doubt stays listed, seen.
+    a.see(a.list(sessions));
+    const left = a.list(sessions);
+    assert.deepEqual(left.map((item: { id: string; unseen: boolean }) => [item.id, item.unseen]), [['custody', false]]);
+    // Dismissing later works the same; another state of the same session is a new cause.
+    retired.add('boot'); assert.equal(a.list(sessions).length, 1);
+    sessions[2].status = 'interrupted';
+    assert.equal(a.list(sessions).find((item: { id: string }) => item.id === 'custody')?.unseen, true, 'a later interruption is new');
   });
   test('old seen failure plus background process end is two listed sessions but only one new alert', () => {
     const a=new SessionAttention();
@@ -97,6 +119,58 @@ try {
     assert.match(a.list(sessions)[0].reason, /El proceso terminó/);
     a.see(a.list(sessions)); a.observeEnd('claude', 'running', 'exited'); assert.deepEqual(a.list(sessions), []);
     a.observeEnd('claude', 'running', 'interrupted'); assert.deepEqual(a.list(sessions), []);
+  });
+  test('an interruption that happened while Jauría was closed is new on the next opening (H3)', () => {
+    let disk: Map<string, string> | null = null;
+    const opening = (sessions: { id: string; status: string }[]) => {
+      const a = new SessionAttention(); a.restoreIncidents(disk === null ? null : new Map(disk), m => { disk = new Map(m); });
+      return { a, items: a.list(sessions.map(s => session(s.id, s.status))) };
+    };
+    // First opening with the memory: what is already interrupted is the quiet baseline (no burst).
+    let { items } = opening([{ id: 'old', status: 'interrupted' }, { id: 'live', status: 'running' }]);
+    assert.equal(items.find((i: { id: string }) => i.id === 'old').unseen, false);
+    assert.deepEqual([...disk!], [['old', 'interrupted']]);
+    // Closed; the runner crashed meanwhile: «live» is interrupted at the next opening.
+    ({ items } = opening([{ id: 'old', status: 'interrupted' }, { id: 'live', status: 'interrupted' }]));
+    assert.equal(items.some((i: { id: string }) => i.id === 'old'), false, 'seen before: no longer an alert');
+    const live = items.find((i: { id: string }) => i.id === 'live');
+    assert.equal(live.unseen && !live.stale, true, 'happened while nobody looked: counts in bell, Dock and macOS');
+    // Seeing it remembers it: the opening after that is quiet.
+    const next = opening([{ id: 'live', status: 'interrupted' }]);
+    next.a.see(next.items);
+    assert.deepEqual(opening([{ id: 'live', status: 'interrupted' }]).items, []);
+    // Without the memory (no profile, unreadable storage, first run) the snapshot stays quiet as before.
+    const plain = new SessionAttention();
+    assert.equal(plain.list([session('x', 'failed')])[0].unseen, false);
+  });
+  test('a stale permission read never silences a confirmed alert of the same row (H4)', async () => {
+    const a = new SessionAttention(); const sessions = [session('cx', 'running', 'app-server')]; a.list(sessions);
+    await a.poll(sessions, async () => { throw new Error('codex_state unavailable'); }, () => true);
+    const runner = { permissionsSeen: true, causes: () => [{ key: 'cx:agent:permission:7:1', reason: 'Solicitud de permiso sin ver', unseen: true }] };
+    const [item] = a.list(sessions, runner);
+    assert.equal(item.unseen, true);
+    assert.equal(item.stale, false, 'the runner-confirmed request counts in bell, Dock and macOS');
+    // Only the uncertain read itself: the row stays stale (not counted as new).
+    const [alone] = a.list(sessions);
+    assert.equal(alone.stale, true);
+    // A failure while codex_state is stale is a confirmed incident too.
+    sessions[0].status = 'failed';
+    const [failed] = a.list(sessions);
+    assert.equal(failed.unseen && !failed.stale, true);
+  });
+  test('a Terminar the person confirmed is not «El proceso terminó»; other ends still alert', () => {
+    const a = new SessionAttention(); const sessions = [session('mine'), session('other')]; a.list(sessions);
+    const stopping = new Set(['mine']); a.stopRequested = (id: string) => stopping.has(id);
+    a.observeEnd('mine', 'running', 'stopped'); sessions[0].status = 'stopped';
+    assert.deepEqual(a.list(sessions), [], 'the person asked for it: no alert');
+    // Stopped by something else (runner shutdown) or exited while stopping: still news.
+    a.observeEnd('other', 'running', 'stopped'); sessions[1].status = 'stopped';
+    assert.match(a.list(sessions)[0].reason, /El proceso terminó/);
+    const failing = [session('crash')]; a.list(failing); stopping.add('crash');
+    a.observeEnd('crash', 'running', 'failed'); failing[0].status = 'failed';
+    const crash = a.list(failing).find((item: { id: string }) => item.id === 'crash');
+    assert.match(crash.reason, /Proceso falló/);
+    assert.equal(crash.urgent, true, 'a failed end is «Necesita tu atención» for macOS');
   });
   test('all app-server sessions queried, baseline quiet, truncated counts honored, failures preserve', async () => {
     const a = new SessionAttention(); const sessions = [session('visible', 'running', 'app-server'), session('hidden', 'running', 'app-server'), session()]; a.list(sessions);

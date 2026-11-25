@@ -110,7 +110,7 @@ fn final_status(status: &str) -> bool {
     matches!(status, "exited"|"stopped"|"failed"|"interrupted"|"released")
 }
 
-fn normalized_sql(sql: &str) -> String {
+pub(crate) fn normalized_sql(sql: &str) -> String {
     // Normalize SQL syntax only; string literals are case/whitespace sensitive
     // (e.g. kind='OUTPUT' must NEVER pass as the known kind='output' guard).
     let mut chars=sql.chars().peekable();
@@ -178,7 +178,7 @@ fn validate_layout(db: &Connection, version: i64, existing: bool) -> Result<()> 
             ensure!(present,"Unsupported storage layout: missing {name}");
         }
     }
-    if version>=4 {crate::verification::validate_schema(db)?;}
+    if version>=4 {crate::legacy_tasks::validate_verification_schema(db)?;}
     if version>=5 {crate::codex_store::validate_schema(db)?;}
     Ok(())
 }
@@ -234,11 +234,11 @@ impl Store {
         // Read-only preflight BEFORE backup, journal changes or recovery SQL.
         validate_layout(&db, version, existing)?;
         if version < SCHEMA_VERSION && existing { backup_before_migration(&db, path)?; }
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
-        // projects::init owns its recovery transaction. Run it outside the core
-        // migration transaction; its idempotent DDL is covered by the same backup.
-        crate::projects::init(&db)?;
-        crate::workflow::init(&db)?;
+        // The Codex ledger relies on foreign keys; the retired task schema used
+        // to enable them. Keep that per-connection setting explicit.
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+        // Retired Git task tables keep their layout for compatibility; DDL only.
+        crate::legacy_tasks::init(&db)?;
         if version < 3 {
             let limits = if version==2 {
                 db.query_row("SELECT max_output_encoded_bytes,max_event_rows,lifecycle_reserve_rows FROM storage_meta WHERE singleton=1", [], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?)))?
@@ -273,7 +273,8 @@ impl Store {
             tx.execute("UPDATE storage_meta SET output_encoded_bytes=(SELECT COALESCE(sum(CASE WHEN kind IN ('output','provider') THEN length(CAST(data AS BLOB)) ELSE 0 END),0) FROM events)",[])?;
 
             // Before schema5 no handoff-open effect existed. Label old tombstones
-            // so future admission can distinguish them from lost reservations.
+            // so a 1.3.x runner that reopens this profile can still distinguish
+            // them from lost handoff reservations. Part of the v5 migration only.
             tx.execute("UPDATE task_artifacts SET payload=json_set(payload,'$.originalKind','legacy_pre_handoff') WHERE kind='purged' AND json_type(payload,'$.originalKind') IS NULL",[])?;
             tx.pragma_update(None,"user_version",SCHEMA_VERSION)?;
             tx.commit()?;

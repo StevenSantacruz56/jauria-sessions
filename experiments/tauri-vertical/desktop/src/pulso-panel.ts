@@ -1,30 +1,59 @@
+import { claimFloating, release } from './floating';
+import { isClosed } from './session-lifecycle';
 import './pulso-panel.css';
 import { readLastBoard,saveLastBoard } from './board-preferences';
 import { programStateLabel, type ProgramState } from './program-status';
+import { paintAgentIndicator, providerBadge } from './agent-list';
+import type { ActivityKind } from './session-activity';
 
 export type Session = { id: string; title: string; kind: string; cwd: string | null; status: string; programState?:ProgramState|null };
 type Timestamp = number | string;
-export type PulsoProject = { id: string; title: string; plan: string; mainSessionId: string | null; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp };
-export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null };
+export type PulsoProject = { id: string; title: string; plan: string; mainSessionId: string | null; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp;
+  /** Runner 1.4: when it was archived (absent for older archives and for open projects). */
+  archivedAt?: Timestamp | null };
+export type PulsoItem = { id: string; projectId: string | null; title: string; note: string; status: 'todo' | 'doing' | 'waiting' | 'done'; position: number; revision: number; archived: boolean; createdAt: Timestamp; updatedAt: Timestamp; updatedBy?: string; updatedSessionId?: string | null;
+  /** Runner 1.4 board cards (pulsoBoardCardsVersion): footer data. */
+  session?: { id: string; source: 'link' | 'checkpoint' } | null; checkpointCount?: number };
 export type PulsoCheckpoint = { id: string; itemId: string; brief: string; nextAction: string; sessionId?: string | null; actor: string; createdAt: Timestamp; revision?:number };
 type Link = { projectId?: string; itemId?: string; sessionId: string };
 export type PulsoPanelOptions = {
   host: HTMLElement;
+  /** Where the board tabs and the "+" for a new project live (the workbench top bar). Defaults to the panel. */
+  tabsHost?: HTMLElement;
   request: (op: string, args: Record<string, unknown>) => Promise<any>;
   sessions: () => Session[];
   openSession: (id: string) => void;
   newSession: (cwd?: string) => void;
   currentSession: () => Session | null;
   notice: (text: string) => void;
-  onOpenPermissions?: (context:{projectId?:string;sessionId?:string}) => void;
+  /**
+   * «Empezar una sesión nueva para este proyecto»: open the Nueva sesión dialog.
+   * Returns false if it could not open; `started` runs once if a session starts
+   * from that dialog (never on cancel).
+   */
+  startProjectSession?: (started: (sessionId: string) => void, project: { id: string; title: string }) => boolean;
   persistenceKey?: () => string | null;
   bindingCacheKey?: () => string;
+  /** Kept for compatibility; the top-bar tabs and sidebar return to the terminal. */
   backToTerminal?: () => void;
   binding?: (id: string) => Promise<{ binding: { provider: string; conversationId: string } | null; activeSessionId?:string|null }>;
   resumeSession?: (sourceId: string) => Promise<string|void>;
+  /** Empezar de nuevo aquí: the new-session dialog prefilled with the session's folder, provider and name. */
+  restartSession?: (id: string) => void;
+  /** Board selection or saved data changed (read-only signal for the sidebar summary). */
+  onChange?: () => void;
+  /** Runner 1.4 (pulsoRevisionVersion): `statusChanged` replaces the 2 s revision timer. */
+  revisionFromStatus?: () => boolean;
+  /** Runner 1.4 (pulsoBoardCardsVersion): cards carry `session` and `checkpointCount`. */
+  cardFooters?: () => boolean;
+  /** Live activity of a session as the sidebar paints it; null when unknown. */
+  activityOf?: (id: string) => { kind: ActivityKind; label: string } | null;
 };
+export type PulsoLoadedPhases = { board: string; phases: { id: string; title: string; status: PulsoItem['status']; statusLabel: string }[] };
 type Page<T> = { rows: T[]; hasMore: boolean; cursor?: string | number };
 const labels = { todo: 'Por hacer', doing: 'En curso', waiting: 'En espera', done: 'Hecho' };
+/** Stable runner code for a write refused because the project is archived (runner 1.4). */
+export const PROJECT_ARCHIVED_CODE = 'project archived';
 export const isLivePulsoSession = (s: Session) => ['starting', 'running'].includes(s.status);
 const time = (value: Timestamp) => { const n = typeof value === 'number' ? value : /^\d+$/.test(value) ? Number(value) : Date.parse(value); return Number.isFinite(n) ? n : 0; };
 function checkpointOrder(a:PulsoCheckpoint,b:PulsoCheckpoint){return typeof a.revision==='number'&&typeof b.revision==='number'?a.revision-b.revision:time(a.createdAt)-time(b.createdAt);}
@@ -40,7 +69,8 @@ export function pulsoContinuation(project: PulsoProject | null, item: PulsoItem,
  * Pages use the opaque nextCursor when supplied; otherwise a numeric offset advanced by the returned batch length.
  * Failed mutations retain their exact payload and requestId until explicitly retried or released.
  */
-export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; dispose(): void } {
+export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hide(): void; refresh(): Promise<void>; prepareNavigation(): boolean; saveThen(next: () => void): boolean; openBoard(projectId: string | null): Promise<void>; currentBoard(): string | null; newProject(): void; closeMenus(): void; menuAnchor(node: Node | null): HTMLElement | null; draftBlocked(): string | null;
+  statusChanged(revision: number | null): void; syncLive(): void; loadedPhases(): PulsoLoadedPhases | null; openPhase(id: string): Promise<void>; dispose(): void } {
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {
     const n = document.createElement(tag); n.textContent = text; n.className = cls; return n;
   }
@@ -60,32 +90,57 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     input.value = values.some(([id]) => id === value) ? value : values[0]?.[0] ?? ''; wrap.append(input); return { wrap, input };
   }
   const root = el('section', '', 'pulso-panel'); root.hidden = true; root.setAttribute('aria-label', 'Pulso');
-  const header = el('header', '', 'pulso-header'); const heading = el('div');
-  heading.append(el('h1', 'Pulso'), el('p', 'Tu trabajo, de una fase a la siguiente.', 'pulso-muted'));
-  const headerActions=el('div','','pulso-header-actions');
-  if(options.backToTerminal)headerActions.append(button('Volver a terminal',()=>options.backToTerminal!(),'quiet'));
-  headerActions.append(button('Nuevo proyecto',()=>newProject(),'primary'));
-  header.append(heading,headerActions);
+  // Board tabs live in the workbench top bar, with «Histórico» (archived
+  // projects) and a labelled «Nuevo proyecto» (never a bare "+", which in the
+  // terminal view opens a session).
+  // One amber action per screen: the project's main-session action in the toolbar.
   const feedback = el('div', '', 'pulso-feedback'); feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   const errors = el('div', '', 'pulso-error'); errors.hidden = true; errors.setAttribute('role', 'alert');
   const undoSlot = el('div', '', 'pulso-undo');
   const outline=el('nav','','pulso-tabs');outline.setAttribute('aria-label','Tableros de Pulso');
-  const projectList=el('div','','pulso-project-tabs');outline.append(projectList);
+  const projectList=el('div','','pulso-project-tabs');
+  // Tabs are only boards (Pendientes and open projects). Actions sit after a divider, as buttons.
+  const tabActions=el('div','','pulso-tab-actions');
+  const addProject=button('',()=>newProject(),'secondary pulso-tab-action');addProject.setAttribute('aria-label','Nuevo proyecto');addProject.title='Nuevo proyecto';
+  addProject.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="pulso-tab-action-label">Nuevo proyecto</span>';
+  const archiveTab=button('',()=>openArchive(),'secondary pulso-tab-action pulso-archive-button');
+  archiveTab.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v4H3zM5 9v10h14V9M10 13h4"/></svg><span class="pulso-tab-action-label">Histórico</span><span class="pulso-archive-count" hidden></span>';
+  /** Finished projects: count from a cheap totalCount read on refresh; no counter until known or when there are none. */
+  let archivedCount:number|null=null;
+  function paintArchiveCount(){
+    const badge=archiveTab.querySelector<HTMLElement>('.pulso-archive-count')!;const n=archivedCount??0;
+    badge.hidden=!n;badge.textContent=n?String(n):'';
+    archiveTab.setAttribute('aria-label',n?`Histórico (${n})`:'Histórico');
+    archiveTab.title=n?`Histórico de proyectos: ${n}`:'Histórico de proyectos (todavía vacío)';
+  }
+  paintArchiveCount();archiveTab.setAttribute('aria-haspopup','dialog');archiveTab.setAttribute('aria-expanded','false');
+  tabActions.append(addProject,archiveTab);
+  outline.append(projectList);
   const toolbar=el('div','','pulso-board-toolbar');
   const board=el('div','','pulso-board');board.setAttribute('aria-label','Tablero de trabajo');
-  const drawer=el('dialog','','pulso-drawer');drawer.setAttribute('aria-label','Detalle de Pulso');
+  const drawer=el('dialog','','pulso-drawer');
   const drawerHeader=el('header','','pulso-drawer-header');const drawerTitle=el('h2','Detalle');
-  const closeDetail=button('',()=>closeDrawer(),'quiet');closeDetail.setAttribute('aria-label','Cerrar detalle');closeDetail.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';drawerHeader.append(drawerTitle,closeDetail);
+  // The dialog takes its name from its current title (Proyecto, Sesiones, Histórico de proyectos…).
+  drawerTitle.id=`pulso-drawer-title-${crypto.randomUUID()}`;drawer.setAttribute('aria-labelledby',drawerTitle.id);
+  const closeDetail=button('',()=>closeDrawer(),'quiet icon-button');closeDetail.setAttribute('aria-label','Cerrar detalle');closeDetail.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';drawerHeader.append(drawerTitle,closeDetail);
   const drawerMessages=el('div','','pulso-drawer-messages');
   const detail=el('section','','pulso-detail');detail.setAttribute('aria-label','Detalle de Pulso');drawer.append(drawerHeader,drawerMessages,detail);
   drawer.addEventListener('cancel',event=>{event.preventDefault();closeDrawer();});
-  root.append(header,outline,feedback,errors,undoSlot,toolbar,board,drawer);options.host.append(root);
+  root.append(feedback,errors,undoSlot,toolbar,board,drawer);options.host.append(root);
+  if(options.tabsHost)options.tabsHost.append(outline,tabActions);else root.prepend(outline,tabActions);
   const capture=el('form','','pulso-capture');const captureTitle=field('Nombre del proyecto',false,240);captureTitle.input.required=true;captureTitle.input.placeholder='Por ejemplo: lanzar mi aplicación';
   const originLabel=el('label','','pulso-check');const originCheck=el('input');originCheck.type='checkbox';originCheck.checked=true;
   const originText=el('span');originLabel.append(originCheck,originText);
+  // A new session and the current one are alternative main sessions: checking one unchecks the other.
+  const startLabel=el('label','','pulso-check');const startCheck=el('input');startCheck.type='checkbox';
+  startLabel.append(startCheck,el('span','Empezar una sesión nueva para este proyecto'));startLabel.hidden=!options.startProjectSession;
+  originCheck.addEventListener('change',()=>{if(originCheck.checked)startCheck.checked=false;});
+  startCheck.addEventListener('change',()=>{if(startCheck.checked)originCheck.checked=false;});
   let captureOrigin: Session | null = null;
   function syncOrigin(){originLabel.hidden=!captureOrigin;originText.textContent=captureOrigin?`Usar «${captureOrigin.title}» como sesión principal`:'';}
-  capture.append(captureTitle.wrap,originLabel);const captureSave=el('button','Crear proyecto','primary');captureSave.type='submit';capture.append(captureSave,button('Cancelar',()=>{dirty=false;activeEditor=null;closeDrawer();},'quiet'));
+  capture.append(captureTitle.wrap,originLabel,startLabel);const captureSave=el('button','Crear proyecto','primary');captureSave.type='submit';
+  // Primary first, Cancelar beside it (one row, like every Pulso form).
+  const captureActions=el('div','','pulso-inline-actions pulso-form-actions');captureActions.append(captureSave,button('Cancelar',()=>{dirty=false;activeEditor=null;closeDrawer();},'secondary'));capture.append(captureActions);
 
   let disposed = false, visible = false, timer: ReturnType<typeof setTimeout> | undefined;
   let revision: unknown, refreshing: Promise<void> | null = null, refreshGeneration = 0, generation = 0, selectionEpoch = 0;
@@ -97,9 +152,17 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const statuses=Object.keys(labels) as PulsoItem['status'][];
   const emptyColumns=()=>Object.fromEntries(statuses.map(status=>[status,{rows:[],hasMore:false,totalCount:0}])) as unknown as Record<PulsoItem['status'],ColumnPage>;
   let columns=emptyColumns(),boardRevision:unknown,boardScope:string|null|undefined;
+  const phaseTotal=()=>statuses.reduce((n,status)=>n+columns[status].totalCount,0);
   let boardProject:PulsoProject|null=null,navigating=false;
   let drawerRestore=false,dragging=false;let cancelActiveDrag:(()=>void)|null=null;
-  let drawerKind:'item'|'project'|'create'|null=null;
+  type DrawerKind='item'|'project'|'sessions'|'create'|'archive';
+  let drawerKind:DrawerKind|null=null;
+  /** Proyecto drawer autosave: writes what is typed and resolves true once nothing is left unsaved. */
+  let flushProject:(()=>Promise<boolean>)|null=null;
+  /** Called after a failed write is released (`review` false) or its conflict reviewed (true). */
+  let afterRelease:((review:boolean)=>void)|null=null;
+  /** Add-phase openers of the rendered board, by column. */
+  let addOpeners:Partial<Record<PulsoItem['status'],()=>void>>={};
   let intentionalCloses=0;let drawerFocus:HTMLElement|null=null;
   drawer.addEventListener('focusin',event=>{if(event.target instanceof HTMLElement)drawerFocus=event.target;});
   drawer.addEventListener('close',()=>{
@@ -120,7 +183,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     document.addEventListener('pointerdown',clearRecoveryFocus,true);document.addEventListener('keydown',clearRecoveryFocus,true);
   }
   let editBase: { revision: number } | null = null;
-  type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void> };
+  type Mutation = { op: string; args: Record<string, unknown>; apply: (data: any) => void | Promise<void>; discard?: () => void };
   let failed: Mutation | null = null;
   const bindings = new Map<string, ReturnType<NonNullable<PulsoPanelOptions['binding']>>>();
   function preserveDetailRender(render: () => void) {
@@ -149,7 +212,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   const say = (message: string) => { if (!disposed) feedback.textContent = message; };
   function freeze() {
     root.setAttribute('aria-busy', String(busy));
-    for (const n of Array.from(root.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button,input,select,textarea'))) {
+    for (const n of [root,outline,tabActions].flatMap(scope=>Array.from(scope.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('button,input,select,textarea')))) {
       n.disabled = busy || (navigating&&(board.contains(n)||toolbar.contains(n))) || (!!failed && !errors.contains(n)) || (dirty && !!activeEditor && !activeEditor.contains(n) && !errors.contains(n));
     }
   }
@@ -171,18 +234,66 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if (disposed) return;
       await m.apply(data);
       if (disposed) return;
-      say('Guardado.');
+      say('Guardado.');notifyChange();
     } catch (error) {
       if (disposed) return;
-      failed = m; errors.hidden = false;
-      errors.replaceChildren(el('p', String(error).includes('Pulso local storage budget reached') ? 'Se alcanzó el espacio local reservado para nuevos cambios de Pulso. Los registros existentes y las terminales se conservan; consulta la guía de respaldo antes de continuar.' : 'No se confirmó el cambio. Tu borrador sigue aquí. Reintentar reutiliza la misma solicitud; si hay un conflicto, consulta la versión actual.'),
-        button('Reintentar mismo cambio', () => mutate(m)),
-        button('Consultar versión actual', () => inspectRevision(m)),
-        button('Liberar borrador', () => {
-          failed = null; errors.hidden = true;if(!drawer.open)renderLists();freeze();
-          say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');
-        }));
+      showFailure(m, error);
     } finally { busy = false; if (!disposed) freeze(); }
+  }
+  /**
+   * The refused change targeted an archived project. «Reabrir» only reopens it, then sends the change
+   * again on the current state: a project change (name, plan, main session) is rebased on the reopened
+   * revision, keeping what was written; a phase change is the same request (it never committed), so a
+   * phase that moved meanwhile ends in the usual conflict review with the draft kept, never lost.
+   */
+  async function reopenAndRetry(m: Mutation) {
+    if (busy || disposed || failed !== m) return;
+    const id = (m.op === 'project_update' ? m.args.id : m.args.projectId ?? selectedProject?.id) as string | undefined;
+    if (!id) return;
+    busy = true; freeze(); let reopened: PulsoProject | null = null;
+    try {
+      const current = (await request('project', { id })).project as PulsoProject;
+      const data = await request('project_update', { id, expectedRevision: current.revision, archived: false, requestId: crypto.randomUUID() });
+      if (disposed) return;
+      reopened = data.project as PulsoProject;
+      if (selectedProject?.id === id) adoptProject(reopened);
+      projects = await page<PulsoProject>('projects', 'projects', { archived: false }); void loadArchivedCount();
+      options.notice(`«${current.title}» vuelve a estar activo.`);
+    } catch { say('No se pudo reabrir el proyecto. Tu borrador sigue aquí.'); return; }
+    finally { busy = false; if (!disposed) freeze(); }
+    renderLists();
+    if (m.op === 'project_update') await mutate({ ...m, args: { ...m.args, expectedRevision: reopened!.revision, requestId: crypto.randomUUID() } });
+    else await mutate(m);
+  }
+  /** A write that was not confirmed: keep the draft and offer retry, inspection and release. */
+  function showFailure(m: Mutation, error: unknown) {
+    failed = m; errors.hidden = false;
+    // Runner 1.4 refuses writes to an archived project with the stable code «project archived»:
+    // retrying cannot work, so offer Reabrir (then the same change) or the current version.
+    const archivedProject = String(error).includes(PROJECT_ARCHIVED_CODE);
+    const release = button('Liberar borrador', () => {
+        failed = null; errors.hidden = true;if(!drawer.open)renderLists();freeze();
+        say('Borrador editable. El cambio anterior pudo guardarse; consulta la versión actual antes de volver a guardar.');afterRelease?.(false);
+      }, 'secondary');
+    const inspect = button('Consultar versión actual', () => inspectRevision(m), 'secondary');
+    // Archiving a project that is already archived: nothing to reopen.
+    if (archivedProject && m.op === 'project_update' && m.args.archived === true) errors.replaceChildren(el('p', 'Ese proyecto ya está en el histórico.'), inspect, release);
+    else if (archivedProject) errors.replaceChildren(el('p', 'El proyecto está en el histórico; reábrelo para cambiarlo. Tu borrador sigue aquí.'),
+      button('Reabrir', () => reopenAndRetry(m), 'secondary'), inspect, release);
+    else errors.replaceChildren(el('p', String(error).includes('Pulso local storage budget reached') ? 'Se alcanzó el espacio local reservado para nuevos cambios de Pulso. Los registros existentes y las terminales se conservan; consulta la guía de respaldo antes de continuar.' : 'No se confirmó el cambio. Tu borrador sigue aquí. Reintentar reutiliza la misma solicitud; si hay un conflicto, consulta la versión actual.'),
+      button('Reintentar mismo cambio', () => mutate(m), 'secondary'), inspect, release);
+    // Autosave has no draft buttons: this is the way out when saving keeps failing.
+    const discard = m.discard;
+    if (discard) {
+      const ask: HTMLButtonElement = button('Descartar mis cambios', () => {
+        const box = el('div', '', 'pulso-confirm'); box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Descartar mis cambios');
+        const yes = button('Sí, descartar', () => { if (failed !== m) return; failed = null; errors.hidden = true; dirty = false; activeEditor = null; discard(); freeze(); }, 'primary');
+        box.append(el('span', 'Se perderá lo que no se guardó.'), yes, button('Cancelar', () => { box.replaceWith(ask); ask.focus({ preventScroll: true }); }, 'secondary'));
+        ask.replaceWith(box); yes.focus({ preventScroll: true });
+      });
+      errors.append(ask);
+    }
+    freeze();
   }
   async function inspectRevision(m: Mutation) {
     if (busy || disposed) return;
@@ -199,7 +310,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       if(!drawer.open)errors.append(button('Actualizar tablero',async()=>{failed=null;errors.hidden=true;try{await reloadBoard();if(epoch===selectionEpoch&&boardScope===null)rememberBoard();}catch{readError(()=>refresh());}freeze();}));
       if (drawer.open && editBase && m.args.expectedRevision !== undefined) errors.append(button('Revisé los cambios; conservar mi borrador', () => {
         if (editBase) editBase.revision = record.revision;
-        failed = null; errors.hidden = true; freeze(); say('Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');
+        failed = null; errors.hidden = true; freeze(); say(afterRelease ? 'Se guardará tu versión sobre la actual.' : 'Revisión actualizada. Revisa tu borrador y guarda de nuevo cuando esté listo.');afterRelease?.(true);
       }));
     } catch { say('No se pudo consultar la versión actual. Reintenta cuando vuelva la conexión.'); }
   }
@@ -213,17 +324,24 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     if (data.hasMore && (!batch.length || cursor === previous?.cursor)) throw Error('Cursor no válido');
     return { rows, hasMore: !!data.hasMore, cursor };
   }
-  function openDrawer(kind:'item'|'project'|'create',title:string){drawerKind=kind;drawerTitle.textContent=title;drawerMessages.append(feedback,errors);if(!drawer.open&&available())drawer.showModal();}
-  function hideDrawer(){if(drawer.open){intentionalCloses++;drawer.close();}root.insertBefore(feedback,toolbar);root.insertBefore(errors,toolbar);}
-  function closeDrawer(){if(busy)return;if(dirty||failed){say('Guarda los cambios o descarta el borrador antes de cerrar.');return;}hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;}
-  function newProject(){if(dirty||failed||busy)return;selectionEpoch++;navigating=false;selectedProject=boardProject;selectedItem=null;detail.replaceChildren(capture);captureTitle.input.value='';captureOrigin=options.currentSession();syncOrigin();openDrawer('create','Nuevo proyecto');captureTitle.input.focus();}
+  function openDrawer(kind:DrawerKind,title:string){drawerKind=kind;drawerTitle.textContent=title;archiveTab.setAttribute('aria-expanded',String(kind==='archive'));drawerMessages.append(feedback,errors);if(!drawer.open&&available())drawer.showModal();}
+  function hideDrawer(){if(drawer.open){intentionalCloses++;drawer.close();}archiveTab.setAttribute('aria-expanded','false');root.insertBefore(feedback,toolbar);root.insertBefore(errors,toolbar);}
+  function closeDrawer(){
+    if(busy)return;
+    // Proyecto saves by itself: closing first writes what is pending, then closes.
+    if(dirty&&!failed&&drawerKind==='project'&&flushProject){const flush=flushProject;void flush().then(ok=>{if(ok&&!disposed&&drawerKind==='project'&&!dirty)closeDrawer();});return;}
+    if(dirty||failed){say('Guarda los cambios o descarta el borrador antes de cerrar.');return;}
+    hideDrawer();drawerKind=null;selectedItem=null;activeEditor=null;flushProject=null;afterRelease=null;
+  }
+  function newProject(){if(dirty||failed||busy)return;selectionEpoch++;navigating=false;selectedProject=boardProject;selectedItem=null;flushProject=null;afterRelease=null;detail.replaceChildren(capture);captureTitle.input.value='';startCheck.checked=false;captureOrigin=options.currentSession();originCheck.checked=true;syncOrigin();openDrawer('create','Nuevo proyecto');captureTitle.input.focus();}
   function renderLists() {
     const focus=document.activeElement instanceof HTMLElement?document.activeElement.dataset.focusKey:undefined;
     projectList.replaceChildren();
     const pendingTab=button('Pendientes',()=>choosePending(),'pulso-tab');pendingTab.setAttribute('aria-current',String(!selectedProject));projectList.append(pendingTab);
-    const visibleProjects=selectedProject&&!projects.rows.some(p=>p.id===selectedProject!.id)?[...projects.rows,selectedProject]:projects.rows;
+    // An archived project has no tab: it is reached from «Histórico».
+    const visibleProjects=selectedProject&&!selectedProject.archived&&!projects.rows.some(p=>p.id===selectedProject!.id)?[...projects.rows,selectedProject]:projects.rows;
     for(const project of visibleProjects){const b=button(project.title,()=>chooseProject(project.id),'pulso-tab');b.dataset.focusKey=`project-${project.id}`;b.setAttribute('aria-current',String(selectedProject?.id===project.id));projectList.append(b);}
-    if(projects.hasMore)projectList.append(button('Más proyectos',()=>loadMoreProjects(),'quiet'));
+    if(projects.hasMore)projectList.append(button('Más proyectos',()=>loadMoreProjects(),'secondary'));
     if(!dirty&&!failed&&!dragging)renderBoard();freeze();
     if(focus&&available())Array.from(outline.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
   }
@@ -235,44 +353,174 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const sameBoard=board.dataset.projectId===(selectedProject?.id??'');
     const focus=sameBoard?previousFocus:undefined;
     const openAdds=new Set(sameBoard?Array.from(board.querySelectorAll<HTMLElement>('.pulso-column')).filter(n=>n.querySelector<HTMLFormElement>('.pulso-add-form')?.hidden===false).map(n=>n.dataset.state):[]);
-    toolbar.replaceChildren();const name=el('div');name.append(el('h2',selectedProject?.title??'Pendientes'));
+    // One compact line: title, progress, Proyecto, Sesiones, Dar por terminado and the primary action.
+    // An archived project is read-only: no add, move or edit; «Reabrir» brings it back.
+    const readOnly=!!selectedProject?.archived;
+    toolbar.replaceChildren();const title=el('h2',selectedProject?.title??'Pendientes','pulso-board-title');title.title=title.textContent??'';
     const total=statuses.reduce((n,status)=>n+columns[status].totalCount,0);const complete=columns.done.totalCount;
-    name.append(el('p',total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'} · arrastra entre columnas`:'Añade una tarjeta en la columna donde quieras empezar.','pulso-progress'));toolbar.append(name);
-    if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Reanudar sesión principal');toolbar.append(recovery);}
-    if(selectedProject)toolbar.append(button('Plan y sesiones',()=>{if(dirty||failed)return;selectedItem=null;renderProject(true);openDrawer('project','Plan y sesiones');},'quiet'));
-    board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';
+    const progress=el('p',total?`${complete} de ${total} ${selectedProject?'fases hechas':'pendientes hechos'}`:selectedProject?'Sin fases todavía':'Sin pendientes todavía','pulso-progress');
+    progress.title=total?`${complete} de ${total} ${selectedProject?'fases':'pendientes'} en Hecho · ${selectedProject?'orden según el plan':'orden original'}`:`Añade ${selectedProject?'una fase':'un pendiente'} en la columna donde quieras empezar.`;
+    // Read-only label tells the truth: finished (every phase done) or archived with work open.
+    toolbar.append(title);if(readOnly)toolbar.append(el('span',total>0&&complete===total?'Terminado':'Archivado','pulso-archived-badge'));toolbar.append(progress);
+    const project=selectedProject;
+    if(project&&readOnly)toolbar.append(button('Reabrir',()=>reopenProject(project),'secondary'));
+    else if(project){
+      if(total>0&&complete===total){const finish:HTMLButtonElement=button('Dar por terminado',()=>confirmArchive(finish,project,true),'secondary');toolbar.append(finish);}
+      toolbar.append(button('Proyecto',()=>openProjectDrawer(),'secondary'),button('Sesiones',()=>openSessionsDrawer(),'secondary'));
+    }
+    if(selectedProject?.mainSessionId&&readOnly){
+      // Archived: look only. A live session is focused, an ended one opens its history; nothing resumes or links.
+      const id=selectedProject.mainSessionId;if(options.sessions().some(s=>s.id===id)){const recovery=el('div','','pulso-project-recovery');recovery.append(button('Ver sesión principal',()=>openCardSession(id),'secondary'));toolbar.append(recovery);}
+    }
+    else if(selectedProject?.mainSessionId){const recovery=el('div','','pulso-project-recovery');recoveryAction(recovery,selectedProject.mainSessionId,'Abrir sesión principal','Continuar sesión principal');toolbar.append(recovery);}
+    closeMoveMenu(false);board.replaceChildren();board.dataset.projectId=selectedProject?.id??'';addOpeners={};
+    const noun=selectedProject?'fase':'pendiente';
     for(const status of statuses){
       const column=el('section','','pulso-column');column.dataset.state=status;column.setAttribute('aria-label',labels[status]);
       const h=el('header');h.append(el('h3',labels[status]),el('span',String(columns[status].totalCount),'pulso-count'));column.append(h);
       const cards=el('div','','pulso-cards');cards.dataset.status=status;
-      for(const item of columns[status].rows)cards.append(itemCard(item));
-      if(!columns[status].rows.length)cards.append(el('p',status==='done'?'Lo que termines aparecerá aquí.':status==='waiting'?'Trabajo que necesita algo antes de seguir.':status==='doing'?'Pon aquí la fase en la que estás trabajando.':'Captura el siguiente paso.','pulso-empty'));
-      if(columns[status].hasMore)cards.append(button('Ver más tarjetas',()=>loadMoreColumn(status),'quiet'));
+      for(const item of columns[status].rows)cards.append(itemCard(item,readOnly));
+      // An empty board points at one first step (Por hacer); other columns only say what they hold.
+      // The text box has a fixed height, so «Añadir fase» lines up in every empty column.
+      if(!columns[status].rows.length){
+        const first=status==='todo'&&total===0&&!readOnly;
+        const hint=first?(selectedProject?'Empieza por añadir la primera fase.':'Empieza por añadir el primer pendiente.'):status==='done'?'Lo terminado.':status==='waiting'?'Bloqueado o a la espera.':status==='doing'?'En lo que trabajas ahora.':'Lo siguiente.';
+        const empty=el('p',hint,first?'pulso-empty pulso-first-step':'pulso-empty');cards.append(empty);
+      }
+      if(columns[status].hasMore)cards.append(button(`Ver más ${noun}s`,()=>loadMoreColumn(status),'secondary'));
       column.append(cards);
-      if(status!=='done'){
+      // «Añadir fase» sits right under the last phase of every column, Hecho included.
+      if(!readOnly){
         const add=el('form','','pulso-add-form');add.hidden=true;
         const title=field(selectedProject?'Título de la fase':'Título del pendiente',false,240);title.input.required=true;title.input.placeholder='Escribe un título';title.input.dataset.focusKey=`add-title-${status}`;
-        const trigger=button(selectedProject?'Añadir fase':'Añadir pendiente',()=>{if(busy||dirty||failed)return;add.hidden=false;trigger.hidden=true;title.input.focus();},'quiet pulso-add-trigger');
-        trigger.dataset.focusKey=`add-${status}`;
-        const cancel=button('Cancelar',()=>{dirty=false;activeEditor=null;add.hidden=true;trigger.hidden=false;title.input.value='';freeze();},'quiet');
-        add.append(title.wrap);submit(add,'Añadir tarjeta',()=>write('item_create',{id:crypto.randomUUID(),projectId:selectedProject?.id??null,title:title.input.value.trim(),status},async()=>{dirty=false;activeEditor=null;await reloadBoard();}));add.append(cancel);
+        const open=()=>{if(busy||dirty||failed)return;add.hidden=false;trigger.hidden=true;title.input.focus();};
+        const trigger=button(selectedProject?'Añadir fase':'Añadir pendiente',open,'quiet pulso-add-trigger');trigger.insertAdjacentHTML('afterbegin','<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>');
+        trigger.dataset.focusKey=`add-${status}`;addOpeners[status]=open;
+        const cancel=button('Cancelar',()=>{dirty=false;activeEditor=null;add.hidden=true;trigger.hidden=false;title.input.value='';freeze();},'secondary');
+        add.append(title.wrap);submit(add,selectedProject?'Añadir fase':'Añadir pendiente',()=>write('item_create',{id:crypto.randomUUID(),projectId:selectedProject?.id??null,title:title.input.value.trim(),status},async()=>{dirty=false;activeEditor=null;await reloadBoard();})).parentElement!.append(cancel);
         if(openAdds.has(status)){add.hidden=false;trigger.hidden=true;}
-        column.append(trigger,add);
+        cards.append(trigger,add);
       }
       board.append(column);cards.scrollTop=scrolls.get(status)??0;
     }
     if(focus)Array.from(board.querySelectorAll<HTMLElement>('[data-focus-key]')).find(n=>n.dataset.focusKey===focus)?.focus({preventScroll:true});
   }
-  function itemCard(item:PulsoItem){
+  function itemCard(item:PulsoItem,readOnly=false){
     const card=el('article','','pulso-card');card.dataset.itemId=item.id;card.dataset.state=item.status;
+    if(readOnly){
+      // Archived project: the phase is shown, not opened, moved or edited.
+      const body=el('div','','pulso-card-open');body.append(el('span',item.title,'pulso-card-title'));if(item.note)body.append(el('span',item.note,'pulso-card-note'));card.append(body);
+      if(options.cardFooters?.()){const foot=cardFoot(item);if(foot)card.append(foot);}
+      return card;
+    }
     const open=button('',()=>chooseItem(item),'pulso-card-open');open.dataset.focusKey=`item-${item.id}`;open.setAttribute('aria-label',`Abrir ${item.title}`);
     open.append(el('span',item.title,'pulso-card-title'));if(item.note)open.append(el('span',item.note,'pulso-card-note'));card.append(open);
-    const footer=el('div','','pulso-card-footer');
-    const move=select(`Mover ${item.title}`,Object.entries(labels),item.status);move.input.classList.add('pulso-card-move');move.input.onchange=()=>{void moveCard(item,move.input.value as PulsoItem['status']);};footer.append(move.input);
-    move.input.dataset.focusKey=`move-${item.id}`;
-    const handle=button('',()=>say('Arrastra esta tarjeta a otra columna o utiliza el menú Mover.'),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);
+    const controls=el('div','','pulso-card-controls');
+    const handle=button('',()=>say(`Arrastra ${item.projectId?'esta fase':'este pendiente'} a otra columna o usa su menú «…» (Mover).`),'quiet pulso-card-handle');handle.setAttribute('aria-label',`Arrastrar ${item.title}`);handle.title='Arrastrar a otra columna';
     handle.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01" stroke-linecap="round"/></svg>';
-    handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));footer.append(handle);card.append(footer);return card;
+    handle.addEventListener('pointerdown',event=>startDrag(event,item,card,handle));
+    // Keyboard alternative to dragging: a menu with the four columns (same move, undo and phase order).
+    const menu=button('',()=>openMoveMenu(item,menu),'quiet pulso-card-menu');menu.setAttribute('aria-label',`Mover ${item.title}`);menu.title='Mover a otra columna';
+    menu.setAttribute('aria-haspopup','menu');menu.setAttribute('aria-expanded','false');menu.dataset.focusKey=`move-${item.id}`;
+    menu.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+    controls.append(menu,handle);card.append(controls);
+    if(options.cardFooters?.()){const foot=cardFoot(item);if(foot)card.append(foot);}
+    return card;
+  }
+  /** Runner 1.4 footer: linked session (live state, never «working» without a declared state) and checkpoints. */
+  function cardFoot(item:PulsoItem){
+    const session=item.session&&typeof item.session.id==='string'?item.session:null;
+    const count=typeof item.checkpointCount==='number'&&item.checkpointCount>0?Math.floor(item.checkpointCount):0;
+    if(!session&&!count)return null;
+    const foot=el('div','','pulso-card-foot');
+    if(session){const slot=el('span','','pulso-card-session-slot');slot.dataset.sessionId=session.id;slot.dataset.source=session.source==='checkpoint'?'checkpoint':'link';slot.dataset.itemId=item.id;paintCardSession(slot);foot.append(slot);}
+    // Compact count (flag + number) so the session name keeps the width; the words stay in the label and title.
+    if(count){const label=`${count} ${count===1?'checkpoint':'checkpoints'}`;const tally=el('span','','pulso-card-checkpoints');tally.setAttribute('role','img');tally.setAttribute('aria-label',label);tally.title=label;
+      tally.innerHTML='<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5V1.8M3 2h6l-1.4 2.2L9 6.4H3"/></svg>';tally.append(String(count));foot.append(tally);}
+    return foot;
+  }
+  function fallbackActivity(s:Session):{kind:ActivityKind;label:string}{
+    const state=isLivePulsoSession(s)?s.programState:null;
+    if(state==='working')return{kind:'working',label:programStateLabel(state)};
+    if(state==='blocked'||state==='error')return{kind:'needs',label:programStateLabel(state)};
+    if(state==='done'||state==='idle')return{kind:'idle',label:programStateLabel(state)};
+    return{kind:'unreported',label:isLivePulsoSession(s)?'Sin estado del agente':'Sesión finalizada'};
+  }
+  /** Idempotent: only changed text and attributes are written, so each status can call it. */
+  function paintCardSession(slot:HTMLElement):boolean{
+    const id=slot.dataset.sessionId!,fromCheckpoint=slot.dataset.source==='checkpoint';
+    const s=options.sessions().find(x=>x.id===id);let created=false;
+    if(!s){
+      if(!slot.querySelector('.pulso-card-session-missing'))slot.replaceChildren(el('span','Sesión no disponible','pulso-card-session-missing'));
+      const title=fromCheckpoint?'Sesión del último checkpoint: no está en la lista de este perfil':'La sesión vinculada no está en la lista de este perfil';
+      if(slot.title!==title)slot.title=title;return false;
+    }
+    slot.removeAttribute('title');
+    let control=slot.querySelector<HTMLButtonElement>('button.pulso-card-session');
+    if(!control){
+      control=button('',()=>openCardSession(id),'pulso-card-session');control.dataset.focusKey=`session-${slot.dataset.itemId}`;
+      control.append(el('span','','agent-indicator'),el('span','','provider-badge'),el('span','','pulso-card-session-name'));
+      for(const n of Array.from(control.querySelectorAll('.agent-indicator,.provider-badge')))n.setAttribute('aria-hidden','true');
+      slot.replaceChildren(control);created=true;
+    }
+    const activity=options.activityOf?.(id)??fallbackActivity(s);
+    paintAgentIndicator(control.querySelector<HTMLElement>('.agent-indicator')!,activity.kind,activity.label);
+    const badge=control.querySelector<HTMLElement>('.provider-badge')!,provider=providerBadge(s.kind);
+    if(badge.dataset.provider!==provider.provider){badge.dataset.provider=provider.provider;badge.textContent=provider.letter;}
+    const name=control.querySelector<HTMLElement>('.pulso-card-session-name')!;if(name.textContent!==s.title)name.textContent=s.title;
+    const live=isLivePulsoSession(s);
+    const label=fromCheckpoint?`Sesión del último checkpoint: ${s.title} · ${activity.label}`:`Abrir sesión vinculada ${s.title} · ${activity.label}`;
+    const title=`${fromCheckpoint?'Sesión del último checkpoint · ':''}${s.title} · ${activity.label} · ${live?'Enfocar sesión viva':'Ver historial'}`;
+    if(control.getAttribute('aria-label')!==label)control.setAttribute('aria-label',label);
+    if(control.title!==title)control.title=title;
+    return created;
+  }
+  function syncCardFooters(){
+    if(!options.cardFooters?.())return;let created=false;
+    for(const slot of Array.from(board.querySelectorAll<HTMLElement>('.pulso-card-session-slot')))created=paintCardSession(slot)||created;
+    if(created)freeze();
+  }
+  /** Same function as «Enfocar sesión viva» / «Ver historial»; a draft or pending write keeps the board. */
+  function openCardSession(id:string){
+    if(busy||dirty||failed||navigating||dragging){say('Guarda o descarta el borrador antes de abrir otra sesión.');return;}
+    options.openSession(id);
+  }
+  let moveMenu:{node:HTMLElement;anchor:HTMLButtonElement;dispose:()=>void}|null=null;
+  // Shared dismissal rule (floating.ts): opening the card menu closes any other floating control.
+  const moveFloating={contains:(node:Node)=>!!moveMenu&&(moveMenu.node.contains(node)||moveMenu.anchor.contains(node)),close:(restore:boolean)=>closeMoveMenu(restore)};
+  function closeMoveMenu(focusAnchor:boolean){
+    const current=moveMenu;if(!current)return;moveMenu=null;release(moveFloating);current.dispose();current.node.remove();current.anchor.setAttribute('aria-expanded','false');
+    if(focusAnchor&&current.anchor.isConnected)current.anchor.focus({preventScroll:true});
+  }
+  function openMoveMenu(item:PulsoItem,anchor:HTMLButtonElement){
+    if(moveMenu){const same=moveMenu.anchor===anchor;closeMoveMenu(same);if(same)return;}
+    if(busy||dirty||failed||!available())return;
+    const node=el('div','','pulso-move-menu');node.setAttribute('role','menu');node.setAttribute('aria-label',`Mover ${item.title}`);
+    const items=statuses.map(status=>{
+      const entry=el('button',`Mover a ${labels[status]}`,'pulso-move-item');entry.type='button';entry.setAttribute('role','menuitem');entry.tabIndex=-1;entry.dataset.state=status;
+      if(status===item.status){entry.setAttribute('aria-disabled','true');entry.title='Columna actual';entry.append(el('span',' · actual','pulso-move-current'));}
+      entry.onclick=()=>{if(status===item.status)return;closeMoveMenu(false);anchor.focus({preventScroll:true});void moveCard(item,status);};
+      node.append(entry);return entry;
+    });
+    const enabled=()=>items.filter(entry=>entry.getAttribute('aria-disabled')!=='true');
+    node.addEventListener('keydown',event=>{
+      const list=enabled();const index=list.indexOf(document.activeElement as HTMLButtonElement);
+      if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();const next=event.key==='ArrowDown'?(index+1)%list.length:(index-1+list.length)%list.length;list[next]?.focus();}
+      else if(event.key==='Home'||event.key==='End'){event.preventDefault();(event.key==='Home'?list[0]:list.at(-1))?.focus();}
+      else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeMoveMenu(true);}
+      // Tab continues from the "…" button: focus it first, so the removed menu never leaves focus on body.
+      else if(event.key==='Tab'){closeMoveMenu(true);}
+    });
+    // Fixed position escapes the scrolling column; it closes on scroll or resize.
+    const rect=anchor.getBoundingClientRect();root.append(node);
+    const height=node.offsetHeight,width=node.offsetWidth;
+    const top=rect.bottom+4+height>innerHeight-8?Math.max(8,rect.top-4-height):rect.bottom+4;
+    node.style.top=`${top}px`;node.style.left=`${Math.max(8,Math.min(innerWidth-width-8,rect.right-width))}px`;
+    const outside=(event:PointerEvent)=>{if(!node.contains(event.target as Node)&&!anchor.contains(event.target as Node))closeMoveMenu(false);};
+    const away=()=>closeMoveMenu(false);
+    document.addEventListener('pointerdown',outside,true);board.addEventListener('scroll',away,true);addEventListener('resize',away);
+    moveMenu={node,anchor,dispose:()=>{document.removeEventListener('pointerdown',outside,true);board.removeEventListener('scroll',away,true);removeEventListener('resize',away);}};
+    claimFloating(moveFloating);anchor.setAttribute('aria-expanded','true');enabled()[0]?.focus({preventScroll:true});
   }
   function startDrag(event:PointerEvent,item:PulsoItem,card:HTMLElement,handle:HTMLElement){
     if(event.button!==0||busy||dirty||failed)return;event.preventDefault();dragging=true;handle.setPointerCapture(event.pointerId);let target:PulsoItem['status']|null=null;card.classList.add('is-dragging');
@@ -282,7 +530,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   async function moveCard(item:PulsoItem,status:PulsoItem['status']){
     if(!available()||busy||dirty||failed||status===item.status)return;
-    say('Moviendo tarjeta…');await write('item_update',{id:item.id,status,expectedRevision:item.revision},async data=>{setUndo(item.id,item.status,data.item.revision);await reloadBoard();});
+    say(item.projectId?'Moviendo fase…':'Moviendo pendiente…');await write('item_update',{id:item.id,status,expectedRevision:item.revision},async data=>{setUndo(item.id,item.status,data.item.revision);await reloadBoard();});
   }
   async function readBoard(projectId:string|null,ifRevision?:unknown){
     const epoch=selectionEpoch,gen=generation;
@@ -314,7 +562,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   async function loadMoreColumn(status:PulsoItem['status']){
     if(busy||dirty||failed)return;busy=true;freeze();const epoch=selectionEpoch,gen=generation,rev=boardRevision;
     try{const next=await page<PulsoItem>('items','items',{projectId:selectedProject?.id??null,status,archived:false,expectedSnapshotRevision:rev},columns[status]);if(!available()||epoch!==selectionEpoch||gen!==generation||boardRevision!==rev)return;columns[status]={...next,totalCount:columns[status].totalCount};renderBoard();}
-    catch{if(available()&&epoch===selectionEpoch&&gen===generation){readError(()=>refresh());say('El tablero cambió o no se pudo leer esta página. Actualiza para ver las tarjetas vigentes.');}}finally{busy=false;freeze();}
+    catch{if(available()&&epoch===selectionEpoch&&gen===generation){readError(()=>refresh());say('El tablero cambió o no se pudo leer esta página. Actualiza para ver el tablero vigente.');}}finally{busy=false;freeze();}
   }
   async function loadMoreProjects(){if(busy||dirty||failed)return;busy=true;freeze();try{projects=await page<PulsoProject>('projects','projects',{archived:false},projects);renderLists();}catch{readError(()=>loadMoreProjects());}finally{busy=false;freeze();}}
   async function choosePending(){
@@ -359,7 +607,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     return button('Descartar borrador', async () => {
       dirty = false; activeEditor = null; failed = null; errors.hidden = true;
       if (selectedItem) await chooseItem(selectedItem); else if (selectedProject) await chooseProject(selectedProject.id);
-    }, 'quiet');
+    }, 'secondary');
   }
   function submit(form: HTMLFormElement, text: string, action: () => unknown) {
     const b = el('button', text, 'primary'); b.type = 'submit';
@@ -371,31 +619,217 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       }
       if (!busy && !failed && form.reportValidity()) void action();
     };
-    form.append(b); watch(form); return b;
+    const row = el('div', '', 'pulso-inline-actions pulso-form-actions'); row.append(b); form.append(row); watch(form); return b;
   }
-  function sessionOptions() { return options.sessions().map(s => [s.id, `${s.title} · ${isLivePulsoSession(s) ? 'viva' : ['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status) ? 'historial local' : 'estado por comprobar'}`] as [string, string]); }
+  function sessionOptions() { return options.sessions().map(s => [s.id, `${s.title} · ${isLivePulsoSession(s) ? 'viva' : isClosed(s.status) ? 'historial local' : 'estado por comprobar'}`] as [string, string]); }
+  function openProjectDrawer(){if(dirty||failed||busy||!selectedProject)return;selectedItem=null;renderProject(true);openDrawer('project','Proyecto');}
+  function openSessionsDrawer(){if(dirty||failed||busy||!selectedProject)return;selectedItem=null;renderSessions();openDrawer('sessions','Sesiones');}
+  /** Mirror a saved project into the selection and the tab row (the list never carries the plan). */
+  function adoptProject(project: PulsoProject) {
+    selectedProject = { ...selectedProject, ...project } as PulsoProject;
+    projects = { ...projects, rows: projects.rows.map(row => row.id === project.id ? { ...row, title: project.title, revision: project.revision, mainSessionId: project.mainSessionId } : row) };
+  }
+  /**
+   * Proyecto: name and plan save by themselves, like Configuración — after a
+   * short pause, on leaving a field and before closing. A failed save keeps
+   * the text and shows the usual retry/conflict options; nothing is discarded.
+   */
   function renderProject(queryBindings: boolean) {
     const p = selectedProject!; detail.replaceChildren(); dirty = false; editBase = { revision: p.revision }; const base = editBase;
-    activeEditor = null; detail.append(el('h2', p.title));
-    const form = el('form', '', 'pulso-form');
-    const title = field('Título del proyecto', false, 240); title.input.value = p.title; title.input.required = true;
-    const planDetails = el('details'); planDetails.append(el('summary', 'Plan completo (opcional)'));
-    const plan = field('Plan completo · hasta 32 000 caracteres', true, 32000); plan.input.value = p.plan ?? ''; planDetails.append(plan.wrap);
+    activeEditor = null;
+    // The drawer header says «Proyecto» and the first field is the name: no repeated title.
+    const form = el('form', '', 'pulso-form pulso-autosave-form');
+    form.append(el('p', 'Los cambios se aplican y se guardan al momento.', 'pulso-muted'));
+    const title = field('Nombre del proyecto', false, 240); title.input.value = p.title; title.input.required = true;
+    const plan = field('Plan (opcional) · hasta 32 000 caracteres', true, 32000); plan.input.value = p.plan ?? ''; (plan.input as HTMLTextAreaElement).rows = 10;
+    plan.input.placeholder = 'Objetivo, alcance y pasos. Las fases del tablero siguen este orden.';
+    const state = el('p', '', 'pulso-muted pulso-autosave-state'); state.setAttribute('aria-live', 'polite');
+    form.append(title.wrap, plan.wrap, state); detail.append(form);
+    let saved = { title: p.title, plan: p.plan ?? '' }, timer: ReturnType<typeof setTimeout> | undefined, inflight: Promise<void> | null = null;
+    const pending = () => title.input.value.trim() !== saved.title || plan.input.value !== saved.plan;
+    const current = () => flushProject === flush && !disposed;
+    function clean() { dirty = false; activeEditor = null; freeze(); }
+    async function save(): Promise<void> {
+      if (timer !== undefined) clearTimeout(timer); timer = undefined;
+      if (inflight) return inflight;
+      if (!current() || failed || busy) return;
+      const name = title.input.value.trim();
+      if (!name) { state.textContent = 'Escribe un nombre para guardar.'; return; }
+      if (!pending()) { clean(); return; }
+      const args = { id: p.id, expectedRevision: base.revision, title: name, plan: plan.input.value, requestId: crypto.randomUUID() };
+      const apply = async (data: any) => {
+        base.revision = data.project.revision; saved = { title: args.title, plan: args.plan }; adoptProject(data.project);
+        if (!current()) return;
+        if (pending()) { state.textContent = 'Cambios sin guardar…'; timer = setTimeout(() => void save(), 600); }
+        else { clean(); state.textContent = 'Guardado.'; }
+        renderLists(); notifyChange();
+      };
+      state.textContent = 'Guardando…';
+      inflight = (async () => {
+        try { const data = await request('project_update', args); if (disposed) return; await apply(data); }
+        catch (error) {
+          if (disposed) return; state.textContent = 'No se guardó. Tu texto sigue aquí.';
+          showFailure({ op: 'project_update', args, apply, discard: () => { if (drawerKind === 'project' && selectedProject?.id === p.id) { renderProject(false); say('Cambios descartados.'); } } }, error);
+        }
+        finally { inflight = null; }
+      })();
+      return inflight;
+    }
+    async function flush(): Promise<boolean> {
+      for (let round = 0; round < 4; round++) {
+        if (inflight) { await inflight; continue; }
+        if (!current() || failed || !title.input.value.trim()) return false;
+        if (!pending()) { clean(); return true; }
+        await save();
+      }
+      return !dirty;
+    }
+    form.onsubmit = event => { event.preventDefault(); void save(); };
+    form.addEventListener('input', () => {
+      dirty = true; activeEditor = form; freeze(); state.textContent = 'Cambios sin guardar…';
+      if (timer !== undefined) clearTimeout(timer); timer = setTimeout(() => void save(), 800);
+    });
+    form.addEventListener('change', () => { if (dirty) void save(); });
+    // Released: the text waits for the next edit or close. Reviewed conflict: save it over the current version.
+    flushProject = flush; afterRelease = review => {
+      if (!current() || !pending()) return; dirty = true; activeEditor = form; freeze();
+      if (review) void save(); else state.textContent = 'Sin guardar. Se guardará al seguir escribiendo o al cerrar.';
+    };
+    // One closing action: «Dar por terminado» when every phase is done, else «Archivar proyecto» (open work allowed).
+    const finished = boardScope === p.id && phaseTotal() > 0 && columns.done.totalCount === phaseTotal();
+    const archive = el('section', '', 'pulso-section pulso-close-section');
+    archive.append(el('h3', 'Terminar o archivar'), el('p', finished
+      ? 'Todas las fases están hechas. Al darlo por terminado sale de las pestañas y de la barra lateral, y queda en el Histórico. Puedes reabrirlo.'
+      : 'Archivarlo lo saca de las pestañas y de la barra lateral y lo guarda en el Histórico, aunque queden fases abiertas. Puedes reabrirlo.', 'pulso-muted'));
+    const archiveActions = el('div', '', 'pulso-inline-actions');
+    const archiveButton: HTMLButtonElement = button(finished ? 'Dar por terminado' : 'Archivar proyecto', () => confirmArchive(archiveButton, p, finished), 'secondary');
+    archiveActions.append(archiveButton); archive.append(archiveActions); detail.append(archive);
+    detailRecordKey = JSON.stringify([p, projectLinks]); freeze();
+  }
+  /** Sesiones: main session (applied on change), linked sessions with their actions, and linking another. */
+  function renderSessions() {
+    const p = selectedProject!; detail.replaceChildren(); dirty = false; activeEditor = null; editBase = { revision: p.revision }; flushProject = null;
+    detail.append(el('h2', p.title));
+    const mainForm = el('div', '', 'pulso-form');
     const main = select('Sesión principal', [['', 'Sin sesión principal'], ...sessionOptions()], p.mainSessionId ?? '');
     if (p.mainSessionId && !options.sessions().some(s => s.id === p.mainSessionId)) {
       const o = el('option', `${p.mainSessionId} · historial local`); o.value = p.mainSessionId; main.input.append(o); main.input.value = p.mainSessionId;
     }
-    form.append(title.wrap, planDetails, main.wrap);
-    submit(form, 'Guardar proyecto', () => write('project_update', { id: p.id, expectedRevision: base.revision, title: title.input.value.trim(), plan: plan.input.value, mainSessionId: main.input.value || null }, async () => {
-      dirty=false;await chooseProject(p.id);await refresh();
-    })); form.append(discardButton()); detail.append(form);
+    main.input.addEventListener('change', () => {
+      const value = main.input.value || null; if (value === (selectedProject?.mainSessionId ?? null)) return;
+      void write('project_update', { id: p.id, expectedRevision: selectedProject!.revision, mainSessionId: value }, async data => {
+        adoptProject(data.project); renderLists(); if (drawerKind === 'sessions') preserveDetailRender(() => renderSessions());
+      });
+    });
+    mainForm.append(main.wrap, el('p', 'Se aplica al momento. La sesión principal no cambia sola cuando termina.', 'pulso-muted'));
+    detail.append(mainForm);
+    // A released failure shows the stored value again.
+    afterRelease = () => { if (drawerKind === 'sessions' && selectedProject) preserveDetailRender(() => renderSessions()); };
     sessionsBlock(detail, [...new Set([p.mainSessionId, ...projectLinks.map(l => l.sessionId)].filter((id): id is string => !!id))], p.mainSessionId);
-    linkBlock(detail, { projectId: p.id }); permissionsLink(detail,p.id);
+    linkBlock(detail, { projectId: p.id });
     detailRecordKey = JSON.stringify([p, projectLinks]); freeze();
   }
+  /** Inline confirmation in place of `trigger`; Cancelar puts the button back with focus. */
+  function confirmArchive(trigger: HTMLButtonElement, project: PulsoProject, finished: boolean) {
+    // Proyecto drawer: write the pending name/plan first, then ask.
+    if (dirty && !failed && drawerKind === 'project' && flushProject) { void flushProject().then(ok => { if (ok) confirmArchive(trigger, project, finished); }); return; }
+    if (busy || dirty || failed || !trigger.isConnected) return;
+    if (selectedProject?.id === project.id) project = selectedProject;
+    const box = el('div', '', 'pulso-confirm'); box.setAttribute('role', 'group'); box.setAttribute('aria-label', finished ? 'Dar por terminado' : 'Archivar proyecto');
+    const back = () => { box.replaceWith(trigger); trigger.focus({ preventScroll: true }); };
+    const accept = button(finished ? 'Sí, terminar' : 'Sí, archivar', () => archiveProject(project), 'primary');
+    box.append(el('span', finished ? `¿Dar por terminado «${project.title}»? Pasará al Histórico.` : `¿Archivar «${project.title}» sin terminar? Pasará al Histórico.`), accept, button('Cancelar', back, 'secondary'));
+    box.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); back(); } });
+    trigger.replaceWith(box); accept.focus({ preventScroll: true }); freeze();
+  }
+  /** Newest known revision of a project (the tab list may be fresher than the selection). */
+  function latestRevision(project: PulsoProject) { return Math.max(project.revision, projects.rows.find(row => row.id === project.id)?.revision ?? 0, selectedProject?.id === project.id ? selectedProject.revision : 0); }
+  async function archiveProject(project: PulsoProject) {
+    await write('project_update', { id: project.id, expectedRevision: latestRevision(project), archived: true }, async () => {
+      // The board falls back to Pendientes; the project leaves the tabs and the sidebar summary.
+      hideDrawer(); drawerKind = null; flushProject = null; afterRelease = null; selectedItem = null; selectionEpoch++; undoSlot.replaceChildren();
+      dirty = false; activeEditor = null; selectedProject = null; projects = await page<PulsoProject>('projects', 'projects', { archived: false });
+      await reloadBoard(); rememberBoard(); void loadArchivedCount(); options.notice(`«${project.title}» está en el Histórico.`);
+    });
+  }
+  async function reopenProject(project: PulsoProject) {
+    if (busy || dirty || failed) return;
+    await write('project_update', { id: project.id, expectedRevision: latestRevision(project), archived: false }, async data => {
+      hideDrawer(); drawerKind = null; projects = await page<PulsoProject>('projects', 'projects', { archived: false });
+      if (selectedProject?.id === data.project.id) selectedProject = data.project;
+      options.notice(`«${project.title}» vuelve a estar activo.`); void loadArchivedCount();
+    });
+    if (!failed && !disposed) await chooseProject(project.id);
+  }
+  /**
+   * Histórico: archived projects, most recently closed first (runner order).
+   * Each row says the truth: «Terminado el …» when every phase was done,
+   * «Archivado sin terminar el …» otherwise; projects archived before
+   * archivedAt existed say «fecha no registrada» (never updatedAt).
+   */
+  let archived: Page<PulsoProject> = { rows: [], hasMore: false };
+  /** Counter reads may overlap (refresh, archive, reopen): only a reply newer than the last applied one counts. */
+  let archivedCountAsked = 0, archivedCountApplied = 0;
+  function applyArchivedCount(ticket: number, count: number) {
+    if (disposed || ticket <= archivedCountApplied) return;
+    archivedCountApplied = ticket; archivedCount = count; paintArchiveCount();
+  }
+  async function loadArchivedCount() {
+    const ticket = ++archivedCountAsked;
+    try { const data = await request('projects', { archived: true, limit: 1 }); if (typeof data.totalCount === 'number') applyArchivedCount(ticket, data.totalCount); }
+    catch { /* The counter is optional; it keeps its last value. */ }
+  }
+  async function openArchive() {
+    if (dirty || failed || busy || !available()) return;
+    selectedItem = null; flushProject = null; afterRelease = null; const epoch = ++selectionEpoch;
+    detail.replaceChildren(el('p', 'Consultando el histórico…', 'pulso-muted')); openDrawer('archive', 'Histórico de proyectos');
+    try {
+      const ticket = ++archivedCountAsked;
+      archived = await page<PulsoProject>('projects', 'projects', { archived: true });
+      if (!archived.hasMore) applyArchivedCount(ticket, archived.rows.length);
+      if (epoch === selectionEpoch && drawerKind === 'archive') await renderArchive(epoch);
+    }
+    catch { if (epoch === selectionEpoch && drawerKind === 'archive') detail.replaceChildren(el('p', 'No se pudo consultar el histórico.', 'pulso-muted'), button('Reintentar consulta', () => { hideDrawer(); drawerKind = null; void openArchive(); }, 'secondary')); }
+  }
+  function archiveDate(row: PulsoProject) { const at = row.archivedAt === undefined || row.archivedAt === null ? 0 : time(row.archivedAt); return at ? new Date(at).toLocaleDateString('es') : null; }
+  function archiveMeta(row: PulsoProject, done?: number, total?: number) {
+    const date = archiveDate(row), when = date ? `el ${date}` : '· fecha no registrada';
+    if (total === undefined || done === undefined) return date ? `Archivado el ${date}` : 'Archivado · fecha no registrada';
+    const count = total ? `${done} de ${total} fases hechas` : 'Sin fases';
+    return total > 0 && done === total ? `Terminado ${when} · ${count}` : `Archivado sin terminar ${when} · ${count}`;
+  }
+  async function renderArchive(epoch: number) {
+    const list = el('ul', '', 'pulso-archive-list'); detail.replaceChildren(list);
+    if (!archived.rows.length) detail.append(el('p', 'Aquí quedan los proyectos que das por terminados o archivas.', 'pulso-muted pulso-archive-empty'));
+    const counts: { row: PulsoProject; slot: HTMLElement }[] = [];
+    for (const row of archived.rows) {
+      const li = el('li', '', 'pulso-archive-row'); const info = el('div', '', 'pulso-archive-info');
+      info.append(el('span', row.title, 'pulso-archive-title'));
+      const meta = el('span', archiveMeta(row), 'pulso-muted');
+      info.append(meta); li.append(info);
+      const actions = el('div', '', 'pulso-inline-actions');
+      actions.append(button('Ver tablero', () => { if (busy) return; hideDrawer(); drawerKind = null; void chooseProject(row.id); }, 'secondary'), button('Reabrir', () => reopenProject(row), 'secondary'));
+      li.append(actions); list.append(li); counts.push({ row, slot: meta });
+    }
+    if (archived.hasMore) detail.append(button('Ver más proyectos', async () => {
+      if (busy) return; try { archived = await page<PulsoProject>('projects', 'projects', { archived: true }, archived); if (epoch === selectionEpoch && drawerKind === 'archive') await renderArchive(epoch); } catch { say('No se pudo consultar la página siguiente.'); }
+    }, 'secondary'));
+    freeze();
+    // Phase counts: a few board reads at a time; a failure only leaves the count out.
+    for (let i = 0; i < counts.length; i += 4) {
+      await Promise.all(counts.slice(i, i + 4).map(async ({ row, slot }) => {
+        try {
+          const data = await request('board', { projectId: row.id }); if (epoch !== selectionEpoch || drawerKind !== 'archive') return;
+          const total = statuses.reduce((n, status) => n + (data.columns?.[status]?.totalCount ?? 0), 0), done = data.columns?.done?.totalCount ?? 0;
+          slot.textContent = archiveMeta(row, done, total);
+        } catch { /* The count is optional. */ }
+      }));
+      if (epoch !== selectionEpoch || drawerKind !== 'archive') return;
+    }
+  }
   function renderItem(item: PulsoItem, links: Link[], checkpoints: PulsoCheckpoint[], queryBindings: boolean) {
-    detail.replaceChildren(); dirty = false; activeEditor = null; editBase = { revision: item.revision }; const base = editBase;
-    if (selectedProject) detail.append(button(selectedProject.title, () => chooseProject(selectedProject!.id), 'quiet pulso-breadcrumb'));
+    detail.replaceChildren(); dirty = false; activeEditor = null; editBase = { revision: item.revision }; const base = editBase; flushProject = null; afterRelease = null;
+    if (selectedProject) detail.append(button(selectedProject.title, () => chooseProject(selectedProject!.id), 'secondary pulso-breadcrumb'));
     detail.append(el('h2', item.title));
     if(item.updatedBy){const session=options.sessions().find(s=>s.id===item.updatedSessionId);const actor=item.updatedBy==='ui'?'Jauria':session?.kind==='claude'?'Claude Code':session?.kind==='codex'?'Codex':'una sesión autorizada';detail.append(el('p',`Último cambio registrado por ${actor}.`,'pulso-muted'));}
     const form = el('form', '', 'pulso-form');
@@ -406,7 +840,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     submit(form, item.projectId ? 'Guardar fase' : 'Guardar pendiente', () => write('item_update', { id: item.id, expectedRevision: base.revision, title: title.input.value.trim(), note: note.input.value, status: status.input.value }, async data => {
       if (item.status !== data.item.status) setUndo(item.id, item.status, data.item.revision);
       dirty=false;await chooseItem(data.item);await reloadBoard();
-    })); form.append(discardButton()); detail.append(form);
+    })).parentElement!.append(discardButton()); detail.append(form);
     const checkpoint = el('form', '', 'pulso-form'); checkpoint.append(el('h3', 'Registrar checkpoint'), el('p', 'Cada registro se añade al historial. Los anteriores se conservan.', 'pulso-muted'));
     const brief = field('Qué quedó listo · hasta 4 000 caracteres', true, 4000); brief.input.required = true;
     const next = field('Siguiente acción · hasta 1 000 caracteres', true, 1000); next.input.required = true;
@@ -414,21 +848,22 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     checkpoint.append(brief.wrap, next.wrap, session.wrap);
     submit(checkpoint, 'Registrar checkpoint', () => write('checkpoint_create', {
       id: crypto.randomUUID(), itemId: item.id, expectedRevision: base.revision, brief: brief.input.value.trim(), nextAction: next.input.value.trim(), ...(session.input.value ? { sessionId: session.input.value } : {}),
-    }, async data => {dirty=false;await chooseItem(data.item);await reloadBoard();})); checkpoint.append(discardButton());const saveAdvance=el('details');saveAdvance.append(el('summary','Guardar avance'),checkpoint);detail.append(saveAdvance);
+    }, async data => {dirty=false;await chooseItem(data.item);await reloadBoard();})).parentElement!.append(discardButton());const saveAdvance=el('details');saveAdvance.append(el('summary','Guardar avance'),checkpoint);detail.append(saveAdvance);
     const recover = el('section', '', 'pulso-section'); recover.append(el('h3', 'Continuar fase'));
     const recent=[...checkpoints].sort(checkpointOrder).at(-1);const recoveryId=recent?.sessionId??links[0]?.sessionId??selectedProject?.mainSessionId;
-    if(recoveryId)recoveryAction(recover,recoveryId,'Abrir sesión de la fase','Reanudar sesión de la fase');
+    if(recoveryId)recoveryAction(recover,recoveryId,'Abrir sesión de la fase','Continuar sesión de la fase');
     recover.append(el('p', 'Prepara el contexto, revísalo y cópialo. Tú decides dónde pegarlo.', 'pulso-muted'));
     const composer = el('div', '', 'pulso-context-composer'); composer.hidden = true;
-    recover.append(button('Preparar contexto', () => { composer.hidden = false; }));
+    recover.append(button('Preparar contexto', () => { composer.hidden = false; }, 'secondary'));
     const context = field('Contexto editable para continuar', true, 50000); context.input.value = pulsoContinuation(selectedProject, item, checkpoints);
-    composer.append(context.wrap, button('Copiar contexto', () => copy(context.input.value)), discardButton()); watch(composer);
     const known = options.sessions(); const source = known.find(s => s.id === recoveryId);
-    composer.append(button('Abrir nueva sesión', () => options.newSession(source?.cwd ?? undefined)), el('p', 'Abre una sesión vacía. El contexto no se envía automáticamente.', 'pulso-muted'));
+    const composerActions = el('div', '', 'pulso-inline-actions pulso-form-actions');
+    composerActions.append(button('Copiar contexto', () => copy(context.input.value), 'primary'), button('Abrir nueva sesión', () => options.newSession(source?.cwd ?? undefined), 'secondary'), discardButton());
+    composer.append(context.wrap, composerActions, el('p', 'Abre una sesión vacía. El contexto no se envía automáticamente.', 'pulso-muted')); watch(composer);
     recover.append(composer); detail.insertBefore(recover,form);
     const latest=[...checkpoints].sort(checkpointOrder).at(-1);if(latest){const preview=el('section','','pulso-checkpoint-preview');preview.append(el('h3','Último avance'),el('p',latest.brief,'pulso-prose'),el('h4','Siguiente paso'),el('p',latest.nextAction,'pulso-prose'));detail.insertBefore(preview,recover);}
     sessionsBlock(detail, [...new Set([selectedProject?.mainSessionId, ...links.map(l => l.sessionId), ...checkpoints.map(c => c.sessionId)].filter((id): id is string => !!id))], null, recoveryId ?? null);
-    const connections=el('details');connections.append(el('summary','Vincular otra sesión'));linkBlock(connections, { itemId: item.id });detail.append(connections);permissionsLink(detail,item.projectId??undefined);
+    const connections=el('details');connections.append(el('summary','Vincular otra sesión'));linkBlock(connections, { itemId: item.id });detail.append(connections);
     const history = el('section', '', 'pulso-section'); history.append(el('h3', 'Historial de checkpoints'));
     if (!checkpoints.length) history.append(el('p', 'Todavía no hay checkpoints. Registra uno antes de dejar esta fase.', 'pulso-muted'));
     const entries = el('ol', '', 'pulso-history');
@@ -454,7 +889,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   }
   function sessionsBlock(host: HTMLElement, ids: string[], recoveryId: string | null, rowRecoveryExcludeId?: string | null) {
     const section = el('section', '', 'pulso-section'); section.append(el('h3', 'Sesiones vinculadas'));
-    if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Reanudar sesión principal', false);
+    if (recoveryId) recoveryAction(section, recoveryId, 'Abrir sesión principal', 'Continuar sesión principal', false);
     const actionAboveId = rowRecoveryExcludeId ?? recoveryId;
     if (!ids.length) section.append(el('p', 'Sin sesiones vinculadas.', 'pulso-muted'));
     const known = options.sessions();
@@ -462,22 +897,27 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const titleCounts = new Map<string, number>();
     for (const title of titles.values()) titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
     for (const id of ids) {
+      // Row: name, its state in plain words, then its actions (secondary buttons).
       const s = known.find(s => s.id === id); const row = el('div', '', 'pulso-session');
       const title = titles.get(id) ?? id;
-      row.append(el('span', (titleCounts.get(title) ?? 0) > 1 ? `${title} · ${id.slice(-8)}` : title));
-      const stateLabel=el('span','','pulso-muted');stateLabel.dataset.programSession=id;row.append(stateLabel);syncProgramLabels();
+      const info = el('div', '', 'pulso-session-info'); row.append(info);
+      info.append(el('span', (titleCounts.get(title) ?? 0) > 1 ? `${title} · ${id.slice(-8)}` : title, 'pulso-session-name'));
+      const actions = el('div', '', 'pulso-inline-actions');
       if (s && isLivePulsoSession(s)) {
-        if (id !== actionAboveId) row.append(button('Enfocar sesión viva', () => options.openSession(id)));
+        info.append(el('span', 'Abierta', 'pulso-muted'));
+        if (id !== actionAboveId) actions.append(button('Enfocar sesión viva', () => options.openSession(id), 'secondary'));
       }
-      else if (s && !['exited', 'stopped', 'released', 'failed', 'interrupted'].includes(s.status)) {
-        row.append(el('span', 'Estado por comprobar', 'pulso-muted'));
-        if (id !== actionAboveId) row.append(button('Inspeccionar sesión', () => options.openSession(id)));
+      else if (s && !isClosed(s.status)) {
+        info.append(el('span', 'Estado por comprobar', 'pulso-muted'));
+        if (id !== actionAboveId) actions.append(button('Inspeccionar sesión', () => options.openSession(id), 'secondary'));
       } else {
-        row.append(el('span', 'Historial local · sesión finalizada o no disponible', 'pulso-muted'));
-        if(s)row.append(button('Ver historial',()=>options.openSession(id)));
+        info.append(el('span', s ? 'Terminada · solo historial' : 'No está en este perfil', 'pulso-muted'));
+        if(s)actions.append(button('Ver historial',()=>options.openSession(id),'secondary'));
         if (rowRecoveryExcludeId !== undefined && id !== rowRecoveryExcludeId)
-          recoveryAction(row, id, 'Abrir sesión vinculada', 'Reanudar conversación', false);
+          recoveryAction(actions, id, 'Abrir sesión vinculada', 'Continuar conversación', false);
       }
+      const stateLabel=el('span','','pulso-muted');stateLabel.dataset.programSession=id;info.append(stateLabel);
+      if (actions.childElementCount) row.append(actions);
       section.append(row);
     }
     host.append(section);syncProgramLabels();
@@ -486,16 +926,19 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     const sessions=new Map(options.sessions().map(s=>[s.id,s]));
     for(const label of Array.from(detail.querySelectorAll<HTMLElement>('[data-program-session]'))){const state=sessions.get(label.dataset.programSession!)?.programState;label.textContent=state&&state!=='clear'?`${programStateLabel(state)} · informado por el programa`:'';}
   }
+  /** Linking is an action, not a draft: choosing a session never blocks closing or navigation. */
   function linkBlock(host: HTMLElement, scope: { itemId: string } | { projectId: string }) {
-    const section = el('form', '', 'pulso-form'); const s = select('Vincular una sesión existente', [['', 'Seleccionar sesión'], ...sessionOptions()]); s.input.required = true;
-    section.append(s.wrap); submit(section, 'Vincular sesión', () => write('link', { ...scope, sessionId: s.input.value }, async () => {
-      dirty = false; if (selectedItem) await chooseItem(selectedItem); else if (selectedProject) await chooseProject(selectedProject.id);
-    })); section.append(discardButton()); host.append(section);
-  }
-  function permissionsLink(host:HTMLElement,projectId?:string){
-    const section=el('section','','pulso-section');section.append(el('h3','Acceso de agentes'),el('p',projectId?'En Configuración, elige la sesión que recibirá acceso a este proyecto. Después copia el comando y ejecútalo en esa sesión.':'En Configuración, elige una sesión y el alcance de su acceso. Después copia el comando y ejecútalo en esa sesión.','pulso-muted'));
-    section.append(button('Configurar permisos…',()=>{if(busy||dirty||failed)return;options.onOpenPermissions?.(projectId?{projectId}:{});},'quiet'));
-    host.append(section);
+    const section = el('form', '', 'pulso-form'); const s = select('Vincular otra sesión', [['', 'Seleccionar sesión'], ...sessionOptions()]); s.input.required = true;
+    const go = el('button', 'Vincular sesión', 'primary'); go.type = 'submit';
+    section.onsubmit = event => {
+      event.preventDefault(); if (busy || failed || !s.input.value) { s.input.focus(); return; }
+      void write('link', { ...scope, sessionId: s.input.value }, async () => {
+        if ('itemId' in scope) { if (selectedItem) await chooseItem(selectedItem); return; }
+        const links = await request('links', { projectId: scope.projectId }); projectLinks = links.links ?? [];
+        if (drawerKind === 'sessions' && selectedProject?.id === scope.projectId) preserveDetailRender(() => renderSessions());
+      });
+    };
+    section.append(s.wrap, go); host.append(section);
   }
   function bindingFor(id:string,retry=false){
     if(retry)bindings.delete(id);
@@ -508,10 +951,10 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
     try{
       const next=await options.resumeSession!(id);started=true;bindings.delete(id);
       if(next&&scope)await request('link',{...scope,sessionId:next,requestId:`resume-link-${next}-${'itemId' in scope?'item':'project'}-${'itemId' in scope?scope.itemId:scope.projectId}`});
-      if(!disposed)options.notice('Conversación abierta con su identidad guardada.');
+      // The common continuation shows its own notice (Pulso links inherited, or why not).
     }catch{
       if(started)options.notice('La sesión se abrió; no se confirmó el vínculo con el plan. Puedes vincularla manualmente.');
-      else say('No se pudo reanudar la conversación. Comprueba la conexión y reintenta. El historial y el contexto guardado se conservan.');
+      else say('No se pudo continuar la conversación. Comprueba la conexión y la plaza libre y reintenta. El historial y el contexto guardado se conservan.');
     }finally{busy=false;if(!disposed)freeze();}
   }
   function recoveryAction(host:HTMLElement,id:string,liveLabel:string,resumeLabel:string,primary=true){
@@ -525,9 +968,9 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       target.focus({preventScroll:true});if(document.activeElement===target)clearRecoveryFocus();
     };
     const session=options.sessions().find(s=>s.id===id);
-    if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'quiet'));restoreRecoveryFocus();return;}
-    if(session&&!['exited','stopped','released','failed','interrupted'].includes(session.status)){
-      area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'quiet'));restoreRecoveryFocus();return;
+    if(session&&isLivePulsoSession(session)){area.append(button(liveLabel,()=>options.openSession(id),primary?'primary':'secondary'));restoreRecoveryFocus();return;}
+    if(session&&!isClosed(session.status)){
+      area.append(button('Revisar estado de la sesión',()=>options.openSession(id),'secondary'));restoreRecoveryFocus();return;
     }
     if(!session||!options.binding||!options.resumeSession){area.append(el('span','Usa el historial local o el contexto guardado para continuar.','pulso-muted'));restoreRecoveryFocus();return;}
     async function check(retry=false){
@@ -539,19 +982,29 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
         if(disposed||!area.isConnected||!root.contains(area))return;
         area.replaceChildren();
         const active=options.sessions().find(s=>s.id===data.activeSessionId&&isLivePulsoSession(s));
-        if(active)area.append(button('Abrir conversación activa',()=>options.openSession(active.id),primary?'primary':'quiet'));
-        else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!['exited','stopped','released','failed','interrupted'].includes(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'quiet'));
-        else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'quiet'));
-        else area.append(el('span',session?.kind==='codex'?'Codex: continúa con el historial local o el contexto de la fase.':'No hay una identidad de conversación registrada. Usa el historial o prepara el contexto.','pulso-muted'));
+        if(active)area.append(button('Abrir conversación activa',()=>options.openSession(active.id),primary?'primary':'secondary'));
+        else if(data.activeSessionId&&options.sessions().some(s=>s.id===data.activeSessionId&&!isClosed(s.status)))area.append(button('Revisar estado de la sesión',()=>options.openSession(data.activeSessionId!),'secondary'));
+        else if(data.binding?.provider==='claude'&&data.binding.conversationId)area.append(button(resumeLabel,()=>resumeConversation(id),primary?'primary':'secondary'));
+        else {
+          // The board header has one line: it only names the action; the reason lives in its tooltip and in Sesiones.
+          const main=/principal/.test(resumeLabel);
+          const why=session?.kind==='codex'?'Codex en terminal no permite continuar la conversación.':main?'La sesión principal terminó y su conversación no se puede continuar.':'La sesión terminó y su conversación no se puede continuar.';
+          const restartNote='Abre una sesión nueva en la misma carpeta; no recupera la conversación anterior.';
+          // «Empezar de nuevo aquí» keeps the app-wide label; secondary on the board and in drawers.
+          const restart=options.restartSession&&session?.cwd?button('Empezar de nuevo aquí',()=>options.restartSession!(id),'secondary'):null;
+          if(region==='board'){const note=el('span','Sin conversación que continuar','pulso-muted pulso-recovery-note');note.title=why;area.append(note);if(restart){restart.title=restartNote;area.append(restart);}}
+          else{area.classList.add('pulso-recovery-stack');area.append(el('p',why,'pulso-muted'));if(restart){const row=el('div','','pulso-inline-actions');row.append(restart);area.append(row,el('p',restartNote,'pulso-muted pulso-recovery-hint'));}}
+        }
         freeze();restoreRecoveryFocus();
       }catch{
         if(disposed||!area.isConnected||!root.contains(area))return;
-        area.replaceChildren(el('span','No se pudo comprobar la conversación.','pulso-muted'),button('Reintentar comprobación',()=>check(true),'quiet'));freeze();restoreRecoveryFocus();
+        area.replaceChildren(el('span','No se pudo comprobar la conversación.','pulso-muted'),button('Reintentar comprobación',()=>check(true),'secondary'));freeze();restoreRecoveryFocus();
       }
     }
     void check();
   }
-  function rememberBoard(){restoreBoardId=null;try{saveLastBoard(localStorage,options.persistenceKey?.()??null,selectedProject?.id??null);}catch{/* Optional view metadata. */}}
+  function notifyChange(){try{options.onChange?.();}catch{/* Observers never block Pulso. */}}
+  function rememberBoard(){notifyChange();restoreBoardId=null;try{saveLastBoard(localStorage,options.persistenceKey?.()??null,selectedProject?.id??null);}catch{/* Optional view metadata. */}}
   async function copy(value: string) {
     try { await navigator.clipboard.writeText(value); if (!disposed) options.notice('Copiado. Pégalo cuando estés listo.'); }
     catch { say('No se pudo copiar. Selecciona el texto y cópialo manualmente.'); }
@@ -559,14 +1012,40 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
   function formatDate(value: Timestamp) { const n = time(value); return n ? new Date(n).toLocaleString('es') : String(value); }
   capture.onsubmit = e => {
     e.preventDefault();if(busy||failed||!capture.reportValidity())return;const title=captureTitle.input.value.trim();if(!title)return;
-    void write('project_create',{id:crypto.randomUUID(),title,...(originCheck.checked&&captureOrigin?{mainSessionId:captureOrigin.id}:{})},async data=>{dirty=false;activeEditor=null;captureTitle.input.value='';projects=await page<PulsoProject>('projects','projects',{archived:false});await chooseProject(data.project.id);});
+    const id=crypto.randomUUID(),startSession=startCheck.checked&&!!options.startProjectSession;
+    void (async()=>{
+      let created=false;
+      await write('project_create',{id,title,...(originCheck.checked&&captureOrigin&&!startSession?{mainSessionId:captureOrigin.id}:{})},async data=>{created=true;dirty=false;activeEditor=null;captureTitle.input.value='';startCheck.checked=false;projects=await page<PulsoProject>('projects','projects',{archived:false});await chooseProject(data.project.id);});
+      if(!created||disposed||failed)return;
+      // What comes next: the first phase, ready to type in Por hacer.
+      if(selectedProject?.id===id)addOpeners.todo?.();
+      if(startSession&&!options.startProjectSession!(sessionId=>void adoptMainSession(id,title,sessionId),{id,title}))options.notice('No se pudo abrir Nueva sesión. Puedes elegir la sesión principal en Sesiones.');
+    })();
   };
+  /**
+   * The session started for a new project becomes its main session. Runs after
+   * the Nueva sesión dialog, usually with Pulso hidden: a direct write, re-read
+   * once on a conflict; a failure is only a notice (Sesiones can set it).
+   */
+  async function adoptMainSession(projectId:string,title:string,sessionId:string){
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const current=(await request('project',{id:projectId})).project as PulsoProject;if(disposed)return;
+        if(current.mainSessionId===sessionId)return;
+        const data=await request('project_update',{id:projectId,expectedRevision:current.revision,mainSessionId:sessionId,requestId:crypto.randomUUID()});if(disposed)return;
+        if(selectedProject?.id===projectId&&!dirty&&!failed)adoptProject(data.project);
+        notifyChange();if(available()&&!dirty&&!failed&&!busy)renderLists();return;
+      }catch{/* Re-read once: another writer may have moved the revision. */}
+    }
+    if(!disposed)options.notice(`La sesión se abrió, pero no quedó como principal de «${title}». Elígela en Sesiones.`);
+  }
   watch(capture);
   async function refresh():Promise<void>{
     if(!available()||dragging||busy||navigating)return;if(refreshing)return refreshing;
     const gen=generation,epoch=selectionEpoch;
     refreshing=(async()=>{try{
-      const ps=await page<PulsoProject>('projects','projects',{archived:false});
+      const pagePromise=page<PulsoProject>('projects','projects',{archived:false});void loadArchivedCount();
+      const ps=await pagePromise;
       if(!available()||gen!==generation||epoch!==selectionEpoch)return;
       projects={...ps,rows:ps.rows.map(p=>({...p,plan:''}))};
       if(dirty||failed){say('Tu borrador se conserva. Guarda o descarta antes de actualizar el detalle.');return;}
@@ -579,9 +1058,19 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
           else rememberBoard();
         }catch{if(!available()||gen!==generation||epoch!==selectionEpoch)return;restoreBoardId=saved;restoreFailed=true;say('No se pudo consultar el último tablero. Tus pendientes siguen disponibles. Reintenta la consulta o elige un tablero.');}
       }
+      // The selected project changed elsewhere (renamed, new main session, archived): read it once.
+      let projectChanged=false;
+      if(selectedProject){
+        const row=projects.rows.find(r=>r.id===selectedProject!.id);
+        if(row?row.revision!==selectedProject.revision:!projects.hasMore&&!selectedProject.archived){
+          const data=await request('project',{id:selectedProject.id});
+          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
+          if(data.project&&drawerKind!=='project'&&drawerKind!=='sessions'){selectedProject=data.project;projectChanged=true;}
+        }
+      }
       const changed=await readBoard(selectedProject?.id??null,boardRevision);
       if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed)return;
-      const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed||sessionsChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
+      const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;if(sessionsChanged)bindings.clear();shownSessions=sessionKey;bindingContext=context;revision=boardRevision;if(changed)notifyChange();if(changed||sessionsChanged||projectChanged)renderLists();errors.hidden=!restoreFailed;if(restoreFailed)readError(()=>refresh());syncProgramLabels();
       if((changed||sessionsChanged)&&drawerKind==='item'&&selectedItem){
         if(changed){
           const data=await request('item',{id:selectedItem.id});
@@ -590,6 +1079,7 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
             ? projectRow?.revision===selectedProject?.revision ? selectedProject : (await request('project',{id:data.item.projectId})).project
             : null;
           if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='item')return;
+          if(project?.archived){archivedElsewhere(project);return;}
           const freshCheckpoints=data.checkpoints??[];
           const freshIds=new Set(freshCheckpoints.map((point:PulsoCheckpoint)=>point.id));
           const checkpoints=[...freshCheckpoints,...detailItemCheckpoints.filter(point=>!freshIds.has(point.id))];
@@ -601,19 +1091,30 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
           }
         }else preserveDetailRender(()=>renderItem(selectedItem!,detailItemLinks,detailItemCheckpoints,false));
       }
-      else if((changed||sessionsChanged)&&drawerKind==='project'&&selectedProject){
+      else if((changed||sessionsChanged)&&(drawerKind==='project'||drawerKind==='sessions')&&selectedProject){
+        // Proyecto shows no sessions: only a data change repaints it.
+        const kind=drawerKind,render=()=>kind==='project'?renderProject(false):renderSessions();
         if(changed){
           const [data,links]=await Promise.all([request('project',{id:selectedProject.id}),request('links',{projectId:selectedProject.id})]);
-          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!=='project')return;
+          if(!available()||gen!==generation||epoch!==selectionEpoch||dirty||failed||drawerKind!==kind)return;
+          if(data.project?.archived){archivedElsewhere(data.project);return;}
           const nextKey=JSON.stringify([data.project,links.links??[]]);
-          if(nextKey!==detailRecordKey||sessionsChanged){selectedProject=data.project;projectLinks=links.links??[];preserveDetailRender(()=>renderProject(false));}
-        }else preserveDetailRender(()=>renderProject(false));
+          if(nextKey!==detailRecordKey||(sessionsChanged&&kind==='sessions')){selectedProject=data.project;projectLinks=links.links??[];preserveDetailRender(render);}
+        }else if(kind==='sessions')preserveDetailRender(render);
       }
     }catch{if(available()&&gen===generation&&!failed)readError(()=>refresh());}})().finally(()=>{refreshing=null;});return refreshing;
   }
+  /** Another window or an agent archived the open project: no editable drawer stays on a read-only board. */
+  function archivedElsewhere(project:PulsoProject){
+    hideDrawer();drawerKind=null;selectedItem=null;flushProject=null;afterRelease=null;activeEditor=null;
+    selectedProject=project;undoSlot.replaceChildren();renderLists();
+    options.notice(`«${project.title}» se archivó desde otro sitio: está en el Histórico, en solo lectura.`);
+  }
+  /** Send a pending Proyecto autosave now (closing, hiding the window). The request leaves synchronously. */
+  function flushNow(){if(!disposed&&dirty&&!failed&&flushProject)void flushProject();}
   function stop() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
   function schedule() {
-    stop(); if (!available()) return;
+    stop(); if (!available() || options.revisionFromStatus?.()) return;
     timer = setTimeout(async () => {
       if (!available()) return;
       try {
@@ -625,13 +1126,92 @@ export function mountPulsoPanel(options: PulsoPanelOptions): { show(): void; hid
       finally { schedule(); }
     }, 2000);
   }
-  function visibility() { stop(); if (available()) { void refresh(); schedule(); } }
-  document.addEventListener('visibilitychange', visibility);
+  /**
+   * Session set or connection changed while the board revision did not:
+   * repaint cards, linked sessions and labels from what is loaded, without
+   * reading Pulso (the 1.3.x timer did a full refresh for this).
+   */
+  function applySessionContext(){
+    const sessionKey=sessionSignature(),context=options.bindingCacheKey?.()??'';
+    if(shownSessions===sessionKey&&bindingContext===context)return;
+    bindings.clear();shownSessions=sessionKey;bindingContext=context;renderLists();syncProgramLabels();
+    if(drawerKind==='item'&&selectedItem)preserveDetailRender(()=>renderItem(selectedItem!,detailItemLinks,detailItemCheckpoints,false));
+    else if(drawerKind==='sessions'&&selectedProject)preserveDetailRender(()=>renderSessions());
+  }
+  let lastAuto={key:'',at:0};
+  /** Runner 1.4: called on every status. Reads Pulso only when its revision moved past the loaded board. */
+  function statusChanged(revision:number|null){
+    if(disposed)return;
+    if(!options.revisionFromStatus?.()){if(timer===undefined&&available())schedule();return;}
+    stop();if(!available())return;
+    syncProgramLabels();syncCardFooters();
+    if(busy||refreshing||dirty||failed||dragging||navigating)return;
+    const context=options.bindingCacheKey?.()??'',sessionKey=sessionSignature();
+    const revisionChanged=typeof revision==='number'&&(typeof boardRevision!=='number'||revision>boardRevision);
+    const sessionsChanged=shownSessions!==sessionKey||bindingContext!==context;
+    if(!revisionChanged&&!sessionsChanged)return;
+    if(!revisionChanged){applySessionContext();return;}
+    // A failing read is retried at most every 2 s, like the old timer.
+    const key=`${revision}|${sessionKey}|${context}`;
+    if(key===lastAuto.key&&Date.now()-lastAuto.at<2000)return;
+    lastAuto={key,at:Date.now()};void refresh();
+  }
+  function visibility() { if (document.hidden) flushNow(); stop(); if (available()) { void refresh(); schedule(); } }
+  document.addEventListener('visibilitychange', visibility); addEventListener('pagehide', flushNow);
   return {
     show(){if(disposed)return;const profile=options.persistenceKey?.()??null;if(restoredProfile!==profile){restoredProfile=profile;try{restoreBoardId=readLastBoard(localStorage,profile);}catch{restoreBoardId=null;}}syncOrigin();visible=true;root.hidden=false;freeze();if(drawerRestore&&drawerKind){openDrawer(drawerKind,drawerTitle.textContent??'Detalle');drawerRestore=false;}void refresh();schedule();},
-    hide() {if(disposed)return;visible=false;cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
+    hide() {if(disposed)return;visible=false;closeMoveMenu(false);cancelActiveDrag?.();clearRecoveryFocus();if(navigating)selectedProject=boardProject;navigating=false;drawerRestore=drawer.open;hideDrawer();visible=false;root.hidden=true;generation++;selectionEpoch++;stop();freeze();},
     refresh,
+    /** Sidebar entry: same guards as the tabs; a draft or failed save keeps the current board. */
+    async openBoard(projectId){
+      if(disposed||!visible)return;restoreBoardId=null;
+      if(refreshing)await refreshing.catch(()=>{});
+      if(disposed||!visible)return;
+      if(projectId===null)await choosePending();else await chooseProject(projectId);
+    },
+    currentBoard(){return selectedProject?.id??null;},
+    statusChanged,
+    /** Live session state in card footers (no Pulso read). */
+    syncLive(){if(available())syncCardFooters();},
+    /** Command palette: phases of the project board already loaded; never reads. */
+    loadedPhases(){
+      // An archived (read-only) board offers no phases to open.
+      if(disposed||typeof boardScope!=='string'||!boardProject||boardProject.id!==boardScope||boardProject.archived)return null;
+      return{board:boardProject.title,phases:statuses.flatMap(status=>columns[status].rows.map(item=>({id:item.id,title:item.title,status:item.status,statusLabel:labels[item.status]})))};
+    },
+    /** Command palette: open a loaded phase's drawer with the usual draft guards. */
+    async openPhase(id){
+      if(disposed||!visible)return;
+      if(refreshing)await refreshing.catch(()=>{});
+      if(disposed||!visible)return;
+      const item=statuses.flatMap(status=>columns[status].rows).find(row=>row.id===id);
+      if(!item){say('Esa fase ya no está en el tablero cargado.');return;}
+      await chooseItem(item);
+    },
+    /** Command palette: the same form as the "+" in the top bar (its own draft guards apply). */
+    newProject(){if(!disposed&&visible)newProject();},
+    /** Command palette: close the card "…" menu before opening over the board. */
+    closeMenus(){closeMoveMenu(false);},
+    /** Command palette: why the tabs, phases and "+" are not usable now (null = usable). Same state as freeze(). */
+    draftBlocked(){if(disposed)return null;if(dirty&&!failed&&drawerKind==='project'&&flushProject)return null;if(dirty||failed)return'Guarda o descarta el borrador de Pulso';if(busy)return'Pulso está guardando un cambio';return null;},
+    /** Command palette: the "…" button that owns the open move menu holding `node`, if any. */
+    menuAnchor(node){return moveMenu&&node&&moveMenu.node.contains(node)?moveMenu.anchor:null;},
     prepareNavigation(){if(!visible)return true;if(busy||dirty||failed||navigating)return false;closeDrawer();drawerRestore=false;return true;},
-    dispose() { if (disposed) return; disposed = true; visible = false;cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
+    /**
+     * A pending Proyecto autosave (no failure) does not block leaving: save it,
+     * close the drawer and run `next`. True when it took over; a failed save
+     * stays on the board with its error.
+     */
+    saveThen(next){
+      if(!visible||disposed||!dirty||failed||busy||drawerKind!=='project'||!flushProject)return false;
+      const flush=flushProject;say('Guardando el proyecto…');
+      void flush().then(ok=>{
+        if(disposed||!visible)return;
+        if(!ok||dirty||failed){say('No se guardó el proyecto. Sigues en el tablero.');return;}
+        hideDrawer();drawerKind=null;flushProject=null;afterRelease=null;activeEditor=null;drawerRestore=false;say('');next();
+      });
+      return true;
+    },
+    dispose() { if (disposed) return; flushNow(); removeEventListener('pagehide', flushNow); disposed = true; visible = false;closeMoveMenu(false);outline.remove();tabActions.remove();cancelActiveDrag?.();clearRecoveryFocus(); generation++; selectionEpoch++; stop(); document.removeEventListener('visibilitychange', visibility); failed = null;drawer.close();root.remove(); },
   };
 }

@@ -1,3 +1,5 @@
+import { category, lifecycleIncident, lifecycleLabel } from './session-lifecycle';
+
 export type WorkspaceSession = {
   id: string;
   title: string;
@@ -12,19 +14,8 @@ export type WorkspaceSession = {
 
 export type SessionFilter = 'all' | 'open' | 'activity' | 'attention' | 'closed';
 
-export function statusLabel(status: string): string {
-  switch (status) {
-    case 'starting': return 'Abriendo';
-    case 'running': return 'Abierta';
-    case 'exited': return 'Cerrada';
-    case 'stopped': return 'Detenida';
-    case 'released': return 'Carpeta liberada';
-    case 'needs_attention': return 'Requiere atención';
-    case 'failed': return 'Falló';
-    case 'interrupted': return 'Interrumpida';
-    default: return 'Estado desconocido';
-  }
-}
+/** The word for a runner state: its lifecycle category (session-lifecycle.ts), «Abriendo» while it starts. */
+export function statusLabel(status: string): string { return lifecycleLabel(status); }
 
 export function providerLabel(kind: string): string {
   switch (kind) {
@@ -47,16 +38,20 @@ function normalize(text: string): string {
   return text.normalize('NFC').toLowerCase().normalize('NFC');
 }
 
-/** Session lifecycle only: an open PTY says nothing about turn or task progress. */
-export function matchesSession(session: WorkspaceSession, filter: SessionFilter, query: string): boolean {
-  const statuses: Record<Exclude<SessionFilter, 'all'>, readonly string[]> = {
-    open: ['starting', 'running'],
-    activity: ['starting', 'running', 'needs_attention', 'failed', 'interrupted'],
-    attention: ['needs_attention', 'failed', 'interrupted'],
-    closed: ['exited', 'stopped', 'released'],
-  };
-  const known = Object.values(statuses).some(list => list.includes(session.status));
-  if (filter !== 'all' && !statuses[filter].includes(session.status) && !(filter === 'attention' && !known)) return false;
+/**
+ * Session lifecycle only: an open PTY says nothing about turn or task progress.
+ * open = Abiertas (with Sin confirmar); activity adds the Interrumpidas;
+ * attention = lifecycle incidents; closed = Terminadas. `retired`: an
+ * interrupted session the person dismissed or continued (it is Terminada).
+ */
+export function matchesSession(session: WorkspaceSession, filter: SessionFilter, query: string, retired = false): boolean {
+  const value = category(session.status, retired);
+  const allowed = filter === 'all' ? true
+    : filter === 'open' ? value === 'open' || value === 'unconfirmed'
+    : filter === 'activity' ? value !== 'ended'
+    : filter === 'attention' ? lifecycleIncident(session.status) && value !== 'ended'
+    : value === 'ended';
+  if (!allowed) return false;
   const needle = normalize(query.trim());
   return [session.title, providerLabel(session.kind), session.cwd, session.workspace]
     .some(value => value !== null && value !== undefined && normalize(value).includes(needle));

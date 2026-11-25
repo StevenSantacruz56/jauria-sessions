@@ -6,27 +6,36 @@ import { createServer } from 'vite';
 import { mkdir } from 'node:fs/promises';
 const server=await createServer({configFile:false,server:{host:'127.0.0.1',port:0,hmr:false}});await server.listen();
 const url=server.resolvedUrls!.local[0];
-type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string; volatileStatus?: boolean };
+type FixtureOptions = { mainClosed?: boolean; activeContinuation?: boolean; savedProject?: string; volatileStatus?: boolean; ux?: boolean };
 async function install(page:Page, history = '', options: FixtureOptions = {}){await page.addInitScript(({history, options})=>{
  const w=window as any;const sessions=[{id:'main',title:'Plan sintético · Integración',kind:'claude',cwd:'/synthetic/project',status:'running',rows:24,cols:80},{id:'related',title:'Fase sintética · Validación',kind:'codex',cwd:'/synthetic/other',status:'running',rows:24,cols:80}];
  if(options.mainClosed)sessions[0].status='exited';
  if(options.activeContinuation)sessions.push({...sessions[0],id:'continued',title:'Continuación sintética',status:'running'});
+ if(options.ux)sessions.push({id:'old-term',title:'Terminal anterior',kind:'terminal',cwd:'/synthetic/empty',status:'exited',rows:24,cols:80});
  const runnerCalls:any[]=[];
  if(options.savedProject && !localStorage.getItem('jauria-pulso:last-board:/synthetic'))localStorage.setItem('jauria-pulso:last-board:/synthetic',JSON.stringify({schemaVersion:1,projectId:options.savedProject}));
  const events:any[]=history?[{seq:1,sessionId:'main',kind:'output',data:btoa(history)}]:[],resizes:any[]=[],inputs:any[]=[],calls:any[]=[];let rev=3,statusReads=0;
  const projects:any[]=[{id:'plan',title:'Integrar Pulso en Jauria',plan:'Plan de demostración sintético.\n1. Definir el modelo\n2. Implementar\n3. Validar la fluidez',mainSessionId:'main',revision:1,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
  const items:any[]=[{id:'phase',projectId:'plan',title:'Validar la fluidez de las terminales',note:'Contenido sintético para comprobar navegación.',status:'doing',position:0,revision:2,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'},{id:'todo',projectId:null,title:'Preparar la revisión de mañana',note:'',status:'todo',position:0,revision:3,archived:false,createdAt:'2026-11-14T10:00:00Z',updatedAt:'2026-11-14T10:00:00Z'}];
+ // UX review (ux): an empty project, a finished one and one archived with open phases.
+ if(options.ux){
+  projects.push({id:'empty',title:'Proyecto nuevo sin fases',plan:'',mainSessionId:'old-term',revision:1,archived:false,createdAt:'2026-11-15T10:00:00Z',updatedAt:'2026-11-15T10:00:00Z'},
+   {id:'done-p',title:'Migrar las alertas',plan:'',mainSessionId:null,revision:1,archived:true,archivedAt:Date.parse('2026-11-20T10:00:00Z'),createdAt:'2026-11-01T10:00:00Z',updatedAt:'2026-11-20T10:00:00Z'},
+   {id:'open-p',title:'Revisión de costos',plan:'',mainSessionId:null,revision:1,archived:true,archivedAt:Date.parse('2026-11-18T10:00:00Z'),createdAt:'2026-11-02T10:00:00Z',updatedAt:'2026-11-18T10:00:00Z'},
+   {id:'legacy-p',title:'Proyecto antiguo',plan:'',mainSessionId:null,revision:1,archived:true,createdAt:'2026-10-01T10:00:00Z',updatedAt:'2026-11-21T10:00:00Z'});
+ }
  // Keep every board column populated for visual review; the phase under test stays first.
  for(const [id,title,status] of [['scope','Definir el alcance de la entrega','todo'],['implementation','Integrar el tablero con el shell','doing'],['model','Modelo y checkpoints verificados','done']])items.push({...items[0],id,title,status,note:'Datos de prueba sintéticos.',revision:1});
+ if(options.ux)for(const [id,projectId,status] of [['d1','done-p','done'],['d2','done-p','done'],['o1','open-p','done'],['o2','open-p','doing'],['o3','open-p','todo']])items.push({...items[0],id,projectId,title:`Fase ${id}`,status,note:'',revision:1});
  const status=()=>{statusReads++;w.pulsoFixture.statusReads=statusReads;return{pid:123,generation:'pulso-synthetic',pulsoVersion:1,pulsoBoardVersion:1,pulsoAvailable:true,nativeResumeVersion:1,workspaceVersion:1,projectLifecycleVersion:1,projects:[],tasks:[],normalTerminalVersion:1,settingsVersion:1,settings:{schemaVersion:1,maxConcurrentSessions:2,maxSupportedSessions:8},sessions:structuredClone(sessions).map(s=>options.volatileStatus?{...s,lastObservedAt:statusReads}:s),lastSeq:events.length};};
  w.pulsoFixture={calls,runnerCalls,resizes,inputs,sessions,statusReads:0,connections:0,holdNext:null,held:[],output(data:string){events.push({seq:events.length+1,sessionId:'main',kind:'output',data:btoa(data)});},phase:()=>structuredClone(items[0])};
  w.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},async invoke(cmd:string,a:any){
   if(cmd==='connect_runner'){w.pulsoFixture.connections++;return{dataDir:'/synthetic',socket:'/synthetic/sock',status:status(),smoke:true};}
-  if(cmd==='probe_tools')return[];if(cmd==='record_ui_evidence')return;if(cmd==='plugin:window|set_badge_count')return;
+  if(cmd==='probe_tools')return[];if(cmd==='home_directory')return'/synthetic/home';if(cmd==='record_ui_evidence')return;if(cmd==='plugin:window|set_badge_count')return;
   if(cmd==='pulso_request'){
    calls.push({op:a.op,args:structuredClone(a.args)});const x=a.args;let result:any;
    if(a.op==='revision')result={revision:rev};
-   else if(a.op==='projects'){const cursor=x.cursor??0;result={projects:structuredClone(projects.slice(cursor,cursor+x.limit)),revision:rev,totalCount:projects.length,hasMore:projects.length>cursor+x.limit};}
+   else if(a.op==='projects'){const all=projects.filter(p=>!!p.archived===!!x.archived);const cursor=x.cursor??0;result={projects:structuredClone(all.slice(cursor,cursor+x.limit)),revision:rev,totalCount:all.length,hasMore:all.length>cursor+x.limit};}
    else if(a.op==='project')result={project:structuredClone(projects.find(p=>p.id===x.id))};
    else if(a.op==='board')result={revision:rev,columns:Object.fromEntries(['todo','doing','waiting','done'].map(status=>{const rows=items.filter(i=>!i.archived&&i.projectId===x.projectId&&i.status===status);return[status,{items:structuredClone(rows.slice(0,20)),totalCount:rows.length,hasMore:rows.length>20,nextCursor:20}];}))};
    else if(a.op==='items'){if(x.expectedSnapshotRevision!==rev)return{ok:false,error:'stale snapshot'};const rows=items.filter(i=>!i.archived&&i.projectId===x.projectId&&(!x.status||i.status===x.status));const cursor=x.cursor??0;result={items:structuredClone(rows.slice(cursor,cursor+x.limit)),revision:rev,totalCount:rows.length,hasMore:rows.length>cursor+x.limit};}
@@ -35,9 +44,11 @@ async function install(page:Page, history = '', options: FixtureOptions = {}){aw
    else if(a.op==='activity')result={events:[]};
    else if(a.op==='policies')result={policies:[]};
    else if(a.op==='link')result={link:structuredClone(x)};
+   else if(a.op==='project_create'){const p={id:x.id,title:x.title,plan:'',mainSessionId:x.mainSessionId??null,revision:++rev,archived:false,createdAt:'2026-11-14T12:00:00Z',updatedAt:'2026-11-14T12:00:00Z'};projects.push(p);result={project:structuredClone(p)};}
+   else if(a.op==='project_update'){const p=projects.find(p=>p.id===x.id);if(!p||p.revision!==x.expectedRevision)return{ok:false,error:'revision conflict'};Object.assign(p,Object.fromEntries(Object.entries(x).filter(([k])=>!['requestId','expectedRevision'].includes(k))),{revision:++rev});result={project:structuredClone(p)};}
    else if(a.op==='item_update'){const item=items.find(i=>i.id===x.id);if(item.revision!==x.expectedRevision)return{ok:false,error:'revision conflict'};Object.assign(item,Object.fromEntries(Object.entries(x).filter(([k])=>!['requestId','expectedRevision'].includes(k))),{revision:++rev});result={item:structuredClone(item)};}
    else return{ok:false,error:'Unexpected synthetic operation'};
-   if(w.pulsoFixture.holdNext===a.op){w.pulsoFixture.holdNext=null;await new Promise(resolve=>w.pulsoFixture.held.push({op:a.op,result,resolve}));}
+   if(w.pulsoFixture.holdNext===a.op&&Object.entries(w.pulsoFixture.holdWhen??{}).every(([k,v])=>x[k]===v)){w.pulsoFixture.holdNext=null;w.pulsoFixture.holdWhen=null;await new Promise(resolve=>w.pulsoFixture.held.push({op:a.op,result,resolve}));}
    return{ok:true,result};
   }
   if(cmd==='runner_request'){
@@ -48,6 +59,7 @@ async function install(page:Page, history = '', options: FixtureOptions = {}){aw
    if(a.op==='resize'){resizes.push(a.args);const s=sessions.find(s=>s.id===a.args.id)!;s.rows=a.args.rows;s.cols=a.args.cols;return{ok:true,result:{rows:s.rows,cols:s.cols}};}
    if(a.op==='input'){inputs.push(a.args);return{ok:true,result:{written:a.args.data.length}};}
    if(a.op==='native_binding')return{ok:true,result:{binding:a.args.id==='main'?{provider:'claude',conversationId:'synthetic-main-conversation'}:null,activeSessionId:options.activeContinuation?'continued':null}};
+   if(a.op==='start'){const s={id:a.args.id,title:a.args.title,kind:a.args.kind,cwd:a.args.cwd??null,status:'running',rows:24,cols:80};sessions.push(s);return{ok:true,result:structuredClone(s)};}
    if(a.op==='resume_native'){const session={...sessions[0],id:a.args.id,status:'running'};sessions.push(session);return{ok:true,result:structuredClone(session)};}
   }
   throw Error(`Unexpected fixture command ${cmd}:${a?.op??''}`);
@@ -59,13 +71,13 @@ try{
   const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
   try{
    await install(page);await page.goto(url);await page.locator('#open-pulso').waitFor({state:'visible'});await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-   await page.getByRole('button',{name:/Plan sintético · Integración/}).click();
+   await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();
    await page.locator('#toggle-split').click();await page.waitForTimeout(300);await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.original=document.querySelector('.xterm');f.output(Array.from({length:120},(_,i)=>`Synthetic line ${i}`).join('\r\n')+'\r\n');});
    await page.waitForTimeout(500);await page.evaluate(()=>{const viewport=document.querySelector('.xterm-viewport')as HTMLElement;viewport.scrollTop=200;(window as any).pulsoFixture.scroll=viewport.scrollTop;});
    const prior=await page.evaluate(()=>(window as any).pulsoFixture.resizes.length);
    await page.locator('#open-pulso').click();await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
    assert.equal(await page.locator('dialog[open]').count(),0,'project tab opens only the board');
-   await page.getByLabel('Mover Validar la fluidez de las terminales',{exact:true}).selectOption('waiting');
+   await page.getByRole('button',{name:'Mover Validar la fluidez de las terminales',exact:true}).click();await page.getByRole('menuitem',{name:'Mover a En espera',exact:true}).click();
    await page.getByRole('region',{name:'En espera',exact:true}).getByRole('button',{name:'Abrir Validar la fluidez de las terminales',exact:true}).waitFor();
    assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='grant'||c.op==='link').length),0);
    await page.getByRole('button',{name:'Abrir Validar la fluidez de las terminales',exact:true}).click();
@@ -107,14 +119,14 @@ try{
       await page.waitForFunction(before=>(window as any).pulsoFixture.statusReads>before,pressedAt);
       await page.mouse.up();
       assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
-      assert.equal(await page.locator('#session-0').inputValue(),'related');
-      await page.locator('#session-0').selectOption('main');
+      assert.equal(await page.locator('#session-0').getAttribute('data-session-id'),'related');
+      await page.locator('#session-0').click();await page.locator('.pane:nth-child(1) .session-picker [role="option"][data-session-id="main"]').click();
       assert.equal(await page.locator('#workspace-title').textContent(),'Plan sintético · Integración');
       await page.locator('#toggle-split').click();
-      assert.equal(await page.locator('#session-1').inputValue(),'related');
+      assert.equal(await page.locator('#session-1').getAttribute('data-session-id'),'related');
       await other.click();
       assert.equal(await page.locator('#workspace-title').textContent(),'Fase sintética · Validación');
-      assert.equal(await page.locator('#session-0').inputValue(),'main','split navigation must keep the other pane');
+      assert.equal(await page.locator('#session-0').getAttribute('data-session-id'),'main','split navigation must keep the other pane');
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0,'switching must not send terminal input');
       await page.keyboard.type('x');
       await page.waitForFunction(()=>(window as any).pulsoFixture.inputs.length>0);
@@ -127,7 +139,7 @@ try{
       await install(page, '', {mainClosed:true}); await page.goto(url);
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
-      const resume=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Reanudar.*principal/}); await resume.waitFor();
+      const resume=page.locator('.pulso-board-toolbar').getByRole('button',{name:/Continuar.*principal/}); await resume.waitFor();
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>/resume_native|^(start|input)$/.test(c.op))),[]);
       const bindings=await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>c.op==='native_binding'));
       assert.deepEqual(bindings.map((c:any)=>c.args),[{id:'main'}]);
@@ -150,18 +162,83 @@ try{
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.sessions.filter((s:any)=>s.status==='running').length),2);
     } finally {await browser.close();}
   });
-  await test(`${engine.name()}: project permission shortcut scopes the project and requires session choice`, async () => {
+  // Pulso «Nuevo proyecto» → Nueva sesión (main.ts): the session started there becomes the main one; cancelling keeps the project.
+  await test(`${engine.name()}: a new project can start its own session through Nueva sesión`, async () => {
+    const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage({viewport:{width:1280,height:820}});
+    try {
+      await install(page,'',{mainClosed:true}); await page.goto(url); await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
+      await page.locator('#open-pulso').click();
+      const create=async(title:string)=>{
+        await page.getByRole('button',{name:'Nuevo proyecto',exact:true}).click();
+        await page.getByLabel('Empezar una sesión nueva para este proyecto').check();
+        await page.getByLabel('Nombre del proyecto',{exact:true}).fill(title); await page.getByRole('button',{name:'Crear proyecto',exact:true}).click();
+        const dialog=page.getByRole('dialog',{name:'Nueva sesión'}); await dialog.waitFor();
+        await page.waitForFunction(()=>(document.querySelector('#session-folder') as HTMLSelectElement)?.value==='/synthetic/home');
+        return dialog;
+      };
+      await create('Proyecto con sesión');
+      // The dialog shows the project it comes from, fixed, as its main session; no free project choice.
+      assert.equal(await page.locator('#session-project-locked').innerText(),'Proyecto: «Proyecto con sesión» · sesión principal');assert.equal(await page.locator('#session-project').isHidden(),true);
+      await page.locator('#session-title').fill('Sesión del proyecto'); await page.locator('#start-session').click();
+      await page.waitForFunction(()=>(window as any).pulsoFixture.calls.some((c:any)=>c.op==='project_update'&&c.args.mainSessionId));
+      const started=await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>c.op==='start').map((c:any)=>c.args.id));
+      assert.equal(started.length,1);
+      const update=await page.evaluate(()=>(window as any).pulsoFixture.calls.find((c:any)=>c.op==='project_update').args);
+      assert.equal(update.mainSessionId,started[0]); assert.equal(update.title,undefined);
+      await page.locator('#open-pulso').click();
+      await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Abrir sesión principal',exact:true}).waitFor();
+      const dialog=await create('Proyecto sin sesión');
+      await page.locator('#cancel-session').click(); await dialog.waitFor({state:'hidden'});
+      await page.getByRole('button',{name:'Proyecto sin sesión',exact:true}).waitFor();
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='project_update').length),1);
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>c.op==='start').length),1);
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
+    } finally {await browser.close();}
+  });
+  // Visual review of the button levels, tab bar, drawers and Histórico (PULSO_UX_SCREENSHOT_DIR; Chrome only).
+  if(engine===chromium&&process.env.PULSO_UX_SCREENSHOT_DIR)for(const theme of ['light','dark'])for(const [width,height] of [[1220,800],[760,560]])await test(`${engine.name()}: UX captures ${theme} ${width}`,async()=>{
+    const dir=process.env.PULSO_UX_SCREENSHOT_DIR!;await mkdir(dir,{recursive:true});
+    const browser=await engine.launch({channel:'chrome'});const page=await browser.newPage({viewport:{width,height}});
+    try{
+      await install(page,'',{mainClosed:true,ux:true});await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
+      await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+      const shot=async(name:string)=>{await page.waitForTimeout(250);await page.screenshot({path:`${dir}/${name}-${theme}-${width}.png`,animations:'disabled'});};
+      // At 760 px the sidebar is a drawer: open Pulso through its button without showing it.
+      await page.locator('#open-pulso').evaluate(n=>(n as HTMLButtonElement).click());
+      await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();await page.locator('.pulso-board-toolbar').getByRole('button',{name:/sesión principal/}).first().waitFor();
+      await shot('tablero');
+      await page.getByRole('button',{name:'Proyecto nuevo sin fases',exact:true}).click();await page.locator('.pulso-first-step').waitFor();
+      await shot('tablero-vacio');
+      await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Proyecto',exact:true}).click();await page.getByLabel('Nombre del proyecto',{exact:true}).waitFor();
+      await shot('cajon-proyecto');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Sesiones',exact:true}).click();await page.getByLabel('Sesión principal',{exact:true}).waitFor();await page.waitForTimeout(300);
+      await shot('cajon-sesiones');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.getByRole('button',{name:'Nuevo proyecto',exact:true}).click();await page.getByLabel('Nombre del proyecto',{exact:true}).waitFor();
+      await shot('cajon-nuevo');await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
+      await page.getByRole('button',{name:/^Histórico/}).click();await page.getByText(/Archivado sin terminar/).first().waitFor();
+      await shot('historico');
+    }finally{await browser.close();}
+  });
+  // 1.4.0: the project drawers no longer carry «Acceso de agentes»; manual access stays in Configuración.
+  await test(`${engine.name()}: agent access lives in Configuración, not in Proyecto or Sesiones`, async () => {
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
     try {
       await install(page); await page.goto(url); await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      await page.getByRole('button',{name:/Plan sintético · Integración/}).click();
+      await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();
       await page.locator('#open-pulso').click(); await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
-      await page.getByRole('button',{name:'Plan y sesiones',exact:true}).click();
-      await page.getByRole('button',{name:'Configurar permisos…',exact:true}).click();
+      for(const drawer of ['Proyecto','Sesiones']){
+        await page.locator('.pulso-board-toolbar').getByRole('button',{name:drawer,exact:true}).click();
+        await page.getByRole('dialog',{name:drawer,exact:true}).waitFor();
+        assert.equal(await page.getByRole('button',{name:'Configurar permisos…',exact:true}).count(),0,drawer);
+        assert.equal(await page.getByText('Acceso de agentes',{exact:true}).count(),0,drawer);
+        await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();await page.locator('dialog.pulso-drawer[open]').waitFor({state:'detached'});
+      }
+      await page.locator('#open-settings').click();
       const settings=page.getByRole('dialog',{name:'Configuración',exact:true}); await settings.waitFor();
-      const session=settings.getByLabel('Sesión que recibirá permiso',{exact:true}); await page.waitForFunction(()=>document.querySelector('.settings-permissions')?.getAttribute('aria-busy')==='false');
+      await settings.getByText('Dar o quitar acceso a una sesión ya abierta',{exact:true}).click();
+      const session=settings.getByLabel('Sesión que recibe el acceso',{exact:true}); await page.waitForFunction(()=>document.querySelector('.settings-permissions')?.getAttribute('aria-busy')==='false');
       assert.equal(await session.inputValue(),''); assert.equal(await session.locator('option').count(),3,'two active sessions plus placeholder');
-      assert.equal(await settings.getByLabel('Alcance del permiso',{exact:true}).inputValue(),'plan');
+      await settings.getByLabel('Qué puede hacer',{exact:true}).locator('option[value="plan"]').waitFor({state:'attached'});
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>/^(grant|revoke|revoke_policy)$/.test(c.op))),[]);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
       const docsDir=process.env.PULSO_DOC_SCREENSHOT_DIR;
@@ -172,7 +249,6 @@ try{
         await page.waitForTimeout(300);
         await page.screenshot({path:`${docsDir}/configuracion-1.3.2.png`,animations:'disabled'});
         await settings.getByRole('button',{name:'Cerrar',exact:true}).click();
-        await page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();
         await page.setViewportSize({width:1440,height:1000});
         await page.locator('.pulso-board-toolbar').getByRole('button',{name:'Abrir sesión principal',exact:true}).waitFor();
         await page.screenshot({path:`${docsDir}/pulso-1.3.2.png`,animations:'disabled'});
@@ -183,9 +259,13 @@ try{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{}); const page=await browser.newPage();
     try {
       await install(page); await page.goto(url); await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      await page.evaluate(()=>(window as any).pulsoFixture.holdNext='projects');
       await page.locator('#open-settings').click();
       const settings=page.getByRole('dialog',{name:'Configuración',exact:true}); await settings.waitFor();
+      // Manual access is a collapsed section since 1.3.3: expanding it starts the
+      // permissions read. Hold only that page (limit 50) so a sidebar refresh of
+      // 'projects' (limit 20) cannot take the hold instead.
+      await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.holdNext='projects';f.holdWhen={limit:50,cursor:0};});
+      await settings.getByText('Dar o quitar acceso a una sesión ya abierta',{exact:true}).click();
       await page.waitForFunction(()=>(window as any).pulsoFixture.held.length===1);
       await page.evaluate(()=>{const f=(window as any).pulsoFixture;f.held[0].result.projects=[{id:'stale-project',title:'STALE SYNTHETIC RESPONSE'}];});
       // Exercise the shell's real reconnect handler while the modal read is held.
@@ -193,9 +273,9 @@ try{
       await page.waitForFunction(()=>(window as any).pulsoFixture.connections===2 && document.querySelector('#connection-state')?.textContent==='Conectado');
       await page.evaluate(()=>(window as any).pulsoFixture.held.splice(0).forEach((held:any)=>held.resolve()));
       await settings.getByText('No se pudieron consultar los permisos y proyectos. Reintenta la consulta.',{exact:true}).waitFor();
-      assert.equal(await settings.getByLabel('Alcance del permiso',{exact:true}).locator('option[value="stale-project"]').count(),0);
-      await settings.getByRole('button',{name:'Actualizar permisos y proyectos',exact:true}).click();
-      await settings.getByLabel('Alcance del permiso',{exact:true}).locator('option[value="plan"]').waitFor({state:'attached'});
+      assert.equal(await settings.getByLabel('Qué puede hacer',{exact:true}).locator('option[value="stale-project"]').count(),0);
+      await settings.getByRole('button',{name:'Volver a consultar',exact:true}).click();
+      await settings.getByLabel('Qué puede hacer',{exact:true}).locator('option[value="plan"]').waitFor({state:'attached'});
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>/^(grant|revoke|revoke_policy)$/.test(c.op))),[]);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
     } finally {await browser.close();}
@@ -205,7 +285,7 @@ try{
     try {
       await install(page,'',{savedProject}); await page.goto(url); await page.reload();
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled); await page.locator('#open-pulso').click();
-      if(savedProject==='plan')await page.getByRole('button',{name:'Plan y sesiones',exact:true}).waitFor();
+      if(savedProject==='plan')await page.getByRole('button',{name:'Proyecto',exact:true}).waitFor();
       else await page.getByRole('button',{name:'Abrir Preparar la revisión de mañana',exact:true}).waitFor();
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.runnerCalls.filter((c:any)=>/resume_native|^(start|input)$/.test(c.op))),[]);
       assert.deepEqual(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>/^(grant|revoke|revoke_policy)$/.test(c.op))),[]);
@@ -216,11 +296,11 @@ try{
     try{
       await install(page);await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
       await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(300);
-      await page.getByRole('button',{name:/Plan sintético · Integración/}).click();await page.waitForTimeout(300);
+      await page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/}).click();await page.waitForTimeout(300);
       const prior=await page.evaluate(()=>(window as any).pulsoFixture.resizes.length);
       await page.locator('#open-pulso').click();await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).click();
       await page.setViewportSize({width:760,height:640});await page.waitForTimeout(300);
-      await page.getByLabel('Mover Validar la fluidez de las terminales',{exact:true}).selectOption('waiting');
+      await page.getByRole('button',{name:'Mover Validar la fluidez de las terminales',exact:true}).click();await page.getByRole('menuitem',{name:'Mover a En espera',exact:true}).click();
       const undo=page.locator('.pulso-undo');await undo.getByRole('button',{name:'Deshacer cambio de estado',exact:true}).waitFor();
       const waiting=page.getByRole('region',{name:'En espera',exact:true});
       const add=waiting.getByRole('button',{name:'Añadir fase',exact:true});
@@ -234,7 +314,7 @@ try{
       await page.waitForTimeout(300);
       const formBox=await waiting.locator('.pulso-add-form').boundingBox();const currentBanner=await undo.boundingBox();assert.ok(formBox&&currentBanner);
       assert.ok(disjoint(currentBanner,formBox),'undo must not overlap the open inline editor');
-      assert.equal(await undo.isVisible(),true);assert.equal(await waiting.getByRole('button',{name:'Añadir tarjeta',exact:true}).isVisible(),true);
+      assert.equal(await undo.isVisible(),true);assert.equal(await waiting.getByRole('button',{name:'Añadir fase',exact:true}).isVisible(),true);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.resizes.length),prior,'undo and quick-add must not resize the hidden PTY');
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='item_update').length),1);
@@ -247,7 +327,7 @@ try{
     try{
       await install(page,'\x1b]7501;state=blocked\x07\x1b]7501;state=done\x07');await page.goto(url);
       await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
-      const session=page.getByRole('button',{name:/Plan sintético · Integración/});
+      const session=page.locator('#session-list').getByRole('button',{name:/Plan sintético · Integración/});
       assert.doesNotMatch(await session.innerText(),/Trabajando|Solicita atención|Turno finalizado/,'replayed history stays quiet');
       await session.click();
       const before=await page.evaluate(()=>(window as any).pulsoFixture.phase());
@@ -290,6 +370,83 @@ try{
       assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.calls.filter((c:any)=>c.op==='item_update').length),0);assert.deepEqual(errors,[]);
     }finally{await browser.close();}
   });
+  await test(`${engine.name()}: sidebar lists Pulso boards and groups agents by project or by state`,async()=>{
+    const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+    try{
+      await install(page);await page.goto(url);await page.waitForFunction(()=>!(document.querySelector('#open-pulso')as HTMLButtonElement).disabled);
+      // Proyectos: existing reads only; progress is Hecho/total and Pendientes counts unfinished cards.
+      await page.waitForFunction(()=>document.querySelector('#sidebar-project-list button[data-board="plan"] .sidebar-row-meta')?.textContent==='1/4');
+      assert.equal(await page.locator('#sidebar-project-list button[data-board="plan"]').getAttribute('aria-label'),'Abrir tablero Integrar Pulso en Jauria, 1 de 4 hechas');
+      assert.equal(await page.locator('#sidebar-project-list button[data-board=""]').getAttribute('aria-label'),'Abrir tablero Pendientes, 1 sin terminar');
+      assert.equal(await page.locator('#register-project, #new-task, #show-task, #handoff-toggle').count(),0,'Git repositories and tasks were retired');
+      assert.deepEqual(await page.evaluate(()=>[...new Set((window as any).pulsoFixture.calls.map((c:any)=>c.op))].sort()),['items','links','projects']);
+      // Por proyecto is the default: the main session sits under its project, the rest under Sin proyecto.
+      const groupingButton=page.locator('#agent-grouping');
+      await page.waitForFunction(()=>document.querySelector('#agent-grouping')?.getAttribute('data-grouping')==='project');
+      assert.equal(await groupingButton.getAttribute('aria-pressed'),'false');assert.match(await groupingButton.getAttribute('title')??'',/Agrupados por proyecto/);
+      await page.locator('.session-group[data-project="plan"] .session-item[data-session-id="main"]').waitFor();
+      await page.locator('.session-group[data-project="none"] .session-item[data-session-id="related"]').waitFor();
+      assert.deepEqual(await page.locator('#session-list .group-heading > span:first-child').allTextContents(),['Integrar Pulso en Jauria','Sin proyecto']);
+      const related=page.locator('.session-item[data-session-id="related"]');const main=page.locator('.session-item[data-session-id="main"]');
+      assert.equal(Math.round((await related.boundingBox())!.height),30,'one-line 30px agent rows');
+      assert.equal(await related.locator('.agent-indicator').getAttribute('data-shape'),'ring','an open process without a declared state never spins');
+      assert.equal(await related.locator('.session-item-state-label').textContent(),'Abierta');
+      assert.equal(await related.locator('.provider-badge').getAttribute('data-provider'),'codex');
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=working\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='spinner');
+      assert.equal(await main.locator('.agent-indicator').getAttribute('title'),'Trabajando');
+      assert.equal(await main.locator('.session-item-state-label').textContent(),'Trabajando','state is available as text, not only colour');
+      assert.equal(await main.locator('.session-item-duration').textContent(),'<1 min');
+      // Each state has its own shape inside the same 12px box.
+      const box=async()=>main.locator('.session-item-state').evaluate(n=>{const r=n.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)];});
+      const spinnerBox=await box();
+      await page.evaluate(()=>Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>false}));
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=idle\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='check');
+      assert.equal(await main.locator('.agent-indicator svg').count(),1,'finished draws a check mark');
+      assert.deepEqual(await box(),spinnerBox,'the indicator box does not change with the state');
+      if(process.env.PULSO_SCREENSHOT_DIR){const dir=process.env.PULSO_SCREENSHOT_DIR;await mkdir(dir,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.locator('#sidebar').screenshot({path:`${dir}/${engine.name()}-sidebar-finished-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=blocked\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='halo');
+      assert.equal(await main.locator('.agent-indicator svg').count(),0);
+      await page.evaluate(()=>Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>true}));
+      await page.evaluate(()=>(window as any).pulsoFixture.output('\x1b]7501;state=working\x07'));
+      await page.waitForFunction(()=>document.querySelector('.session-item[data-session-id="main"] .agent-indicator')?.getAttribute('data-shape')==='spinner');
+      // Compact header: the search field opens from its button or ⌘K and closes with Escape.
+      assert.equal(await page.locator('#session-search').isVisible(),false);
+      await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.blur());await page.keyboard.press('Meta+k');
+      await page.waitForFunction(()=>document.activeElement?.id==='session-search');
+      assert.equal(await page.locator('#toggle-search').getAttribute('aria-expanded'),'true');
+      await page.keyboard.type('Validación');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===1);
+      await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelectorAll('#session-list .session-item').length===2);
+      assert.equal(await page.locator('#session-search').isVisible(),false);
+      await page.locator('#toggle-search').click();await page.waitForFunction(()=>document.activeElement?.id==='session-search');await page.locator('#toggle-search').click();await page.waitForFunction(()=>(document.querySelector('#session-search-field') as HTMLElement).hidden);assert.equal(await page.locator('#toggle-search').getAttribute('aria-expanded'),'false','the search button also closes an empty field');
+      assert.equal(await page.locator('#new-session').getAttribute('aria-label'),'Nueva sesión');
+      const shots=process.env.PULSO_SCREENSHOT_DIR;
+      if(shots){await mkdir(shots,{recursive:true});for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-project-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      // Por estado keeps Abiertas, reuses the activity sections and is remembered per profile.
+      await groupingButton.click();
+      assert.equal(await groupingButton.getAttribute('aria-pressed'),'true');assert.match(await groupingButton.getAttribute('title')??'',/Agrupados por estado/);
+      await page.locator('.session-group[data-activity="working"] .session-item[data-session-id="main"]').waitFor();
+      assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true');
+      assert.equal(await page.evaluate(()=>localStorage.getItem('jauria:agent-grouping:/synthetic')),JSON.stringify({schemaVersion:1,grouping:'state'}));
+      if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-state-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.reload();await page.waitForFunction(()=>document.querySelector('#agent-grouping')?.getAttribute('aria-pressed')==='true'&&!!document.querySelector('.session-group[data-activity] .session-item'));
+      assert.equal(await page.locator('.session-group[data-project]').count(),0);
+      // A project row opens that board; Pendientes opens the standalone board.
+      await page.waitForFunction(()=>!(document.querySelector('#sidebar-project-list button[data-board="plan"]')as HTMLButtonElement|null)?.disabled);
+      // Keyboard activation keeps focus on the row although the list is rebuilt.
+      await page.locator('#sidebar-project-list button[data-board="plan"]').focus();await page.keyboard.press('Enter');
+      await page.waitForFunction(()=>document.querySelector('.pulso-board')?.getAttribute('data-project-id')==='plan'&&document.querySelector('#sidebar-project-list button[data-board="plan"]')?.getAttribute('aria-current')==='true');
+      assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement|null)?.dataset.board),'plan','focus stays on the activated project row');
+      assert.equal(await page.getByRole('button',{name:'Integrar Pulso en Jauria',exact:true}).getAttribute('aria-current'),'true');
+      if(shots){for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.waitForTimeout(150);await page.screenshot({path:`${shots}/${engine.name()}-sidebar-pulso-${theme}.png`,animations:'disabled'});}await page.evaluate(()=>document.documentElement.dataset.theme='light');}
+      await page.locator('#sidebar-project-list button[data-board=""]').click();
+      await page.waitForFunction(()=>document.querySelector('.pulso-board')?.getAttribute('data-project-id')===''&&document.querySelector('#sidebar-project-list button[data-board=""]')?.getAttribute('aria-current')==='true');
+      assert.equal(await page.evaluate(()=>(window as any).pulsoFixture.inputs.length),0);
+      assert.deepEqual(errors,[]);
+    }finally{await browser.close();}
+  });
   await test(`${engine.name()}: a reported blocker stays visible and reappears after new work`,async()=>{
     const browser=await engine.launch(engine===chromium?{channel:'chrome'}:{});const page=await browser.newPage({viewport:{width:1280,height:820}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     try{
@@ -302,9 +459,15 @@ try{
       await emit('working');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.getAttribute('data-attention')==='false'));
       await emit('blocked');await page.waitForFunction(()=>Array.from(document.querySelectorAll('.session-item')).some(n=>n.textContent?.includes('Plan sintético · Integración')&&n.textContent?.includes('Solicita atención')&&n.getAttribute('data-attention')==='true'));
       assert.equal(await session.getAttribute('data-unseen'),'true');
-      await page.locator('#activity-filter').click();
+      await page.locator('#agent-grouping').click();
+      assert.equal(await page.locator('[data-filter="open"]').getAttribute('aria-pressed'),'true','Por estado stays inside Abiertas');
       await page.locator('.session-group[data-activity="needs"]').waitFor();
-      assert.match(await page.locator('#attention-summary').textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
+      // The priority alert reaches the pane heading, the status bar and the bell's list (no message rail since 1.4).
+      assert.equal(await page.locator('.pane').first().locator('.session-state').textContent(),'Solicita atención');
+      assert.equal(await page.locator('#status-needs-text').textContent(),'1 te necesita');
+      await page.locator('#session-alerts').click();
+      assert.match(await page.locator('#attention-list .alerts-row').first().textContent() ?? '', /Plan sintético · Integración.*Solicita atención/);
+      await page.keyboard.press('Escape');
       const screenshotDir=process.env.PULSO_SCREENSHOT_DIR;
       if(screenshotDir){
         await mkdir(screenshotDir,{recursive:true});

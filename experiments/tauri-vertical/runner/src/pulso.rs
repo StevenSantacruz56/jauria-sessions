@@ -1,6 +1,8 @@
 //! Private, independent Pulso service. No core-store or process-launch operations.
 #[path = "pulso_store.rs"]
 mod store;
+/// Stable code refusing writes to an archived project (translated by the UI and the MCP).
+pub(crate) const PROJECT_ARCHIVED: &str = store::PROJECT_ARCHIVED;
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -19,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -42,6 +44,8 @@ struct Shared {
     tokens: Mutex<HashMap<String, (String, u64)>>,
     revoked: Mutex<HashMap<String, u64>>,
     lookup: SessionLookup,
+    // Same counter as `State.store.1`; read without the state mutex or SQLite.
+    revision: Arc<AtomicU64>,
     quitting: AtomicBool,
     listening: AtomicBool,
     auto_enabled: AtomicBool,
@@ -121,6 +125,7 @@ impl Service {
             return Err(e);
         }
         owned.push(identity(&socket)?);
+        let revision = store.1.clone();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 store,
@@ -129,6 +134,7 @@ impl Service {
             tokens: Mutex::new(HashMap::new()),
             revoked: Mutex::new(HashMap::new()),
             lookup,
+            revision,
             quitting: AtomicBool::new(false),
             listening: AtomicBool::new(true),
             auto_enabled: AtomicBool::new(true),
@@ -273,6 +279,15 @@ impl Service {
     }
     pub fn set_auto_enabled(&self, enabled: bool) {
         self.shared.auto_enabled.store(enabled,Ordering::Release);
+    }
+    /// Last committed `meta.revision`, published by the store after COMMIT
+    /// while the service mutex is held. Covers UI and MCP writes alike: both
+    /// reach this process through the Pulso socket. Never touches SQLite.
+    pub fn revision(&self) -> u64 { self.shared.revision.load(Ordering::Acquire) }
+    #[cfg(test)]
+    pub(crate) fn with_store_for_test<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> Result<T> {
+        let state = self.shared.state.lock().map_err(|_| anyhow::anyhow!("Pulso unavailable"))?;
+        Ok(f(&state.store.0)?)
     }
     pub fn available(&self)->bool { self.shared.listening.load(Ordering::Acquire) && !self.shared.quitting.load(Ordering::Acquire) }
     pub fn shutdown(&self) {
@@ -555,7 +570,7 @@ impl Shared {
 }
 fn operate(s: &mut store::Store, p: &mut store::Principal, op: &str, a: &Value) -> Result<Value> {
     match op {
-        "board" | "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
+        "board" | "sidebar_summary" | "revision" | "projects" | "project" | "items" | "item" | "links" | "activity" | "checkpoint_history" => {
             s.read(p, op, a)
         }
         "project_create" | "project_update" | "item_create" | "item_update" | "link"
@@ -675,6 +690,8 @@ fn public_error(e: &anyhow::Error) -> String {
         "exactly one link target required",
         "service stopped",
         "limit must be 1..100",
+        "invalid status",
+        store::PROJECT_ARCHIVED,
     ] {
         if text == safe {
             return safe.into();
@@ -799,6 +816,10 @@ fn remove_handle(dir: &Path, sid: &str, token: &str) {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    #[test]
+    fn archived_project_refusal_reaches_the_ui_and_agents_verbatim() {
+        assert_eq!(public_error(&anyhow::anyhow!(PROJECT_ARCHIVED)), PROJECT_ARCHIVED);
+    }
     struct Fixture {
         _root: TempDir,
         data: PathBuf,
@@ -1363,4 +1384,41 @@ mod tests {
         assert!(f.agent(&token,"board",json!({"projectId":"board"})).is_err());
     }
 
+    #[test]
+    fn sidebar_summary_is_ui_only_over_the_socket() {
+        use std::io::BufRead;
+        let f=Fixture::new();
+        f.ui("project_create",json!({"id":"p","requestId":"p","title":"P"})).unwrap();
+        let token=f.grant();
+        let summary=f.ui("sidebar_summary",json!({})).unwrap();
+        assert_eq!(summary["projects"][0]["id"],"p");
+        assert_eq!(f.agent(&token,"sidebar_summary",json!({})).unwrap_err().to_string(),"unauthorized");
+        assert_eq!(f.agent(&token,"sidebar_summary",json!({"ifRevision":summary["revision"]})).unwrap_err().to_string(),"unauthorized");
+        assert_eq!(f.ui("sidebar_summary",json!({"projectId":"p"})).unwrap_err().to_string(),"unknown field");
+        // Over the wire the agent sees only the public error.
+        let mut stream=UnixStream::connect(f.sock.join("pulso.sock")).unwrap();
+        writeln!(stream,"{}",json!({"version":1,"token":token,"op":"sidebar_summary","args":{}})).unwrap();
+        let mut line=String::new();std::io::BufReader::new(stream).read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(),json!({"ok":false,"error":"unauthorized"}));
+    }
+
+
+    /// Every Pulso payload the app sends (desktop/tests/fixtures/rpc-contract.json)
+    /// is accepted by the runner: run in order on a fresh store, each one succeeds
+    /// or, for the fixed synthetic revisions, fails only the revision check
+    /// (which runs after every field was parsed).
+    #[test]
+    fn every_pulso_payload_the_app_sends_is_accepted() {
+        let f = Fixture::new();
+        let contract: Value = serde_json::from_str(include_str!("../../desktop/tests/fixtures/rpc-contract.json")).unwrap();
+        let mut failures = Vec::new();
+        for entry in contract["pulso"].as_array().unwrap() {
+            let op = entry["op"].as_str().unwrap();
+            match f.ui(op, entry["args"].clone()) {
+                Err(error) if error.to_string() != "revision conflict" => failures.push(format!("{op} {}: {error}", entry["args"])),
+                _ => {}
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

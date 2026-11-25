@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{collections::{HashMap,HashSet}, io::Read, path::PathBuf, sync::{Arc, Mutex,
-    atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender, TryRecvError}},
+    atomic::{AtomicBool, AtomicU32, Ordering}, mpsc::{self, Receiver, SyncSender, TryRecvError}},
     time::{Duration, Instant}};
 use crate::{codex_protocol::{self as codec, Approval, ApprovalKind, Incoming, RpcId},
     codex_store as ledger, codex_transport::Process, storage::Store};
@@ -14,10 +14,15 @@ pub enum Intent {
     Permission { request: Value, decision: String },
 }
 #[derive(Clone)]
-pub struct Control { pub stop: Arc<AtomicBool>, pub ready:Arc<AtomicBool>, pub tx: SyncSender<Intent>, pub generation: i64 }
+pub struct Control { pub stop: Arc<AtomicBool>, pub ready:Arc<AtomicBool>, pub tx: SyncSender<Intent>, pub generation: i64,
+    /// Runner attention ledger; told only about newly inserted permission requests.
+    pub attention: Option<Arc<crate::agent_attention::Attention>>,
+    /// PID of the provider process last spawned for this session (0: none).
+    /// A label for telemetry attribution only; never signal or trust it.
+    pub pid: Arc<AtomicU32> }
 pub fn channel(generation: i64) -> (Control, Receiver<Intent>) {
     let (tx, rx) = mpsc::sync_channel(32);
-    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation }, rx)
+    (Control { stop: Arc::new(AtomicBool::new(false)), ready:Arc::new(AtomicBool::new(false)), tx, generation, attention: None, pid: Arc::new(AtomicU32::new(0)) }, rx)
 }
 fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
     m.lock().map_err(|_| anyhow::anyhow!("Actor mutex poisoned"))
@@ -73,7 +78,9 @@ fn spawn(admission: &Mutex<()>, control: &Control, cwd: &std::path::Path,
     names: Option<&[String]>, pulso: Option<&crate::pulso_mcp_config::PulsoMcp>) -> Result<Process> {
     let _guard = lock(admission)?;
     ensure!(!control.stop.load(Ordering::Acquire), "Actor stopped before fork");
-    match names { Some(names) => Process::codex_with_pulso(cwd, names, pulso), None => Process::codex(cwd) }
+    let process = match names { Some(names) => Process::codex_with_pulso(cwd, names, pulso), None => Process::codex(cwd) }?;
+    control.pid.store(process.pid(), Ordering::Release);
+    Ok(process)
 }
 fn boot_rpc(p: &mut Process, c: &Control, end: Instant, id: u64, method: &str, params: Value) -> Result<Value> {
     ensure!(Instant::now() < end && !c.stop.load(Ordering::Acquire), "Boot stopped or expired");
@@ -295,8 +302,10 @@ impl Actor<'_> {
         ensure!(serde_json::to_vec(&payload)?.len() <= 16*1024, "Approval presentation exceeds 16 KiB");
         let mut row = t.identity.clone(); row["id"] = json!(rid); row["nativeRpcId"] = rpc_value(id);
         row["method"] = json!(method); row["payload"] = payload;
-        ledger::record_request(&db.0,&row)?;
+        let (_,inserted)=ledger::record_request_reporting(&db.0,&row)?;
         drop(db);
+        // Committed (autocommit savepoint) and new: a deduplicated retry is not an alert.
+        if inserted { if let Some(attention)=&self.control.attention { attention.permission(self.sid,&rid,self.control.generation); } }
         self.approvals.insert(rid.clone(),a);
         self.event(json!({"method":"runtime/approval","params":{"id":rid,"method":method,"payload":row["payload"]}}))
     }
@@ -321,8 +330,11 @@ impl Actor<'_> {
                 let status = text(&v["turn"],"status")?;
                 ensure!(["completed","failed","interrupted"].contains(&status), "Nonterminal completion");
                 let t = self.turn.as_mut().unwrap();
+                let first = !t.terminal;
                 let mut end = t.identity.clone(); end["nativeTurnId"] = json!(native); end["status"] = json!(status);
                 ledger::finish_turn(&lock(self.db)?.0,&end)?; t.terminal = true; self.approvals.clear();
+                // Committed end of turn: «Turno terminado» for whoever is not looking (once per turn).
+                if first { if let Some(attention)=&self.control.attention { attention.structured_turn_finished(self.sid,status); } }
                 // Native completion is authoritative even when an interrupt ACK
                 // is late or rejects an already-finished turn. Retire exact IDs
                 // so a late reply cannot affect any subsequent turn.
@@ -419,8 +431,11 @@ pub fn run(db: Arc<Mutex<Store>>, admission: Arc<Mutex<()>>, control: Control,
     let mut store = lock(&db)?;
     if wait_confirmed { ledger::close_session(&store.0,&session_id,control.generation)?; }
     let stopped = result.is_ok() && control.stop.load(Ordering::Acquire);
-    store.state(&session_id,if !wait_confirmed || (result.is_err() && thread_requested){"needs_attention"}else if result.is_err(){"failed"}else if stopped{"stopped"}else{"exited"},
+    let final_status=if !wait_confirmed || (result.is_err() && thread_requested){"needs_attention"}else if result.is_err(){"failed"}else if stopped{"stopped"}else{"exited"};
+    store.state(&session_id,final_status,
         json!({"waitConfirmed":wait_confirmed,"generation":control.generation,"fault":result.is_err(),"reason":result.as_ref().err().map(|error|error.to_string().chars().take(240).collect::<String>())}))?;
+    drop(store);
+    if let Some(attention)=&control.attention { attention.structured_ended(&session_id,final_status); }
     ensure!(wait_confirmed, "Owned process quiescence unconfirmed; retain resource fence");
     result
 }
@@ -543,6 +558,21 @@ mod tests {
         assert_eq!(ledger::get_session(&lock(&db).unwrap().0,"s").unwrap()["status"],"idle");
         assert!(a.response(RpcId::Number(5),Some(json!({"turn":{"id":"native"}}))).is_err());
         assert!(a.bind("other").is_err());
+    }
+    #[test] fn structured_turn_completion_is_one_finished_alert_and_a_cancel_is_none() {
+        use crate::agent_attention::{Attention, Config, system_clock};
+        for (status, alerts) in [("completed", 1), ("failed", 1), ("interrupted", 0)] {
+            let (db,mut c,id)=fixture();
+            let attention=Attention::open(None,"g".into(),&[],system_clock(),Config::default());
+            c.attention=Some(attention.clone());
+            let mut a=actor(&db,&c,id);
+            a.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"native","status":status}})).unwrap();
+            // A repeated delivery of the same completion never raises a second alert.
+            let _=a.notification("turn/completed",&json!({"threadId":"thread","turn":{"id":"native","status":status}}));
+            let seq=attention.snapshot("s").map_or(0,|v|v["alertSeq"].as_u64().unwrap());
+            assert_eq!(seq,alerts,"{status}");
+            if alerts==1 { assert!(attention.snapshot("s").unwrap()["pending"]["finished"].is_object()); }
+        }
     }
     #[test] fn wrong_thread_and_oversized_output_fail_without_event_loss() {
         let (db,c,id)=fixture(); let mut a=actor(&db,&c,id); a.bind("native").unwrap();

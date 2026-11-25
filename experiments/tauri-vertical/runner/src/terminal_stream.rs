@@ -15,7 +15,7 @@ use std::{
 
 // Leave room for the authenticated RPC result wrapper and trailing newline.
 const WIRE: usize = 256 * 1024 - 64;
-const CHUNK: usize = 12 * 1024;
+pub const CHUNK: usize = 12 * 1024;
 const BATCH: usize = 64 * 1024;
 const LATENCY: Duration = Duration::from_millis(250);
 const RETRY: Duration = Duration::from_secs(2);
@@ -128,6 +128,9 @@ impl TerminalStreams {
 
     fn configured(path: &Path, generation: String, config: Config) -> Result<Arc<Self>> {
         ensure!(!generation.is_empty() && generation.len() <= 256, "Invalid terminal generation");
+        // Archive writer for native session rows and their events only. It has
+        // never enabled foreign keys; enabling them here would start enforcing
+        // constraints this connection did not enforce before.
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_millis(50))?;
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -176,15 +179,20 @@ impl TerminalStreams {
         Ok(())
     }
 
-    pub fn output(&self, id: &str, bytes: &[u8]) {
+    /// Returns, per CHUNK of `bytes`, the frame index it was published as
+    /// (None once the session finished or is unknown). Attention signals use
+    /// it to point at the frame that completed them.
+    pub fn output(&self, id: &str, bytes: &[u8]) -> Vec<Option<u64>> {
         // Even a caller violating the normal 12 KiB read contract cannot create
         // a single oversized live/archive frame.
+        let mut indices = Vec::with_capacity(bytes.len().div_ceil(CHUNK));
         for chunk in bytes.chunks(CHUNK) {
             let data = json!(STANDARD.encode(chunk));
             let mut m = self.shared.lock();
-            publish(&self.shared, &mut m, id, "output", data, chunk.len(), false);
+            indices.push(publish(&self.shared, &mut m, id, "output", data, chunk.len(), false));
             self.shared.wake.notify_one();
         }
+        indices
     }
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) {
@@ -435,9 +443,9 @@ fn evict(m: &mut Memory, id: &str) {
         m.ring_order.remove(&f.serial);
     }
 }
-fn publish(shared: &Shared, m: &mut Memory, id: &str, kind: &str, data: Value, raw: usize, barrier: bool) {
-    let Some(s) = m.sessions.get_mut(id) else { return };
-    if s.finished { return; }
+fn publish(shared: &Shared, m: &mut Memory, id: &str, kind: &str, data: Value, raw: usize, barrier: bool) -> Option<u64> {
+    let Some(s) = m.sessions.get_mut(id) else { return None };
+    if s.finished { return None; }
     s.last += 1;
     if barrier { s.revision += 1; }
     m.serial += 1;
@@ -460,14 +468,15 @@ fn publish(shared: &Shared, m: &mut Memory, id: &str, kind: &str, data: Value, r
         if s.missing.is_none() { lose(s, frame.index, reason); }
     }
     if m.stop.is_some() && s.missing.is_none() { lose(s, frame.index, "shutdown"); }
-    if s.missing.is_some() { return; }
+    let index = frame.index;
+    if s.missing.is_some() { return Some(index); }
     let c = &shared.config;
     if m.pending_bytes + frame.bytes > c.pending_bytes || m.pending_frames >= c.pending_frames ||
         s.pending_bytes + frame.bytes > c.session_pending_bytes || s.pending_frames >= c.session_pending_frames {
         let first = s.pending.front().map_or(frame.index, |f| f.index);
         lose(s, first, "queue_overflow");
         discard(m, id);
-        return;
+        return Some(index);
     }
     s.pending_bytes += frame.bytes;
     s.pending_frames += 1;
@@ -478,6 +487,7 @@ fn publish(shared: &Shared, m: &mut Memory, id: &str, kind: &str, data: Value, r
     s.since.get_or_insert_with(Instant::now);
     s.barrier |= barrier;
     // Geometry persists at the next lifecycle checkpoint, not every resize.
+    Some(index)
 }
 
 struct Batch { id: String, frames: Vec<Arc<Frame>>, payload: Value, encoded: usize }

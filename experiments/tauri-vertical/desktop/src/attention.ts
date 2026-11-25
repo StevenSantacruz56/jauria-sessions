@@ -1,8 +1,15 @@
-import { matchesSession, statusLabel, type WorkspaceSession } from './workspace';
+import { statusLabel, type WorkspaceSession } from './workspace';
+import { interruptionDetail, isClosed, isLiveStatus, lifecycleIncident } from './session-lifecycle';
+import { endReason, exitFailure } from './session-activity';
 import type { ProgramState } from './program-status';
-type Session = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean };
+export type AttentionSession = WorkspaceSession & { transport?: string; codex?: { generation: number }; programState?: ProgramState | null; programFinishedUnseen?: boolean; detail?: { [key: string]: unknown } | null };
+type Session = AttentionSession;
 type Observation = { generation: number; count: number; keys: string[]; stale: boolean };
-export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[] };
+/** `urgent`: a new cause that needs the person although its key says «ended» (a failed process): macOS «Necesita tu atención». */
+export type Attention = { id: string; reason: string; unseen: boolean; stale: boolean; keys: string[]; unseenKeys?: string[]; urgent?: boolean };
+/** A cause owned by another source (runner 1.4 E): its own unseen flag, never the window baseline. Full key, empty reason = no text. */
+export type ExternalCause = { key: string; reason: string; unseen: boolean; urgent?: boolean };
+export type ExternalCauses = { causes(session: Session): ExternalCause[]; permissionsSeen?: boolean };
 
 /** Window-local observations. Acknowledgement never changes custody or permissions. */
 export class SessionAttention {
@@ -12,6 +19,30 @@ export class SessionAttention {
   private initialized = new Set<string>();
   private permissionBaseline = new Map<string, number>();
   private ended = new Set<string>();
+  /** Interrupted/failed causes the person saw (id → that status): they leave the alerts (1.4.0). */
+  private acknowledged = new Map<string, string>();
+  /** Dismissed or continued sessions (view metadata): their interruption is never an alert. */
+  retired: (id: string) => boolean = () => false;
+  /** Sessions the person is terminating (Terminar): their `stopped` end is their own action, not an alert. */
+  stopRequested: (id: string) => boolean = () => false;
+  /** Interrupted/failed incidents seen in earlier openings (per profile); null = never stored (quiet baseline). */
+  private stored: Map<string, string> | null = null;
+  private saveStored: (incidents: Map<string, string>) => void = () => {};
+  /** First opening of this profile with the memory: its first snapshot becomes the stored baseline. */
+  private baselineIncidents = false;
+  /**
+   * Profile memory of seen incidents. With it, an interruption that happened while
+   * the window was closed is a new alert, not part of the quiet first snapshot.
+   */
+  restoreIncidents(stored: Map<string, string> | null, save: (incidents: Map<string, string>) => void) {
+    this.stored = stored; this.saveStored = save; this.baselineIncidents = stored === null;
+    if (stored) for (const [id, status] of stored) this.acknowledged.set(id, status);
+  }
+  private remember(id: string, status: string) {
+    const next = new Map(this.stored ?? []); next.delete(id); next.set(id, status);
+    while (next.size > 2000) next.delete(next.keys().next().value!);
+    this.stored = next; this.saveStored(next);
+  }
 
   consumeActivity(id: string): boolean { return this.signals.delete(id); }
   clearProgram(id:string):boolean {const values=this.signals.get(id);const changed=values?.delete('program')??false;if(values&&!values.size)this.signals.delete(id);return changed;}
@@ -23,46 +54,89 @@ export class SessionAttention {
     values.add(kind); this.signals.set(id, values);
   }
   invalidate() { for (const p of this.permissions.values()) p.stale = true; }
-  list(sessions: readonly Session[]): Attention[] {
+  pendingPermissions(id: string): number { return this.permissions.get(id)?.count ?? 0; }
+  list(sessions: readonly Session[], external?: ExternalCauses): Attention[] {
     const next = new Set<string>();
     const result: Attention[] = [];
     const ids = new Set(sessions.map(s => s.id));
+    const baseline: [string, string][] = [];
     for (const id of this.permissions.keys()) if (!ids.has(id)) this.permissions.delete(id);
     for (const s of sessions) {
       const reasons: string[] = [], keys: string[] = [];
-      const add = (key: string, reason: string) => { keys.push(`${s.id}:${key}`); reasons.push(reason); };
-      if (matchesSession(s, 'attention', '')) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : statusLabel(s.status));
+      const outside = new Map<string, boolean>();
+      const add = (key: string, reason: string) => { keys.push(`${s.id}:${key}`); if (reason) reasons.push(reason); };
+      // An interruption or failure is an alert until it is seen or dismissed; it then lives in
+      // the sidebar's Interrumpidas. Custody in doubt (needs_attention) stays until its source changes.
+      const ended = s.status === 'interrupted' || s.status === 'failed';
+      if (this.acknowledged.has(s.id) && this.acknowledged.get(s.id) !== s.status) this.acknowledged.delete(s.id);
+      if (lifecycleIncident(s.status) && !(ended && (this.retired(s.id) || this.acknowledged.get(s.id) === s.status))) add(`state:${s.status}`, s.status === 'needs_attention' ? 'Estado de sesión incierto · revisar custodia o recuperación' : ended ? `${statusLabel(s.status)} · ${interruptionDetail(s.status, s.detail)}` : statusLabel(s.status));
       const p = s.transport === 'app-server' ? this.permissions.get(s.id) : undefined;
       const stale = !!p && (p.stale || p.generation !== s.codex?.generation);
       if (stale && !p?.count) add('unconfirmed', 'Estado de permisos sin confirmar');
+      // With the runner, «arrived and not seen» is its pending.permission, not a window diff.
+      if (p?.count && external?.permissionsSeen) this.seen.add(`${s.id}:permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`);
       if (p?.count) add(`permissions:${p.generation}:${p.count}:${JSON.stringify(p.keys)}`, `${p.count} ${p.count === 1 ? 'permiso pendiente' : 'permisos pendientes'}${p.generation !== s.codex?.generation ? ' · generación anterior, caducado' : stale ? ' · sin confirmar' : ''}`);
       if (s.programState === 'blocked' || s.programState === 'error') add('program:needs', s.programState === 'error' ? 'El agente informó un error' : 'El agente solicita atención');
       if (s.programFinishedUnseen) add('program:done', 'El agente terminó su turno');
-      for (const kind of this.signals.get(s.id) ?? []) add(`signal:${kind}`, kind === 'ended' ? 'El proceso terminó' : 'La sesión emitió una alerta');
+      let urgent = false;
+      for (const kind of this.signals.get(s.id) ?? []) {
+        if (kind === 'ended' && exitFailure(s).failed) urgent = true;
+        add(`signal:${kind}`, kind === 'ended' ? endReason(s) : 'La sesión emitió una alerta');
+      }
+      for (const cause of external?.causes(s) ?? []) { keys.push(cause.key); outside.set(cause.key, cause.unseen); if (cause.reason) reasons.push(cause.reason); if (cause.urgent && cause.unseen) urgent = true; }
       for (const key of keys) next.add(key);
-      // Initial lifecycle snapshot is quiet, but remains available in the list.
-      if (!this.initialized.has(s.id)) { for (const key of keys) this.seen.add(key); this.initialized.add(s.id); }
-      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: keys.some(k => !this.seen.has(k)), stale, keys });
+      // Initial lifecycle snapshot is quiet, but remains available in the list. Exception: with the
+      // profile's memory of seen incidents, an interruption/failure not in it happened while no window
+      // was looking (UI closed, runner crash): it is a new alert.
+      if (!this.initialized.has(s.id)) {
+        for (const key of keys) {
+          if (outside.has(key)) continue;
+          const incident = /:state:(interrupted|failed)$/.exec(key);
+          if (incident && key === `${s.id}:state:${incident[1]}`) {
+            if (this.stored !== null && !this.baselineIncidents) continue;
+            baseline.push([s.id, incident[1]]);
+          }
+          this.seen.add(key);
+        }
+        this.initialized.add(s.id);
+      }
+      const unseenKeys = keys.filter(k => outside.get(k) ?? !this.seen.has(k));
+      // Uncertainty is per cause: a stale permission read only makes the row stale when nothing
+      // else in it is new (a runner alert or a lifecycle incident stays a confirmed alert).
+      const uncertain = (k: string) => k === `${s.id}:unconfirmed` || k.startsWith(`${s.id}:permissions:`);
+      if (keys.length) result.push({ id: s.id, reason: reasons.join(' · '), unseen: unseenKeys.length > 0, stale: stale && unseenKeys.every(uncertain), keys, unseenKeys, ...(urgent ? { urgent } : {}) });
     }
     for (const key of this.seen) if (!next.has(key)) this.seen.delete(key);
+    if (this.baselineIncidents && sessions.length) {
+      // First run with the memory: what exists now is the baseline (never a burst of old incidents).
+      this.baselineIncidents = false;
+      const stored = new Map(this.stored ?? []);
+      for (const [id, status] of baseline) stored.set(id, status);
+      this.stored = stored; this.saveStored(stored);
+    }
     return result;
   }
   see(items: readonly Attention[]) {
     for (const item of items) {
-      for (const key of item.keys) this.seen.add(key);
+      for (const key of item.keys) {
+        this.seen.add(key);
+        const lifecycle = /:state:(interrupted|failed)$/.exec(key);
+        if (lifecycle && key === `${item.id}:state:${lifecycle[1]}`) { this.acknowledged.set(item.id, lifecycle[1]); this.remember(item.id, lifecycle[1]); }
+      }
       // Activity is consumed by viewing; lifecycle and permission causes stay listed.
       this.signals.delete(item.id);
     }
   }
   seeProgram(id: string) { this.seen.add(`${id}:program:needs`); }
   observeEnd(id: string, previous: string, status: string) {
-    if (['running', 'starting'].includes(previous) && ['exited', 'stopped', 'failed'].includes(status) && !this.ended.has(id)) {
-      this.ended.add(id); this.signal(id, 'ended');
+    if (isLiveStatus(previous) && (status === 'exited' || status === 'stopped' || status === 'failed') && !this.ended.has(id)) {
+      this.ended.add(id);
+      if (!(status === 'stopped' && this.stopRequested(id))) this.signal(id, 'ended');
     }
   }
   async poll(sessions: readonly Session[], rpc: (op: string, args: { id: string }) => Promise<unknown>, current: () => boolean): Promise<void> {
     const queue = sessions.filter(s => s.transport === 'app-server' &&
-      (!['exited', 'stopped', 'released'].includes(s.status) || (this.permissions.get(s.id)?.count ?? 0) > 0));
+      (!(isClosed(s.status) && s.status !== 'failed' && s.status !== 'interrupted') || (this.permissions.get(s.id)?.count ?? 0) > 0));
     let index = 0;
     const worker = async () => { while (index < queue.length && current()) {
       const s = queue[index++];

@@ -11,7 +11,7 @@ concurrency:
 jobs:
   native:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -22,5 +22,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action snapshot
         with:
           toolchain: stable
-      - name: Build frontend, test disposable fixtures, compile native app
+      # Browser suites use the runner image's Google Chrome (channel: chrome)
+      # and Playwright WebKit, installed here at the version package-lock pins.
+      - name: Install Playwright WebKit for the browser suites
+        working-directory: experiments/tauri-vertical/desktop
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install webkit
+      - name: Build frontend, run unit and browser suites, test disposable fixtures, compile native app
         run: python3 scripts/build-macos.py

@@ -8,9 +8,19 @@ pub fn preview(store: &Store) -> Result<Value> {
     let states=["starting","running","exited","stopped","failed","interrupted","needs_attention","released"];
     let counts=kinds.iter().map(|kind|json!({"kind":kind,"count":sessions.iter().filter(|s|s["kind"]==*kind).count()})).collect::<Vec<_>>();
     let states=states.iter().map(|state|json!({"state":state,"count":sessions.iter().filter(|s|s["status"]==*state).count()})).collect::<Vec<_>>();
+    // Read-only counts of Git repository/task rows kept from versions before
+    // 1.4; the feature is retired. Kept to preserve the export format.
     let tasks:i64=store.0.query_row("SELECT count(*) FROM tasks",[],|r|r.get(0))?;
     let projects:i64=store.0.query_row("SELECT count(*) FROM projects",[],|r|r.get(0))?;
-    Ok(json!({"product":"Jauria","diagnosticSchemaVersion":1,"storageSchemaVersion":store.0.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))?,"runnerVersion":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"sessions":{"total":sessions.len(),"byKind":counts,"byState":states},"projects":projects,"tasks":tasks,"excludes":["terminal output","credentials","environment","paths","titles","notes","commands","errors","process identifiers"]}))
+    Ok(json!({"product":"Jauria","diagnosticSchemaVersion":1,"storageSchemaVersion":store.0.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))?,"runnerVersion":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"sessions":{"total":sessions.len(),"byKind":counts,"byState":states},"projects":projects,"tasks":tasks,"telemetry":telemetry_method(),"excludes":["terminal output","credentials","environment","paths","titles","notes","commands","errors","process identifiers"]}))
+}
+/// How «Uso y recursos» measures, for support. Kept out of the view itself.
+fn telemetry_method() -> Value {
+    json!({"processSampler":if cfg!(target_os="macos"){"proc_pid_rusage_v0"}else{"unsupported"},
+        "memory":"resident bytes (RSS) per process, summed; shared pages may count more than once",
+        "cpu":"interval average between polls; 100 % = one core",
+        "scope":"runner and same-user descendants (grouped by session leader); window process, its children and kernel-attributed helpers (responsible PID)",
+        "quotaSources":{"codex":"account/rateLimits/read (on demand)","claude":"claude/statusline (cached by sessions)"}})
 }
 #[cfg(test)]mod tests {
     use super::*;

@@ -6,27 +6,53 @@ export type AppSettings = {
   maxConcurrentSessions: number;
   maxSupportedSessions: number;
   pulsoAutoAccess?: boolean;
+  /** «Avisos de Claude Code y Codex» (runner with provider hooks); absent on older runners. */
+  providerSignals?: boolean;
   warning?: string | null;
 };
+export type Grouping = 'project' | 'state';
 
 type Options = {
   permissions?: PermissionsOptions;
+  /** Moved into «Avisos», keeping IDs and listeners (the macOS notifications control). */
   notificationControls?: HTMLElement;
-  onOpenAttention?: () => void;
-  canOpenAttention?: () => boolean;
-  hasAttention?: () => boolean;
+  /** Moved into «Acerca de y diagnóstico», keeping IDs and listeners (versions, restart, CLI check, diagnostic). */
+  aboutControls?: HTMLElement;
   read: () => Promise<AppSettings>;
   save: (limit: number, pulsoAutoAccess?: boolean) => Promise<AppSettings>;
   getTheme: () => string;
   setTheme: (theme: string) => void;
+  /** Terminal font size, per profile, applied at once (one resize per terminal). */
+  terminalFont?: { get: () => number; set: (size: number) => void; min: number; max: number; default: number };
+  /** Agentes grouping, per profile (the same preference as the sidebar button). */
+  grouping?: { get: () => Grouping; set: (value: Grouping) => void };
+  /** Restore the sidebar width, the Proyectos/Agentes split and unfold both sections. */
+  resetSidebar?: () => void;
+  /** Sends set_provider_signals; the answer is the runner's settings. */
+  saveProviderSignals?: (enabled: boolean) => Promise<AppSettings>;
+  /** Opens the Notifications pane of System Settings (fixed, bridge command). */
+  openNotificationSettings?: () => Promise<void>;
   version: string;
   canEdit: () => boolean;
   onSaved: (settings: AppSettings) => void;
 };
 
+/**
+ * `set_settings` arguments as the runner's settingsVersion expects them: 2 adds
+ * `pulsoAutoAccess` (always a boolean when present), 1 takes only the limit.
+ * tests/rpc-contract.test.ts checks this against the shared contract table.
+ */
+export function settingsArgs(settingsVersion: 1 | 2, maxConcurrentSessions: number, pulsoAutoAccess?: boolean): { maxConcurrentSessions: number; pulsoAutoAccess?: boolean } {
+  return settingsVersion === 2 && typeof pulsoAutoAccess === 'boolean' ? { maxConcurrentSessions, pulsoAutoAccess } : { maxConcurrentSessions };
+}
+
 let instance = 0;
 const themes = ['system', 'light', 'dark'];
 const themeValue = (value: string) => themes.includes(value) ? value : 'system';
+const themeLabel: Record<string, string> = { system: 'Sistema', light: 'Clara', dark: 'Oscura' };
+/** Automatic Pulso access is offered when the runner reports it (settingsVersion 2+), whatever the file schema. */
+const hasPulso = (settings: AppSettings | null | undefined) => typeof settings?.pulsoAutoAccess === 'boolean';
+const sessionsLabel = (n: number) => `${n} ${n === 1 ? 'sesión' : 'sesiones'}`;
 
 function checked(settings: AppSettings): AppSettings {
   if (!settings || !Number.isInteger(settings.schemaVersion) || settings.schemaVersion < 1
@@ -39,8 +65,16 @@ function checked(settings: AppSettings): AppSettings {
   return settings;
 }
 
-/** The parent owns persistence, runner capability detection and applying themes.
- * Mounting and opening only construct UI and read settings; neither saves.
+/**
+ * Configuración. One saving model: every option applies as soon as it changes
+ * and the footer confirms it («Guardado…»); there is no Guardar button and no
+ * unsaved state. Appearance, terminal font, grouping and the sidebar layout are
+ * local view preferences. The session limit and automatic Pulso access are
+ * runner settings: a change is sent at once (both keys, as settingsVersion
+ * expects), changes made while one is in flight are sent once after it, and a
+ * failure puts the control back on the runner's value and says so. Manual
+ * Pulso access keeps its explicit buttons. The parent owns persistence,
+ * capability detection and applying themes; mounting and opening never save.
  */
 export function mountSettings(options: Options): {
   open: (section?: 'permissions', context?: PermissionsContext) => void;
@@ -59,98 +93,153 @@ export function mountSettings(options: Options): {
   const title = node('h2', 'Configuración'); title.id = `${prefix}-title`; title.tabIndex = -1;
   dialog.setAttribute('aria-labelledby', title.id);
   const headingCopy = node('div');
-  headingCopy.append(title, node('p', 'Apariencia, sesiones y acceso automático a Pulso: pulsa Guardar. Los permisos manuales y avisos se aplican al momento.'));
+  headingCopy.append(title, node('p', 'Los cambios se aplican y se guardan al momento.'));
   heading.append(headingCopy);
-  const general = node('section', '', 'settings-dialog-section');
-  const generalTitle = node('h3', 'General'); generalTitle.id = `${prefix}-general`;
-  general.setAttribute('aria-labelledby', generalTitle.id);
-  const appearance = node('div', '', 'settings-dialog-row');
-  const themeLabel = node('label', 'Apariencia');
-  const theme = node('select'); theme.id = `${prefix}-theme`; themeLabel.htmlFor = theme.id;
-  for (const [value, label] of [['system', 'Sistema'], ['light', 'Clara'], ['dark', 'Oscura']]) {
-    const option = node('option', label); option.value = value; theme.append(option);
+  const section = (name: string, key: string) => {
+    const el = node('section', '', `settings-dialog-section settings-${key}`);
+    const h = node('h3', name); h.id = `${prefix}-${key}`; el.setAttribute('aria-labelledby', h.id); el.append(h); return el;
+  };
+  // Row: label and one line saying what changing it does, the control on the right.
+  const row = (label: HTMLElement, help: HTMLElement | null, control: HTMLElement) => {
+    const wrap = node('div', '', 'settings-dialog-row'); const copy = node('div', '', 'settings-row-copy');
+    copy.append(label); if (help) copy.append(help); wrap.append(copy, control); return wrap;
+  };
+  const help = (text: string, cls = 'settings-row-help') => node('p', text, cls);
+  const labelled = (control: HTMLElement & { id: string }, text: string, key: string, describedBy?: HTMLElement) => {
+    control.id = `${prefix}-${key}`; const label = node('label', text); label.htmlFor = control.id;
+    if (describedBy) { describedBy.id = `${control.id}-help`; control.setAttribute('aria-describedby', describedBy.id); }
+    return label;
+  };
+  const select = (entries: [string, string][]) => { const el = node('select'); for (const [value, text] of entries) { const o = node('option', text); o.value = value; el.append(o); } return el; };
+
+  // Apariencia
+  const appearance = section('Apariencia', 'appearance');
+  const theme = select([['system', 'Sistema'], ['light', 'Clara'], ['dark', 'Oscura']]);
+  const themeHelp = help('Colores de la ventana. «Sistema» sigue a macOS.');
+  appearance.append(row(labelled(theme, 'Tema de colores', 'theme', themeHelp), themeHelp, theme));
+  let font: HTMLSelectElement | null = null, fontHelp: HTMLElement | null = null;
+  if (options.terminalFont) {
+    const f = options.terminalFont;
+    font = select(Array.from({ length: f.max - f.min + 1 }, (_, i) => { const size = f.min + i; return [String(size), `${size} px`] as [string, string]; }));
+    fontHelp = help('', 'settings-row-help settings-wrap');
+    appearance.append(row(labelled(font, 'Tamaño de letra del terminal', 'font', fontHelp), fontHelp, font));
   }
-  appearance.append(themeLabel, theme);
-  general.append(generalTitle, appearance);
-  const sessions = node('section', '', 'settings-dialog-section');
-  const sessionsTitle = node('h3', 'Sesiones'); sessionsTitle.id = `${prefix}-sessions`;
-  sessions.setAttribute('aria-labelledby', sessionsTitle.id);
-  const limitRow = node('div', '', 'settings-dialog-row');
-  const limitLabel = node('label', 'Máximo de sesiones simultáneas');
-  const limit = node('input'); limit.type = 'number'; limit.min = '1'; limit.max = '8'; limit.step = '1';
-  limit.id = `${prefix}-limit`; limitLabel.htmlFor = limit.id;
-  // No optimistic default: the runner supplies the actual persisted limit.
-  limitRow.append(limitLabel, limit);
-  const range = node('p', 'Consultando el límite del runner…', 'settings-dialog-help');
-  range.id = `${prefix}-range`; limit.setAttribute('aria-describedby', range.id);
-  const explanation = node('p', 'El límite suma Codex, Claude Code y Terminal. Reducirlo no cierra sesiones existentes; un mismo worktree sigue admitiendo un solo escritor.', 'settings-dialog-help');
-  const compatibility = node('p', 'Este runner no permite ajustar el límite. Puedes guardar la apariencia; para cambiar el máximo, actualiza el runner.', 'settings-dialog-help');
-  compatibility.hidden = true;
-  sessions.append(sessionsTitle, limitRow, range, explanation, compatibility);
-  const pulso = node('section', '', 'settings-dialog-section settings-pulso');
-  const pulsoTitle = node('h3', 'Pulso para agentes'); pulsoTitle.id = `${prefix}-pulso`;
-  pulso.setAttribute('aria-labelledby', pulsoTitle.id);
+
+  // Barra lateral
+  let sidebar: HTMLElement | null = null, grouping: HTMLSelectElement | null = null;
+  if (options.grouping || options.resetSidebar) {
+    sidebar = section('Barra lateral', 'sidebar');
+    if (options.grouping) {
+      grouping = select([['project', 'Por proyecto'], ['state', 'Por estado']]);
+      const groupingHelp = help('Cómo se ordena la lista de Agentes. También cambia con el botón de su cabecera.');
+      sidebar.append(row(labelled(grouping, 'Agrupar agentes', 'grouping', groupingHelp), groupingHelp, grouping));
+    }
+    if (options.resetSidebar) {
+      const reset = node('button', 'Restablecer', 'secondary'); reset.type = 'button';
+      const resetHelp = help('Ancho de 264 px, reparto inicial entre Proyectos y Agentes y las dos secciones desplegadas.');
+      reset.id = `${prefix}-reset-sidebar`; resetHelp.id = `${reset.id}-help`; reset.setAttribute('aria-describedby', resetHelp.id);
+      const label = node('span', 'Tamaño y secciones', 'settings-row-label');
+      reset.setAttribute('aria-label', 'Restablecer tamaño y secciones de la barra lateral');
+      reset.addEventListener('click', () => { options.resetSidebar?.(); status.textContent = 'Barra lateral restablecida.'; });
+      sidebar.append(row(label, resetHelp, reset));
+    }
+  }
+
+  // Sesiones
+  const sessions = section('Sesiones', 'sessions');
+  const limit = node('select');
+  const range = help('Consultando el límite…');
+  const limitLabel = labelled(limit, 'Máximo de sesiones simultáneas', 'limit', range);
+  sessions.append(row(limitLabel, range, limit),
+    help('Al llegar al máximo no puedes abrir otra sesión hasta terminar una. Bajarlo no cierra las sesiones abiertas. Una misma carpeta de Git admite un solo agente que escriba a la vez.', 'settings-dialog-help'),
+    help('Cerrar la ventana no detiene las sesiones: siguen en marcha y las encuentras al volver. Para detener una, usa Terminar sesión en el menú «…» de su panel.', 'settings-dialog-help settings-close-hint'));
+  const compatibility = help('Este runner no permite cambiar el máximo (se mantiene en 2). Para cambiarlo, reinícialo desde Acerca de y diagnóstico cuando no tengas trabajo en curso.', 'settings-dialog-help settings-unavailable');
+  compatibility.hidden = true; sessions.append(compatibility);
+
+  // Pulso y agentes
+  const pulso = section('Pulso y agentes', 'pulso');
   const pulsoRow = node('label', '', 'settings-pulso-switch');
-  const pulsoCopy = node('span', 'Acceso automático a Pulso');
   const pulsoToggle = node('input'); pulsoToggle.type = 'checkbox'; pulsoToggle.id = `${prefix}-pulso-auto`;
-  pulsoRow.append(pulsoCopy, pulsoToggle);
-  const pulsoHelp = node('p', 'Claude Code y Codex iniciados desde Jauría pueden leer y editar los proyectos de Pulso, y crear proyectos nuevos. Cada sesión usa una credencial privada que se revoca al terminar. No afecta a agentes iniciados fuera de Jauría.', 'settings-dialog-help');
-  const pulsoCompatibility = node('p', 'Actualiza el runner para activar el acceso automático a Pulso.', 'settings-dialog-help');
+  pulsoRow.append(node('span', 'Acceso automático a Pulso'), pulsoToggle);
+  const pulsoState = help('', 'settings-row-help settings-pulso-state');
+  // Permission warning: it may be clearer than before, never say less.
+  const pulsoScope = help('Si está activado, cada sesión nueva de Claude Code o Codex que abras desde Jauría puede leer y editar todos tus proyectos de Pulso (plan, fases y checkpoints) y crear proyectos nuevos. No ve los Pendientes. Lo que lea puede llegar al proveedor de ese agente.', 'settings-dialog-help settings-pulso-scope');
+  const pulsoHow = help('Cada sesión recibe un permiso privado que se retira solo al terminar. No cambia lo que Claude Code o Codex pueden hacer con archivos, comandos o red, y no afecta a agentes que inicies fuera de Jauría. Al desactivarlo, se corta al momento el acceso automático de todas las sesiones, también de las abiertas; los accesos que des a mano abajo siguen hasta que los quites.', 'settings-dialog-help');
+  pulsoState.id = `${pulsoToggle.id}-state`; pulsoScope.id = `${pulsoToggle.id}-scope`;
+  pulsoToggle.setAttribute('aria-describedby', `${pulsoState.id} ${pulsoScope.id}`);
+  const pulsoCompatibility = help('Este runner no ofrece el acceso automático a Pulso. Reinícialo desde Acerca de y diagnóstico cuando no tengas trabajo en curso.', 'settings-dialog-help settings-unavailable');
   pulsoCompatibility.hidden = true;
-  pulso.append(pulsoTitle, pulsoRow, pulsoHelp, pulsoCompatibility);
+  pulso.append(pulsoRow, pulsoState, pulsoScope, pulsoHow, pulsoCompatibility);
+  const permissionsDetails = node('details', '', 'settings-permissions-details');
+  const permissionsSummary = node('summary', 'Dar o quitar acceso a una sesión ya abierta');
+  const permissionsIntro = help('Sirve para una sesión de Claude Code o Codex que empezó sin acceso (por ejemplo, antes de activar el acceso automático o de actualizar Jauría), o para limitar una sesión a un solo proyecto. Eliges la sesión y qué puede hacer; Jauría te da unas instrucciones para pegar en esa conversación.', 'settings-dialog-help');
+  const permissionsHost = node('section', '', 'settings-permissions');
+  permissionsDetails.append(permissionsSummary, permissionsHost);
+  if (options.permissions) {
+    const manual = node('div', '', 'settings-manual');
+    manual.append(permissionsIntro, permissionsDetails);
+    pulso.append(manual);
+  }
+
+  // Avisos
+  const notices = section('Avisos', 'notices');
+  notices.append(help('Jauría avisa cuando un agente pide tu atención, termina un turno o su proceso termina. La salida normal del terminal no avisa. Dentro de la app los avisos están siempre: la campana, la barra de estado y el número sobre el icono del Dock. Ver un aviso no lo resuelve.', 'settings-dialog-help'));
+  // Provider hooks: a runner setting, applied to sessions started afterwards.
+  const providerRow = node('label', '', 'settings-pulso-switch');
+  const providerToggle = node('input'); providerToggle.type = 'checkbox'; providerToggle.id = `${prefix}-provider-signals`;
+  providerRow.append(node('span', 'Avisos de Claude Code y Codex'), providerToggle);
+  const providerHelp = help('Jauría añade a cada sesión nueva un aviso de cuándo trabaja, te necesita o termina. No cambia tu configuración de Claude ni de Codex. Se aplica a las sesiones que abras después; las abiertas siguen como empezaron.', 'settings-dialog-help');
+  providerHelp.id = `${providerToggle.id}-help`; providerToggle.setAttribute('aria-describedby', providerHelp.id);
+  const providerCompatibility = help('Este runner no ofrece estos avisos. Reinícialo desde Acerca de y diagnóstico cuando no tengas trabajo en curso.', 'settings-dialog-help settings-unavailable');
+  providerCompatibility.hidden = true;
+  if (options.saveProviderSignals) notices.append(providerRow, providerHelp, providerCompatibility);
+  let providerSaving = false;
+  if (options.notificationControls) {
+    for (const button of Array.from(options.notificationControls.querySelectorAll('button'))) button.type = 'button';
+    notices.append(options.notificationControls);
+  }
+  if (options.openNotificationSettings) {
+    const openSettings = node('button', 'Abrir Ajustes de notificaciones', 'secondary'); openSettings.type = 'button';
+    openSettings.id = `${prefix}-open-notification-settings`;
+    const openHelp = help('Abre Ajustes del Sistema → Notificaciones, donde macOS decide si muestra los avisos de Jauría.');
+    openHelp.id = `${openSettings.id}-help`; openSettings.setAttribute('aria-describedby', openHelp.id);
+    openSettings.addEventListener('click', () => {
+      options.openNotificationSettings!().then(() => { status.textContent = 'Ajustes del Sistema abierto en Notificaciones.'; })
+        .catch(() => { showError('No se pudo abrir Ajustes del Sistema. Ábrelo a mano: Ajustes del Sistema → Notificaciones → Jauría.'); });
+    });
+    notices.append(row(node('span', 'Permiso de macOS', 'settings-row-label'), openHelp, openSettings));
+  }
+
+  // Acerca de y diagnóstico
+  const about = section('Acerca de y diagnóstico', 'about');
+  about.append(help(`Jauría ${options.version}`, 'settings-dialog-help settings-app-version'));
+  if (options.aboutControls) {
+    for (const button of Array.from(options.aboutControls.querySelectorAll('button'))) button.type = 'button';
+    options.aboutControls.hidden = false;
+    about.append(options.aboutControls);
+  }
+
   const warning = node('p', '', 'settings-dialog-warning'); warning.setAttribute('role', 'status'); warning.hidden = true;
   const error = node('p', '', 'form-error'); error.id = `${prefix}-error`; error.setAttribute('role', 'alert'); error.hidden = true;
   const retry = node('button', 'Reintentar consulta', 'secondary'); retry.type = 'button'; retry.hidden = true;
   const status = node('p', '', 'settings-dialog-status'); status.setAttribute('role', 'status');
   const footer = node('footer', '', 'dialog-footer');
   const messages = node('div', '', 'settings-dialog-messages');
-  const closeButton = node('button', 'Cerrar', 'quiet'); closeButton.type = 'button';
-  const saveButton = node('button', 'Guardar', 'primary'); saveButton.type = 'submit';
-  messages.append(error, retry, status, node('span', `Jauría ${options.version}`, 'settings-dialog-version'));
-  footer.append(messages, closeButton, saveButton);
-  const permissionsDetails = node('details', '', 'settings-dialog-section settings-permissions-details');
-  const permissionsSummary = node('summary', 'Acceso manual para sesiones existentes');
-  const permissionsHost = node('section', '', 'settings-permissions');
-  permissionsDetails.append(permissionsSummary, permissionsHost);
-  const notices = node('section', '', 'settings-dialog-section');
-  let refreshAttention = () => {};
-  notices.append(node('h3', 'Avisos'));
-  // Move the original controls, preserving IDs, state and listeners.
-  if (options.notificationControls) {
-    for (const button of Array.from(options.notificationControls.querySelectorAll('button'))) button.type = 'button';
-    notices.append(options.notificationControls);
-  }
-  if (options.onOpenAttention) {
-    const attention = node('button', 'Ver sesiones que necesitan atención', 'secondary'); attention.type = 'button';
-    const attentionEmpty = node('p', 'No hay sesiones que necesiten atención.', 'settings-dialog-help');
-    const syncAttention = () => {
-      const hasAttention = options.hasAttention?.() ?? true;
-      attention.disabled = busy || !!permissions?.isBusy || !hasAttention;
-      attentionEmpty.hidden = hasAttention;
-    };
-    attention.addEventListener('click', () => {
-      if (busy || permissions?.isBusy) return;
-      if (options.hasAttention && !options.hasAttention()) { refreshAttention(); return; }
-      if (options.canOpenAttention && !options.canOpenAttention()) {
-        status.textContent = 'Guarda o descarta el borrador de Pulso antes de abrir los avisos.';
-        return;
-      }
-      close(); options.onOpenAttention?.();
-    });
-    notices.append(attention, attentionEmpty);
-    refreshAttention = syncAttention;
-  }
-  content.append(general, sessions, pulso);
-  if (options.permissions) content.append(permissionsDetails);
-  if (options.notificationControls || options.onOpenAttention) content.append(notices);
-  content.append(warning);
+  const closeButton = node('button', 'Cerrar', 'secondary'); closeButton.type = 'button';
+  messages.append(error, retry, status);
+  footer.append(messages, closeButton);
+  sessions.append(warning);
+  content.append(appearance); if (sidebar) content.append(sidebar);
+  content.append(sessions, pulso, notices, about);
   form.append(heading, content, footer);
   dialog.append(form); document.body.append(dialog);
 
-  let disposed = false, busy = false, loaded = false, readFailed = false;
-  let limitDirty = false, themeDirty = false, pulsoDirty = false;
-  const pendingLabel = () => limitDirty || themeDirty || pulsoDirty ? 'Cambios sin guardar. Pulsa Guardar para aplicarlos.' : '';
+  let disposed = false, loading = false, saving = false, loaded = false, readFailed = false;
   let current: AppSettings | null = null;
+  // Values the person chose and that are not confirmed yet (sent once the in-flight save ends).
+  let wantedLimit: number | null = null, wantedPulso: boolean | null = null;
+  // One sequence number per choice: the queue follows the latest intention, never a value comparison.
+  let limitSeq = 0, pulsoSeq = 0;
   let opener: HTMLElement | null = null;
   let underlyingDialog: HTMLDialogElement | null = null;
   let generation = 0, intentionalCloses = 0;
@@ -161,88 +250,96 @@ export function mountSettings(options: Options): {
     else permissions.close();
   });
 
-  function showError(message: string, invalid = false): void {
-    error.textContent = message; error.hidden = !message;
-    limit.setAttribute('aria-invalid', String(invalid));
-    limit.setAttribute('aria-describedby', `${range.id}${invalid ? ` ${error.id}` : ''}`);
+  function showError(message: string): void { error.textContent = message; error.hidden = !message; }
+  function paintLocal(): void {
+    if (font && options.terminalFont) {
+      const size = options.terminalFont.get(); font.value = String(size);
+      fontHelp!.textContent = `Letra de ${size} px en todos los terminales (inicial: ${options.terminalFont.default} px). Al cambiarla, cada terminal se reajusta una vez.`;
+    }
+    if (grouping && options.grouping) grouping.value = options.grouping.get();
+  }
+  function paintRunner(): void {
+    const max = current ? Math.min(8, current.maxSupportedSessions) : 0;
+    if (limit.options.length !== max) limit.replaceChildren(...Array.from({ length: max }, (_, i) => { const o = node('option', sessionsLabel(i + 1)); o.value = String(i + 1); return o; }));
+    const shownLimit = wantedLimit ?? current?.maxConcurrentSessions ?? null;
+    if (shownLimit !== null) limit.value = String(shownLimit);
+    range.textContent = current
+      ? `Hasta ${sessionsLabel(current.maxConcurrentSessions)} a la vez, sumando Codex, Claude Code y Terminal.`
+      : readFailed ? 'No se pudo consultar el límite.' : 'Consultando el límite…';
+    const auto = wantedPulso ?? current?.pulsoAutoAccess ?? false;
+    pulsoToggle.checked = auto;
+    pulsoState.textContent = hasPulso(current) ? (current!.pulsoAutoAccess ? 'Activado: las sesiones nuevas reciben acceso.' : 'Desactivado: ninguna sesión lo recibe de forma automática.') : '';
+    warning.textContent = current?.warning ?? ''; warning.hidden = !current?.warning;
+    if (!providerSaving) providerToggle.checked = current?.providerSignals === true;
   }
   function sync(): void {
     const editable = options.canEdit();
-    const blocked = busy || !!permissions?.isBusy;
-    dialog.setAttribute('aria-busy', String(blocked));
-    theme.disabled = busy;
-    limit.disabled = busy || !loaded || !editable;
-    pulsoToggle.disabled = busy || !loaded || !editable || current?.schemaVersion !== 2;
-    pulsoCompatibility.hidden = current?.schemaVersion === 2;
-    closeButton.disabled = blocked;
-    closeButton.textContent = limitDirty || themeDirty || pulsoDirty ? 'Cerrar y conservar borrador' : 'Cerrar';
-    saveButton.disabled = blocked || (editable && !loaded);
-    saveButton.textContent = busy && !readFailed ? 'Esperando…' : 'Guardar';
-    retry.disabled = busy; retry.hidden = !readFailed;
-    compatibility.hidden = editable;
-    refreshAttention();
+    const inFlight = loading || saving;
+    dialog.setAttribute('aria-busy', String(loading || saving || !!permissions?.isBusy));
+    // Controls stay enabled while a save is in flight (changes queue); only a read or a lost runner disables them.
+    limit.disabled = loading || !loaded || !editable;
+    pulsoToggle.disabled = loading || !loaded || !editable || !hasPulso(current);
+    compatibility.hidden = editable || !loaded;
+    pulsoCompatibility.hidden = !loaded || (editable && hasPulso(current));
+    providerToggle.disabled = loading || !loaded || !editable || providerSaving || typeof current?.providerSignals !== 'boolean';
+    providerCompatibility.hidden = !loaded || !editable || typeof current?.providerSignals === 'boolean';
+    closeButton.disabled = inFlight || !!permissions?.isBusy;
+    closeButton.textContent = saving ? 'Guardando…' : 'Cerrar';
+    retry.disabled = loading; retry.hidden = !readFailed;
+    paintRunner();
   }
-  function accept(settings: AppSettings): void {
-    current = settings; loaded = true;
-    limit.max = String(Math.min(8, settings.maxSupportedSessions));
-    range.textContent = `De 1 a ${limit.max} sesiones simultáneas, entre todos los proveedores.`;
-    if (!limitDirty) limit.value = String(settings.maxConcurrentSessions);
-    if (!pulsoDirty) pulsoToggle.checked = settings.pulsoAutoAccess ?? false;
-    warning.textContent = settings.warning ?? ''; warning.hidden = !settings.warning;
-  }
+  function accept(settings: AppSettings): void { current = settings; loaded = true; }
   async function read(): Promise<void> {
-    if (disposed || busy || !dialog.open) return;
+    if (disposed || loading || saving || !dialog.open) return;
     const token = ++generation;
-    busy = true; showError(''); status.textContent = 'Consultando configuración…'; sync();
+    loading = true; showError(''); status.textContent = 'Consultando la configuración…'; sync();
     try {
       const result = await options.read();
       if (disposed || token !== generation) return;
-      accept(checked(result)); readFailed = false;
-      status.textContent = pendingLabel();
+      accept(checked(result)); readFailed = false; status.textContent = '';
     } catch {
       if (disposed || token !== generation) return;
       readFailed = true;
-      showError('No se pudo leer la configuración. Reintenta la consulta; tus cambios se conservan.');
+      showError('No se pudo leer la configuración del runner. La apariencia y la barra lateral siguen disponibles; reintenta la consulta.');
       status.textContent = '';
     } finally {
-      if (!disposed && token === generation) { busy = false; sync(); }
+      if (!disposed && token === generation) { loading = false; sync(); }
     }
   }
-  async function save(): Promise<void> {
-    if (disposed || busy || permissions?.isBusy || !dialog.open) return;
-    const editable = options.canEdit();
-    if (editable && (!loaded || !current)) return;
-    const value = Number(limit.value);
-    if (editable && (!limit.value.trim() || !Number.isInteger(value) || value < 1 || value > Number(limit.max))) {
-      showError(`Introduce un número entero entre 1 y ${limit.max}.`, true); limit.focus(); return;
-    }
-    const selectedTheme = themeValue(theme.value);
+  /** Sends the wanted values; anything chosen meanwhile goes in one more call afterwards. */
+  async function flush(): Promise<void> {
+    if (disposed || saving || loading || !current || !options.canEdit()) return;
+    const base = current;
+    const limitValue = wantedLimit ?? base.maxConcurrentSessions;
+    const pulsoValue = hasPulso(base) ? (wantedPulso ?? base.pulsoAutoAccess) : undefined;
+    if (limitValue === base.maxConcurrentSessions && (pulsoValue === undefined || pulsoValue === base.pulsoAutoAccess)) { wantedLimit = null; wantedPulso = null; sync(); return; }
+    const sentLimit = limitSeq, sentPulso = pulsoSeq;
     const token = ++generation;
-    busy = true; showError(''); status.textContent = 'Guardando configuración…'; sync();
+    saving = true; showError(''); status.textContent = 'Guardando…'; sync();
     let saved: AppSettings | null = null;
     try {
-      if (editable) {
-        const result = await options.save(value, current?.schemaVersion === 2 ? pulsoToggle.checked : undefined);
-        if (disposed || token !== generation) return;
-        saved = checked(result);
-        // A successful response is authoritative, including a changed server cap.
-        limitDirty = false; pulsoDirty = false; accept(saved);
-      }
+      saved = checked(await options.save(limitValue, pulsoValue));
       if (disposed || token !== generation) return;
-      options.setTheme(selectedTheme);
+      // The response is authoritative (including a changed server cap).
+      accept(saved);
+      if (limitSeq === sentLimit) wantedLimit = null;
+      if (pulsoSeq === sentPulso) wantedPulso = null;
+      options.onSaved(saved);
       if (disposed || token !== generation) return;
-      themeDirty = false;
-      if (saved) options.onSaved(saved);
-      if (disposed || token !== generation) return;
-      status.textContent = editable ? 'Configuración guardada.' : 'Apariencia guardada.';
+      status.textContent = `Guardado: ${sessionsLabel(saved.maxConcurrentSessions)} a la vez${hasPulso(saved) ? `; acceso automático a Pulso ${saved.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}.`;
     } catch {
       if (disposed || token !== generation) return;
-      showError(saved
-        ? 'El límite se guardó, pero no se pudo completar la actualización de la interfaz. Reintenta guardar.'
-        : 'No se pudo guardar la configuración. Tus cambios se conservan; reintenta guardar.');
+      // Only what this call sent goes back to the runner value; a change chosen
+      // meanwhile stays wanted and is sent by the call that follows.
+      if (limitSeq === sentLimit) wantedLimit = null;
+      if (pulsoSeq === sentPulso) wantedPulso = null;
+      showError(`No se pudo guardar. Sigue el valor anterior: ${sessionsLabel(base.maxConcurrentSessions)} a la vez${hasPulso(base) ? `, acceso automático ${base.pulsoAutoAccess ? 'activado' : 'desactivado'}` : ''}. Vuelve a elegir para reintentar.`);
       status.textContent = '';
     } finally {
-      if (!disposed && token === generation) { busy = false; sync(); }
+      if (!disposed && token === generation) {
+        saving = false; sync();
+        if (wantedLimit !== null || wantedPulso !== null) void flush();
+      }
     }
   }
   function restoreFocus(): void {
@@ -258,25 +355,58 @@ export function mountSettings(options: Options): {
     opener = null; underlyingDialog = null;
   }
   function close(): void {
-    if (disposed || busy || permissions?.isBusy || !dialog.open) return;
+    if (disposed || saving || loading || permissions?.isBusy || !dialog.open) return;
     permissions?.close(); ++intentionalCloses; dialog.close(); restoreFocus();
   }
-  theme.addEventListener('change', () => { if (!busy) { themeDirty = true; status.textContent = pendingLabel(); sync(); } });
-  limit.addEventListener('input', () => { if (!busy) { limitDirty = true; showError(''); status.textContent = pendingLabel(); sync(); } });
-  pulsoToggle.addEventListener('change', () => { if (!busy) { pulsoDirty = true; status.textContent = pendingLabel(); sync(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); void save(); });
+  theme.addEventListener('change', () => {
+    const value = themeValue(theme.value); options.setTheme(value);
+    status.textContent = `Tema de colores: ${themeLabel[value]}.`;
+  });
+  font?.addEventListener('change', () => {
+    const f = options.terminalFont!; const size = Number(font!.value);
+    if (!Number.isInteger(size) || size < f.min || size > f.max) { paintLocal(); return; }
+    f.set(size); paintLocal(); status.textContent = `Letra del terminal: ${size} px.`;
+  });
+  grouping?.addEventListener('change', () => {
+    const value: Grouping = grouping!.value === 'state' ? 'state' : 'project';
+    options.grouping!.set(value); paintLocal(); status.textContent = `Agentes agrupados ${value === 'state' ? 'por estado' : 'por proyecto'}.`;
+  });
+  limit.addEventListener('change', () => {
+    const value = Number(limit.value);
+    if (!current || !Number.isInteger(value) || value < 1 || value > Math.min(8, current.maxSupportedSessions)) { paintRunner(); return; }
+    wantedLimit = value; limitSeq++; void flush(); sync();
+  });
+  pulsoToggle.addEventListener('change', () => {
+    if (!hasPulso(current)) { paintRunner(); return; }
+    wantedPulso = pulsoToggle.checked; pulsoSeq++; void flush(); sync();
+  });
+  providerToggle.addEventListener('change', () => {
+    if (!options.saveProviderSignals || typeof current?.providerSignals !== 'boolean' || providerSaving) { paintRunner(); return; }
+    const enabled = providerToggle.checked;
+    providerSaving = true; showError(''); status.textContent = 'Guardando…'; sync();
+    options.saveProviderSignals(enabled).then(saved => {
+      if (disposed) return;
+      accept(checked(saved)); options.onSaved(saved);
+      status.textContent = `Avisos de Claude Code y Codex ${saved.providerSignals ? 'activados' : 'desactivados'} para las sesiones nuevas.`;
+    }).catch(() => {
+      if (disposed) return;
+      showError(`No se pudo guardar. Siguen ${current?.providerSignals ? 'activados' : 'desactivados'} los avisos de Claude Code y Codex. Vuelve a elegir para reintentar.`);
+      status.textContent = '';
+    }).finally(() => { if (!disposed) { providerSaving = false; sync(); } });
+  });
+  form.addEventListener('submit', event => event.preventDefault());
   retry.addEventListener('click', () => { void read(); });
   closeButton.addEventListener('click', close);
   dialog.addEventListener('cancel', event => {
     // Let the browser finish Escape's focus steps before the close handler.
     // Closing synchronously inside cancel can lose restored focus in WebKit.
-    if (busy || permissions?.isBusy) event.preventDefault();
+    if (saving || loading || permissions?.isBusy) event.preventDefault();
   });
   dialog.addEventListener('close', () => {
     if (intentionalCloses) { --intentionalCloses; return; }
     if (disposed || dialog.open) return;
     // A native close watcher can bypass cancel; preserve in-flight writes.
-    if (busy || permissions?.isBusy) { dialog.showModal(); return; }
+    if (saving || loading || permissions?.isBusy) { dialog.showModal(); return; }
     permissions?.close(); restoreFocus();
   });
   sync();
@@ -288,7 +418,7 @@ export function mountSettings(options: Options): {
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       underlyingDialog = opener?.closest<HTMLDialogElement>('dialog[open]')
         ?? Array.from(document.querySelectorAll<HTMLDialogElement>('dialog[open]')).at(-1) ?? null;
-      if (!themeDirty) theme.value = themeValue(options.getTheme());
+      theme.value = themeValue(options.getTheme()); paintLocal(); status.textContent = '';
       if (section === 'permissions') permissionsDetails.open = true;
       dialog.showModal(); title.focus(); void read();
       if (permissionsDetails.open) permissions?.open(context);

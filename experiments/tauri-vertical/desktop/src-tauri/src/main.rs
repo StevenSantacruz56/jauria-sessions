@@ -86,32 +86,20 @@ fn rpc_timeout(layout: &Layout, op: &str, args: Value, timeout: Duration) -> Res
     if response.last() != Some(&b'\n') { return Err("Respuesta del runner incompleta o demasiado grande".into()); }
     serde_json::from_slice(&response).map_err(|_| "Respuesta JSON del runner inválida".into())
 }
-fn validate(op: &str, args: &Value) -> Result<()> {
-    let obj = args.as_object().ok_or("args debe ser objeto")?;
-    let fields: &[&str] = match op {
-        "status" => &["workspaceAfter"],
-        "telemetry" | "refresh_quotas" | "get_settings" => &[],
-        "set_settings" => &["maxConcurrentSessions"],
+/// Keys runner_request lets through for each operation; `None` = not allowed.
+/// Each list must stay within the runner's (rpc_contract_tests checks it).
+fn bridge_fields(op: &str) -> Option<&'static [&'static str]> {
+    Some(match op {
+        "status" | "telemetry" | "refresh_quotas" | "get_settings" => &[],
+        // settingsVersion 2 adds pulsoAutoAccess; settingsVersion 1 sends only the limit.
+        "set_settings" => &["maxConcurrentSessions","pulsoAutoAccess"],
+        // «Avisos de Claude Code y Codex» (runner providerSignals).
+        "set_provider_signals" => &["enabled"],
         "rename_session" => &["id","title"],
         "native_binding" => &["id"],
         "resume_native" => &["id","sourceId","rows","cols"],
-        "register_project" => &["id","path"],
-        "close_project" | "reopen_project" => &["id"],
-        "create_task" => &["id","projectId","title","objective","acceptanceCriteria"],
-        "prepare_task" | "revalidate_task" | "workflow" | "reopen_task" | "verifications" => &["id"],
-        "verification" | "cancel_verification" => &["id","runId"],
-        "prepare_verification" => &["id","requestId","snapshotId","argv"],
-        "begin_verification" => &["id","runId","approvalNonce"],
-        "release_verification" => &["id","runId","confirmed"],
-        "purge_verifications" => &["id","confirmed"],
-        "snapshot_task" | "workflow_artifact" => &["id","artifactId"],
-        "review_task" => &["id","artifactId","snapshotId","verdict","notes","confirmed","verificationId"],
-        "handoff_task" => &["id","artifactId","snapshotId","destination","notes"],
-        "archive_task" | "purge_history" | "compact_history" | "purge_workflow" => &["id","confirmed"],
-        "start_task" => &["id","sessionId","kind","rows","cols"],
-        "open_handoff" => &["id","artifactId","requestId","sessionId","rows","cols"],
+        "purge_history" | "compact_history" => &["id","confirmed"],
         "start_codex" => &["id","title","kind","cwd","rows","cols"],
-        "start_codex_task" => &["id","sessionId","kind","rows","cols"],
         "codex_state" => &["id"],"codex_request" => &["id","requestId"],
         "codex_resume" => &["id","generation"],
         "codex_turn" | "codex_command" => &["id","commandId","turnId","attemptId","generation","prompt"],
@@ -121,8 +109,13 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         "input" => &["id","data"], "resize" => &["id","rows","cols"],
         "stop" => &["id","generation"], "interrupt" => &["id"], "events" => &["after","limit"],
         "terminal_live" => &["id","after","limit"],
-        _ => return Err("Operación no permitida".into()),
-    };
+        "mark_seen" => &["items"],
+        _ => return None,
+    })
+}
+fn validate(op: &str, args: &Value) -> Result<()> {
+    let obj = args.as_object().ok_or("args debe ser objeto")?;
+    let fields = bridge_fields(op).ok_or("Operación no permitida")?;
     if obj.keys().any(|k| !fields.contains(&k.as_str())) { return Err("Argumento no permitido".into()); }
     if fields.contains(&"id") {
         let id = args["id"].as_str().ok_or("Falta id")?;
@@ -131,27 +124,18 @@ fn validate(op: &str, args: &Value) -> Result<()> {
     if op == "set_settings" && args["maxConcurrentSessions"].as_u64().is_none_or(|n| !(1..=8).contains(&n)) {
         return Err("El límite de sesiones debe ser un entero entre 1 y 8".into());
     }
+    if op == "set_settings" && obj.get("pulsoAutoAccess").is_some_and(|v| !v.is_boolean()) {
+        return Err("El acceso automático a Pulso debe ser verdadero o falso".into());
+    }
+    if op == "set_provider_signals" && !obj.get("enabled").is_some_and(Value::is_boolean) {
+        return Err("Los avisos de Claude Code y Codex deben ser verdadero o falso".into());
+    }
     if op == "rename_session" {
         let title = args["title"].as_str().ok_or("Falta título de sesión")?;
         let trimmed = title.trim();
         if trimmed.is_empty() || trimmed.chars().count() > 120 || trimmed.len() > 480 || title.chars().any(char::is_control) {
             return Err("El título debe contener entre 1 y 120 caracteres, hasta 480 bytes y sin controles".into());
         }
-    }
-    if op == "register_project" {
-        let path = args["path"].as_str().ok_or("Selecciona un proyecto")?;
-        if path.len() > 4096 || !Path::new(path).is_absolute() || !Path::new(path).is_dir() { return Err("Ruta de proyecto inválida".into()); }
-    }
-    if op == "create_task" {
-        for (field,maximum,required) in [("projectId",64,true),("title",120,true),("objective",8000,true),("acceptanceCriteria",8000,false)] {
-            let value=args[field].as_str().ok_or("Campo de tarea inválido")?;
-            if value.chars().count()>maximum || (required && value.trim().is_empty()) { return Err("Campo de tarea vacío o demasiado largo".into()); }
-        }
-    }
-    if matches!(op,"start_task"|"start_codex_task") {
-        let session_id=args["sessionId"].as_str().ok_or("Falta ID de sesión")?;
-        if session_id.is_empty() || session_id.len()>80 || !session_id.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'-') { return Err("ID de sesión inválido".into()); }
-        if !matches!(args["kind"].as_str(),Some("codex"|"claude"|"fixture"|"shell")) { return Err("Proveedor de tarea inválido".into()); }
     }
     if matches!(op,"start"|"start_codex") {
         if !matches!(args["kind"].as_str(), Some("fixture" | "shell" | "terminal" | "claude_probe" | "codex_probe" | "claude" | "codex")) { return Err("Tipo de sesión inválido".into()); }
@@ -164,16 +148,26 @@ fn validate(op: &str, args: &Value) -> Result<()> {
         }
         if args["title"].as_str().is_none_or(|s| s.len() > 160) { return Err("Título inválido".into()); }
     }
-    if matches!(op, "start" | "start_task" | "start_codex" | "start_codex_task" | "open_handoff" | "resize") {
+    if matches!(op, "start" | "start_codex" | "resize") {
         for field in ["rows", "cols"] { if args[field].as_u64().is_none_or(|n| !(if op=="resize" {1..=1000} else {2..=1000}).contains(&n)) { return Err("Tamaño inválido".into()); } }
     }
-    if matches!(op,"start_codex"|"start_codex_task") && args["kind"]!="codex" {return Err("Proveedor estructurado inválido".into());}
+    if op=="start_codex" && args["kind"]!="codex" {return Err("Proveedor estructurado inválido".into());}
     if matches!(op,"codex_resume"|"codex_turn"|"codex_command"|"codex_interrupt"|"codex_permission") && args["generation"].as_i64().is_none_or(|n|n<=0) {return Err("Generación inválida".into());}
     if matches!(op,"codex_turn"|"codex_command") && args["prompt"].as_str().is_none_or(|s|s.is_empty() || s.len()>32768 || s.contains('\0')) {return Err("El mensaje debe contener entre 1 y 32768 bytes UTF8 sin NUL".into());}
     if op=="codex_permission" && !matches!(args["decision"].as_str(),Some("accept"|"deny")){return Err("Decisión inválida".into());}
     if op == "input" && args["data"].as_str().is_none_or(|s| s.len() > 16 * 1024) { return Err("Entrada inválida o mayor de 16 KiB".into()); }
     if op == "events" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=1000).contains(&n))) { return Err("Cursor o límite inválido".into()); }
     if op == "terminal_live" && (args["after"].as_u64().is_none() || args["limit"].as_u64().is_none_or(|n| !(1..=64).contains(&n))) { return Err("Cursor o límite de terminal inválido".into()); }
+    if op == "mark_seen" {
+        // Seen state only: 1..64 items of exactly {id, epoch:u64>0, through:u64}.
+        let items = args["items"].as_array().filter(|items| (1..=64).contains(&items.len())).ok_or("Lista de vistos inválida")?;
+        for item in items {
+            let fields = item.as_object().ok_or("Elemento de vistos inválido")?;
+            if fields.len() != 3 || item["through"].as_u64().is_none() || item["epoch"].as_u64().is_none_or(|e| e == 0) { return Err("Elemento de vistos inválido".into()); }
+            let id = item["id"].as_str().ok_or("Falta id")?;
+            if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') { return Err("ID inválido".into()); }
+        }
+    }
     Ok(())
 }
 #[tauri::command]
@@ -213,23 +207,42 @@ async fn connect_runner(app: tauri::AppHandle) -> Result<Value> {
 #[tauri::command]
 async fn runner_request(op: String, args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
     validate(&op, &args)?;
-    if matches!(op.as_str(),"codex_permission"|"review_task"|"archive_task"|"purge_history"|"compact_history"|"purge_workflow"|"prepare_verification"|"begin_verification"|"release_verification"|"purge_verifications") { return Err("Usa la confirmación nativa para esta acción".into()); }
+    if matches!(op.as_str(),"codex_permission"|"purge_history"|"compact_history") { return Err("Usa la confirmación nativa para esta acción".into()); }
     start_policy::validate_start_mode(&op,&args,std::env::var("AW_VERTICAL_SMOKE").as_deref()==Ok("1"))?;
     let layout = state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero al runner")?;
     let sampler=state.resources.clone();
     tauri::async_runtime::spawn_blocking(move || {
+    // Interfaz: this process, its own children and the helpers the kernel
+    // attributes to it (WebKit WebContent/GPU/Networking and other XPC services
+    // of the window). The runner subtree is reported by the runner, not here.
     let app_metrics=if op=="telemetry" {
-        let discovery=resource_tree::observe(std::process::id());
+        let discovery=resource_tree::observe_app(std::process::id());
         let mut pids=vec![std::process::id()];
-        if let Some(rows)=discovery["pids"].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));}
-        let mut sample=sampler.lock().map_err(error)?.sample(&pids);sample["discovery"]=discovery;Some(sample)
+        for key in ["pids","helpers","others"] { if let Some(rows)=discovery[key].as_array(){pids.extend(rows.iter().filter_map(|p|p.as_u64().map(|p|p as u32)));} }
+        let mut sample=sampler.lock().map_err(error)?.sample(&pids);
+        let set=|key:&str|->std::collections::HashSet<u64>{discovery[key].as_array().into_iter().flatten().filter_map(Value::as_u64).collect()};
+        // «web»: WebKit's own processes; «service»: other system XPC services of the window (Metal, audio…).
+        let (webkit,helpers,others)=(set("webkit"),set("helpers"),set("others"));
+        // «other»: attributed to this app by macOS but not a window service
+        // (e.g. a job a session left behind); shown apart, never as Interfaz.
+        if let Some(rows)=sample["processes"].as_array_mut(){ for row in rows {
+            let pid=row["pid"].as_u64().unwrap_or(0);
+            row["role"]=json!(if pid==u64::from(std::process::id()){"app"}else if webkit.contains(&pid){"web"}else if helpers.contains(&pid){"service"}else if others.contains(&pid){"other"}else{"app-child"});
+        } }
+        sample["webEngine"]=discovery.get("helpersStatus").cloned().unwrap_or(json!("unavailable"));
+        sample["discovery"]=discovery;Some(sample)
     }else{None};
-        if matches!(op.as_str(),"workflow_artifact"|"workflow"|"snapshot_task"|"handoff_task"|"reopen_task"|"register_project"|"close_project"|"reopen_project"|"create_task"|"prepare_task"|"revalidate_task"|"open_handoff"|"start_task"|"start_codex"|"start_codex_task"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
+        if matches!(op.as_str(),"start_codex"|"codex_resume"|"resume_native"|"stop") { rpc_timeout(&layout,&op,args,Duration::from_secs(60)) }
         else {
             let mut response=rpc(&layout,&op,args)?;
             if let Some(mut metrics)=app_metrics {
                 let backend:std::collections::HashSet<u64>=response["result"]["resources"]["processes"].as_array().into_iter().flatten().filter_map(|r|r["pid"].as_u64()).collect();
-                if let Some(rows)=metrics["processes"].as_array_mut(){rows.retain(|r|r["pid"].as_u64().is_some_and(|pid|!backend.contains(&pid)));}
+                // A runner started by this window is its child: drop its whole
+                // observed subtree here, even PIDs the runner missed this poll.
+                let runner_pids:std::collections::HashMap<u32,String>=response["result"]["resources"]["processes"].as_array().into_iter().flatten()
+                    .filter(|r|r["role"]=="runner").filter_map(|r|r["pid"].as_u64()).map(|pid|(pid as u32,"runner".to_owned())).collect();
+                let under_runner=resource_tree::nearest_labels(&metrics["discovery"],&runner_pids);
+                if let Some(rows)=metrics["processes"].as_array_mut(){rows.retain(|r|r["pid"].as_u64().is_some_and(|pid|!backend.contains(&pid) && !under_runner.contains_key(&(pid as u32))));}
                 response["result"]["resources"]["app"]=metrics;
             }
             Ok(response)
@@ -244,6 +257,7 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
         "project" | "item" => &["id"],
         "items" => &["projectId","cursor","limit","archived","status","expectedSnapshotRevision"],
         "board" => &["projectId","ifRevision"],
+        "sidebar_summary" => &["ifRevision"],
         "links" => &["projectId"],
         "checkpoint_history" => &["itemId","cursor","limit"],
         "activity" => &["projectId","itemId","limit"],
@@ -270,6 +284,9 @@ fn validate_pulso(op: &str, args: &Value) -> Result<()> {
         if args.get("expectedSnapshotRevision").is_some_and(|v| v.as_u64().is_none()) {
             return Err("Revisión de Pulso inválida".into());
         }
+    }
+    if op == "sidebar_summary" && args.get("ifRevision").is_some_and(|v| v.as_u64().is_none()) {
+        return Err("Revisión de Pulso inválida".into());
     }
     if op == "board" {
         if !args.get("projectId").is_some_and(|v| v.is_null() || v.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 80 && id != "." && id != ".." && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b)))) {
@@ -314,6 +331,22 @@ async fn pulso_request(op:String,args:Value,state:tauri::State<'_,Bridge>)->Resu
         if line.len()>512*1024 || line.last()!=Some(&b'\n') { return Err("Respuesta incompleta de Pulso".into()); }
         serde_json::from_slice(&line).map_err(|_|"Respuesta inválida de Pulso".into())
     }).await.map_err(error)?
+}
+/// The one System Settings pane the renderer may open: Notifications (macOS 13+).
+/// Fixed URL, no argument from the client: never a generic URL opener.
+const NOTIFICATION_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
+fn notification_settings_command() -> std::process::Command {
+    let mut command = std::process::Command::new("/usr/bin/open");
+    command.arg(NOTIFICATION_SETTINGS_URL).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command
+}
+/// Configuración → Avisos → «Abrir Ajustes de notificaciones». Main window only.
+#[tauri::command]
+fn open_notification_settings(window: tauri::WebviewWindow) -> Result<()> {
+    if window.label() != "main" { return Err("Ventana no permitida".into()); }
+    let status = notification_settings_command().status().map_err(|_| "No se pudo abrir Ajustes del Sistema")?;
+    if !status.success() { return Err("No se pudo abrir Ajustes del Sistema".into()); }
+    Ok(())
 }
 // Keep the renderer limited to selecting a single directory. No generic file API.
 #[tauri::command]
@@ -440,31 +473,11 @@ async fn confirm_codex_permission(app:tauri::AppHandle,mut args:Value,state:taur
     }).await.map_err(error)?
 }
 #[tauri::command]
-async fn confirm_verification(app:tauri::AppHandle,args:Value,state:tauri::State<'_,Bridge>)->Result<Value>{
-    validate("prepare_verification",&args)?;
-    if serde_json::to_vec(&args).map_err(error)?.len()>20*1024 || serde_json::to_vec(&args["argv"]).map_err(error)?.len()>4096{return Err("Comando demasiado largo para mostrarlo íntegro en la confirmación. Usa un script del proyecto más corto.".into());}
-    let executable=args["argv"].as_array().and_then(|values|values.first()).and_then(Value::as_str).ok_or("Selecciona un ejecutable")?;
-    if !Path::new(executable).is_absolute() || !fs::metadata(executable).is_ok_and(|meta|meta.is_file() && meta.mode() & 0o111 != 0){return Err("El ejecutable debe existir, ser absoluto y tener permiso de ejecución.".into());}
-    let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
-    tauri::async_runtime::spawn_blocking(move||{
-        let prepared=rpc_timeout(&layout,"prepare_verification",args,Duration::from_secs(60))?;
-        if prepared["ok"]!=true || prepared["result"]["status"]!="prepared" {return Ok(prepared);}
-        let run=&prepared["result"];
-        let argv=approval_text::visible_json(&run["argv"]).map_err(error)?;
-        if argv.len()>4096{let _=rpc(&layout,"cancel_verification",json!({"id":run["id"],"runId":run["runId"]}));return Err("El comando supera el tamaño que podemos confirmar íntegro. Usa un script del proyecto más corto.".into());}
-        let description=format!("Carpeta: {}\nComando y argumentos exactos: {}\nSnapshot: {}\n\nSe ejecutará con tu usuario y acceso a archivos y red. El entorno está limitado a herramientas locales; no carga scripts de inicio del shell. Puede modificar archivos; cancelar no deshace efectos. El resultado se vincula a este snapshot.",approval_text::visible_json(&run["cwd"]).map_err(error)?,argv,run["snapshotId"]);
-        let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
-        let approved=app.dialog().message(description).parent(&window).title("Ejecutar verificación en Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
-        if !approved{return rpc(&layout,"cancel_verification",json!({"id":run["id"],"runId":run["runId"]}));}
-        rpc_timeout(&layout,"begin_verification",json!({"id":run["id"],"runId":run["runId"],"approvalNonce":run["approvalNonce"]}),Duration::from_secs(60))
-    }).await.map_err(error)?
-}
-#[tauri::command]
 async fn restart_runner(app:tauri::AppHandle,state:tauri::State<'_,Bridge>)->Result<bool>{
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     tauri::async_runtime::spawn_blocking(move|| {
         let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
-        let confirmed=app.dialog().message(format!("Perfil: {}\n\nSe detendrán TODAS las sesiones y verificaciones administradas de este perfil y se reiniciará el runner con la versión de Jauria abierta. Se conservan archivos e historial. Una operación interrumpida puede requerir revisión. Confirma solo cuando puedas detener este trabajo.",layout.data_dir.display())).parent(&window).title("Reiniciar runner de Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
+        let confirmed=app.dialog().message(format!("Perfil: {}\n\nSe detendrán TODAS las sesiones administradas de este perfil y se reiniciará el runner con la versión de Jauria abierta. Se conservan archivos e historial. Una operación interrumpida puede requerir revisión. Confirma solo cuando puedas detener este trabajo.",layout.data_dir.display())).parent(&window).title("Reiniciar runner de Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
         if !confirmed{return Ok(false);}
         let response=rpc(&layout,"shutdown",json!({}))?;
         if response["ok"]!=true{return Err("El runner no confirmó el cierre".into());}
@@ -481,7 +494,13 @@ async fn preview_diagnostic(state: tauri::State<'_,Bridge>) -> Result<Value> {
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     let response=tauri::async_runtime::spawn_blocking(move||rpc(&layout,"diagnostic_preview",json!({}))).await.map_err(error)??;
     if response["ok"]!=true {return Err("No se pudo preparar diagnóstico".into());}
-    let content=serde_json::to_string_pretty(&response["result"]).map_err(error)?;
+    let mut result=response["result"].clone();
+    // Whether the window's web engine helpers can be attributed (no PIDs).
+    if result["telemetry"].is_object() {
+        let status=tauri::async_runtime::spawn_blocking(||resource_tree::observe_app(std::process::id())["helpersStatus"].clone()).await.map_err(error)?;
+        result["telemetry"]["interfaceWebEngine"]=status;
+    }
+    let content=serde_json::to_string_pretty(&result).map_err(error)?;
     let mut random=[0u8;16];fs::File::open("/dev/urandom").map_err(error)?.read_exact(&mut random).map_err(error)?;
     let id:String=random.iter().map(|b|format!("{b:02x}")).collect();
     *state.diagnostic.lock().map_err(error)?=Some((id.clone(),content.clone()));
@@ -502,23 +521,16 @@ async fn export_diagnostic(app:tauri::AppHandle, preview_id:String, state:tauri:
     }).await.map_err(error)?
 }
 #[tauri::command]
-async fn confirm_workflow(app: tauri::AppHandle, op: String, mut args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
-    if !matches!(op.as_str(),"review_task"|"archive_task"|"purge_history"|"compact_history"|"purge_workflow"|"release_verification"|"purge_verifications") {return Err("Confirmación no disponible para esta operación".into());}
+async fn confirm_history(app: tauri::AppHandle, op: String, mut args: Value, state: tauri::State<'_, Bridge>) -> Result<Value> {
+    if !matches!(op.as_str(),"purge_history"|"compact_history") {return Err("Confirmación no disponible para esta operación".into());}
     if !args.is_object(){return Err("Argumentos inválidos".into());}
     args["confirmed"]=json!(true);validate(&op,&args)?;
     let layout=state.layout.lock().map_err(error)?.clone().ok_or("Conecta primero")?;
     tauri::async_runtime::spawn_blocking(move || {
-        let label=if op=="release_verification" {"Confirma que comprobaste por fuera que los procesos de esta verificación terminaron. Liberar no detiene procesos ni revierte archivos; permite otro escritor administrado."}else if op=="purge_verifications" {"Eliminar la evidencia de verificaciones finalizadas de esta tarea. Sus resultados dejarán de respaldar una revisión; se conservan identificadores para impedir reejecuciones. No es borrado seguro del disco o backups."}else if op=="compact_history" {"Compactar TODOS los eventos antiguos de esta sesión finalizada, incluida la salida y los tamaños. Se conserva el último estado, la tarea y los archivos; se declaran los tramos retirados. No es borrado seguro del disco o backups."}else if op=="purge_workflow" {"Eliminar TODA la evidencia guardada de esta tarea: snapshots, revisiones y manifiestos. Las decisiones históricas perderán su respaldo; se conservan archivos, rama y sesiones. No es un borrado seguro del disco o backups."}else if op=="purge_history" {"Eliminar la salida de esta sesión finalizada y liberar su cuota lógica. Conserva estado, tarea y archivos; el tramo se marcará como eliminado. No es borrado seguro del disco o backups."}else if op=="archive_task" {"Archivar tarea conservando carpeta, rama e historial"}else if args["verdict"]=="accepted" {"Registrar aceptación humana; no ejecuta verificaciones"}else{"Registrar rechazo humano"};
-        let context=if matches!(op.as_str(),"purge_history"|"compact_history") {
-            let status=rpc(&layout,"status",json!({}))?;
-            let selected=status["result"]["sessions"].as_array().and_then(|rows|rows.iter().find(|row|row["id"]==args["id"])).ok_or("Sesión desconocida")?;
-            format!("Sesión: {}\nCarpeta: {}",selected["title"],selected["cwd"])
-        }else{
-            let workflow=rpc_timeout(&layout,"workflow",json!({"id":args["id"]}),Duration::from_secs(60))?;
-            if workflow["ok"]!=true{return Err("No se pudo consultar la tarea para confirmar".into());}
-            format!("Tarea: {}\nCarpeta: {}",workflow["result"]["task"]["title"],workflow["result"]["task"]["worktreePath"])
-        };
-        let description=format!("{}\n\n{}\nID: {}\nSnapshot: {}\nVerificación: {}",label,context,args["id"].as_str().unwrap_or(""),args["snapshotId"].as_str().unwrap_or("no aplica"),args["runId"].as_str().or(args["verificationId"].as_str()).unwrap_or("no aplica"));
+        let label=if op=="compact_history" {"Compactar TODOS los eventos antiguos de esta sesión finalizada, incluida la salida y los tamaños. Se conserva el último estado y los archivos; se declaran los tramos retirados. No es borrado seguro del disco o backups."}else{"Eliminar la salida de esta sesión finalizada y liberar su cuota lógica. Conserva estado y archivos; el tramo se marcará como eliminado. No es borrado seguro del disco o backups."};
+        let status=rpc(&layout,"status",json!({}))?;
+        let selected=status["result"]["sessions"].as_array().and_then(|rows|rows.iter().find(|row|row["id"]==args["id"])).ok_or("Sesión desconocida")?;
+        let description=format!("{}\n\nSesión: {}\nCarpeta: {}\nID: {}",label,selected["title"],selected["cwd"],args["id"].as_str().unwrap_or(""));
         let window=app.get_webview_window("main").ok_or("Ventana de confirmación no disponible")?;
         let approved=app.dialog().message(description).parent(&window).title("Jauria").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show();
         if !approved {return Err("Acción cancelada".into());}
@@ -555,13 +567,30 @@ fn main() {
                 let _ = app.emit("open-settings", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, confirm_verification, restart_runner, preview_diagnostic, export_diagnostic, confirm_workflow, select_directory, home_directory, release_session, probe_tools, record_ui_evidence, quit_ui])
+        .invoke_handler(tauri::generate_handler![connect_runner, runner_request, pulso_request, confirm_codex_permission, restart_runner, preview_diagnostic, export_diagnostic, confirm_history, select_directory, home_directory, open_notification_settings, release_session, probe_tools, record_ui_evidence, quit_ui])
         .run(tauri::generate_context!()).expect("No se pudo iniciar la interfaz Tauri");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mark_seen_bridge_accepts_only_bounded_id_through_items() {
+        assert!(validate("mark_seen", &json!({"items":[{"id":"session-1","epoch":7,"through":0},{"id":"b","epoch":u64::MAX,"through":u64::MAX}]})).is_ok());
+        let full: Vec<_> = (0..64).map(|n| json!({"id":format!("s{n}"),"epoch":n+1,"through":n})).collect();
+        assert!(validate("mark_seen", &json!({"items":full})).is_ok());
+        let over: Vec<_> = (0..65).map(|n| json!({"id":format!("s{n}"),"epoch":n+1,"through":n})).collect();
+        for args in [json!({}), json!({"items":[]}), json!({"items":over}), json!({"items":{"id":"a","through":1}}),
+            json!({"items":[{"id":"a","epoch":1,"through":1}],"generation":1}), json!({"items":[{"id":"a"}]}),
+            json!({"items":[{"id":"a","through":1}]}), json!({"items":[{"id":"a","epoch":0,"through":1}]}),
+            json!({"items":[{"id":"a","epoch":-1,"through":1}]}), json!({"items":[{"id":"a","epoch":"1","through":1}]}),
+            json!({"items":[{"epoch":1,"through":1}]}), json!({"items":[{"id":"a","epoch":1,"through":-1}]}), json!({"items":[{"id":"a","epoch":1,"through":1.5}]}),
+            json!({"items":[{"id":"a","epoch":1,"through":"1"}]}), json!({"items":[{"id":"a","epoch":1,"through":1,"seen":true}]}),
+            json!({"items":[{"id":"../x","epoch":1,"through":1}]}), json!({"items":[{"id":"","epoch":1,"through":1}]}),
+            json!({"items":[{"id":"x".repeat(65),"epoch":1,"through":1}]}), json!({"items":["a"]}), json!(null)] {
+            assert!(validate("mark_seen", &args).is_err(), "{args}");
+        }
+    }
     #[test]
     fn settings_bridge_has_strict_fields_and_integer_limits() {
         assert!(validate("get_settings", &json!({})).is_ok());
@@ -576,6 +605,44 @@ mod tests {
         }
         assert!(validate("set_settings", &json!({})).is_err());
         assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"force":true})).is_err());
+    }
+    #[test]
+    fn provider_signals_take_exactly_one_boolean() {
+        for enabled in [true, false] { assert!(validate("set_provider_signals", &json!({"enabled":enabled})).is_ok()); }
+        for bad in [json!({}), json!({"enabled":1}), json!({"enabled":"true"}), json!({"enabled":null}), json!({"enabled":true,"path":"/tmp"})] {
+            assert!(validate("set_provider_signals", &bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn notification_settings_opens_only_the_fixed_pane() {
+        let command = notification_settings_command();
+        assert_eq!(command.get_program(), "/usr/bin/open");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [NOTIFICATION_SETTINGS_URL]);
+        assert_eq!(NOTIFICATION_SETTINGS_URL, "x-apple.systempreferences:com.apple.Notifications-Settings.extension");
+        // The command has no parameter a client could fill: no generic opener.
+        let source = include_str!("main.rs");
+        assert!(source.contains("fn open_notification_settings(window: tauri::WebviewWindow) -> Result<()>"));
+    }
+    #[test]
+    fn settings_bridge_accepts_the_v2_payload_the_app_sends() {
+        // settingsVersion 2 (runner 1.3.3+): the app always sends both keys.
+        for limit in [1, 4, 8] { for auto in [true, false] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":limit,"pulsoAutoAccess":auto})).is_ok(), "{limit} {auto}");
+        } }
+        // settingsVersion 1: only the limit.
+        assert!(validate("set_settings", &json!({"maxConcurrentSessions":3})).is_ok());
+        // pulsoAutoAccess is strictly boolean and never stands for the limit.
+        for value in [json!(null), json!(1), json!(0), json!("true"), json!([]), json!({})] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":2,"pulsoAutoAccess":value})).is_err(), "{value}");
+        }
+        for value in [json!(0), json!(9), json!(2.5), json!("2"), json!(null)] {
+            assert!(validate("set_settings", &json!({"maxConcurrentSessions":value,"pulsoAutoAccess":true})).is_err(), "{value}");
+        }
+        assert!(validate("set_settings", &json!({"pulsoAutoAccess":true})).is_err(), "the limit stays required");
+        for extra in [json!({"maxConcurrentSessions":2,"pulsoAutoAccess":true,"force":true}),
+            json!({"maxConcurrentSessions":2,"pulsoAutoAccess":true,"schemaVersion":2}), json!({"maxConcurrentSessions":2,"maxSupportedSessions":8})] {
+            assert!(validate("set_settings", &extra).is_err(), "{extra}");
+        }
     }
     #[test]
     fn rename_bridge_requires_bounded_nonempty_title_without_controls() {
@@ -629,45 +696,72 @@ mod tests {
     }
 }
 
+/// Every payload the app sends (tests/fixtures/rpc-contract.json, which
+/// tests/rpc-contract.test.ts keeps in sync with the client sources) must pass
+/// the bridge validation and the runner allowlist. A bridge allowlist narrower
+/// than the runner's broke Configuración in 1.3.3 without any test noticing.
 #[cfg(test)]
-mod project_task_bridge_tests {
+#[path = "../../../runner/src/rpc_contract.rs"]
+mod rpc_contract;
+#[cfg(test)]
+mod rpc_contract_tests {
     use super::*;
+    use super::rpc_contract;
+    fn contract() -> Value { serde_json::from_str(include_str!("../../tests/fixtures/rpc-contract.json")).unwrap() }
+    fn with_cwd(mut args: Value) -> Value {
+        if args["cwd"] == "$CWD" { args["cwd"] = json!(fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap()); }
+        args
+    }
     #[test]
-    fn project_close_and_reopen_allow_only_a_registered_identity() {
-        for op in ["close_project", "reopen_project"] {
-            assert!(validate(op,&json!({"id":"project-123"})).is_ok());
-            for field in ["path","cwd","closed","command","confirmed"] {
-                let mut extra=json!({"id":"project-123"});extra[field]=json!("/arbitrary");
-                assert!(validate(op,&extra).is_err());
+    fn every_runner_payload_the_app_sends_passes_bridge_and_runner() {
+        let contract = contract();
+        let entries = contract["runner"].as_array().unwrap();
+        assert!(entries.len() > 20);
+        for entry in entries {
+            let op = entry["op"].as_str().unwrap();
+            let mut args = with_cwd(entry["args"].clone());
+            match entry["via"].as_str() {
+                // Native commands that validate (and complete) the payload themselves.
+                Some("confirm_history") => { args["confirmed"] = json!(true); validate(op, &args).unwrap_or_else(|e| panic!("bridge {op}: {e}")); }
+                Some("confirm_codex_permission") => {
+                    validate(op, &args).unwrap_or_else(|e| panic!("bridge {op}: {e}"));
+                    // runner_request itself refuses it: only the native confirmation may send it.
+                    if args["decision"] == "accept" { args["nativeConfirmed"] = json!(true); }
+                }
+                // release_session builds {id, confirmed, generation?} natively.
+                Some("release_session") => { args["confirmed"] = json!(true); args["generation"] = json!(1); }
+                Some(other) => panic!("unknown via {other}"),
+                None => {
+                    validate(op, &args).unwrap_or_else(|e| panic!("bridge {op} {args}: {e}"));
+                    assert!(!matches!(op, "codex_permission" | "purge_history" | "compact_history"), "{op} must go through its native confirmation");
+                    start_policy::validate_start_mode(op, &args, entry["smoke"] == true).unwrap_or_else(|e| panic!("start policy {op}: {e}"));
+                }
             }
-            assert!(validate(op,&json!({"id":"../project"})).is_err());
-            assert!(validate(op,&json!({})).is_err());
+            let allowed = rpc_contract::allowed_args(op).unwrap_or_else(|| panic!("runner does not know {op}"));
+            for key in args.as_object().unwrap().keys() {
+                assert!(allowed.contains(&key.as_str()), "runner rejects {op}.{key}");
+            }
+            if op == "set_settings" { rpc_contract::settings_args(&args).unwrap_or_else(|e| panic!("runner {args}: {e}")); }
         }
     }
     #[test]
-    fn task_start_accepts_ids_but_never_renderer_chosen_paths_or_process_flags() {
-        let args=json!({"id":"task-123","sessionId":"session-123","kind":"codex","rows":24,"cols":80});
-        assert!(validate("start_task",&args).is_ok());
-        let mut terminal=args.clone();terminal["kind"]=json!("terminal");
-        assert!(validate("start_task",&terminal).is_err());
-        for field in ["cwd","workspace","taskId","command","resume","bypassPermissions"] {
-            let mut extra=args.clone();extra[field]=json!("/arbitrary");
-            assert!(validate("start_task",&extra).is_err(),"{field}");
-        }
-        for bad in [json!("../escape"),json!(""),json!(42)] {
-            let mut extra=args.clone();extra["sessionId"]=bad;
-            assert!(validate("start_task",&extra).is_err());
+    fn every_pulso_payload_the_app_sends_passes_the_bridge() {
+        let contract = contract();
+        for entry in contract["pulso"].as_array().unwrap() {
+            let op = entry["op"].as_str().unwrap();
+            validate_pulso(op, &entry["args"]).unwrap_or_else(|e| panic!("bridge pulso {op} {}: {e}", entry["args"]));
         }
     }
     #[test]
-    fn drafts_are_bounded_and_preparation_has_no_custom_git_arguments() {
-        let draft=json!({"id":"task-123","projectId":"project-123","title":"Work","objective":"Goal","acceptanceCriteria":""});
-        assert!(validate("create_task",&draft).is_ok());
-        let mut bad=draft.clone();bad["objective"]=json!("");assert!(validate("create_task",&bad).is_err());
-        let mut bad=draft.clone();bad["title"]=json!("x".repeat(121));assert!(validate("create_task",&bad).is_err());
-        let mut bad=draft.clone();bad["baseSha"]=json!("HEAD");assert!(validate("create_task",&bad).is_err());
-        assert!(validate("prepare_task",&json!({"id":"task-123"})).is_ok());
-        assert!(validate("prepare_task",&json!({"id":"task-123","force":true})).is_err());
+    fn bridge_never_accepts_a_key_the_runner_rejects() {
+        let ops = ["status","telemetry","refresh_quotas","get_settings","set_settings","rename_session","native_binding","resume_native","purge_history","compact_history",
+            "start_codex","codex_state","codex_request","codex_resume","codex_turn","codex_command","codex_interrupt","codex_permission","start","input","resize","stop","interrupt","events","terminal_live","mark_seen"];
+        for op in ops {
+            let runner = rpc_contract::allowed_args(op).unwrap_or_else(|| panic!("runner does not know {op}"));
+            for key in bridge_fields(op).unwrap() { assert!(runner.contains(key), "bridge lets {op}.{key} through, the runner rejects it"); }
+        }
+        // Operations the bridge must never forward generically.
+        for op in ["shutdown","diagnostic_preview","release","register_project","create_task"] { assert!(bridge_fields(op).is_none(), "{op}"); }
     }
 }
 
@@ -712,5 +806,21 @@ mod pulso_board_bridge_tests {
         assert!(validate_pulso("projects", &json!({"status":"todo"})).is_err());
         assert!(validate_pulso("projects", &json!({"expectedSnapshotRevision":0})).is_err());
         assert!(validate_pulso("items", &json!({"status":"todo","extra":true})).is_err());
+    }
+
+    #[test]
+    fn sidebar_summary_accepts_only_an_optional_unsigned_if_revision() {
+        assert!(validate_pulso("sidebar_summary", &json!({})).is_ok());
+        for revision in [0, 7, u64::MAX] {
+            assert!(validate_pulso("sidebar_summary", &json!({"ifRevision":revision})).is_ok());
+        }
+        for value in [json!(null), json!(true), json!("1"), json!(-1), json!(1.0), json!({}), json!([])] {
+            assert!(validate_pulso("sidebar_summary", &json!({"ifRevision":value})).is_err());
+        }
+        for args in [json!({"projectId":null}), json!({"limit":50}), json!({"ifRevision":1,"extra":true}), json!([])] {
+            assert!(validate_pulso("sidebar_summary", &args).is_err());
+        }
+        // The runner status RPC stays argument-free through the bridge.
+        assert!(validate("status", &json!({"pulsoRevision":1})).is_err());
     }
 }

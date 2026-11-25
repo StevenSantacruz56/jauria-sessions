@@ -381,6 +381,22 @@ fn stdio_mcp_creates_project_and_phase_with_scoped_permission_and_stable_retry()
     let revision=updated[0]["result"]["structuredContent"]["item"]["revision"].clone();
     let checkpoint=exchange(vec![request(10,"tools/call",json!({"name":"jauria_checkpoint","arguments":{"itemId":"phase-mcp-phase-1","expectedRevision":revision,"brief":"Fase iniciada","nextAction":"Seguir con la integración","idempotencyKey":"mcp-checkpoint-1"}}))]);
     assert_eq!(checkpoint[0]["result"]["structuredContent"]["checkpoint"]["brief"],"Fase iniciada");
+    // An unknown tool (for example the UI-only sidebar_summary) and an invalid
+    // status get their own messages, never the uncertain-retry advice.
+    let current=app.pulso("item",json!({"id":"phase-mcp-phase-1"}))["item"]["revision"].clone();
+    let unclear=exchange(vec![
+        request(20,"tools/call",json!({"name":"sidebar_summary","arguments":{}})),
+        request(21,"tools/call",json!({"name":"jauria_update_phase","arguments":{"id":"phase-mcp-phase-1","expectedRevision":current,"status":"archived","idempotencyKey":"mcp-phase-bad-status"}})),
+    ]);
+    assert_eq!(unclear[0]["result"]["isError"],true);
+    let unknown=unclear[0]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(unknown.starts_with("Herramienta desconocida") && !unknown.contains("idempotencyKey") && !unknown.contains("reintentar con el mismo"),"{unknown}");
+    assert_eq!(unclear[1]["result"]["isError"],true);
+    let invalid=unclear[1]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(invalid.starts_with("Estado no válido") && !invalid.contains("idempotencyKey"),"{invalid}");
+    assert_eq!(app.pulso("item",json!({"id":"phase-mcp-phase-1"}))["item"]["status"],"doing","an invalid status changes nothing");
+    let direct=app.request(true,"item_update",json!({"id":"phase-mcp-phase-1","requestId":"direct-bad-status","expectedRevision":current,"status":"archived"})).unwrap();
+    assert_eq!((direct["ok"].clone(),direct["error"].clone()),(json!(false),json!("invalid status")));
     app.pulso("grant",json!({"sessionId":"mcp-fixture","projectId":"project-mcp-plan-1","canCreateProjects":false,"remember":false}));
     let restricted=exchange(vec![
         request(11,"tools/call",json!({"name":"jauria_create_project","arguments":{"title":"Fuera de alcance","idempotencyKey":"mcp-outside-1"}})),
