@@ -133,6 +133,9 @@ impl ResourcesSampler {
         json!({
             "schemaVersion": 1,
             "timestampUnixMs": timestamp_ms(),
+            // Logical cores of this machine: lets the reader show CPU as a share of the whole
+            // machine instead of «100 % = one core». Null when the system does not say.
+            "cpuCount": cpu_count(),
             "source": if cfg!(target_os = "macos") { "proc_pid_rusage_v0" } else { "unsupported" },
             "scope": "explicit_pids",
             "available": available,
@@ -140,6 +143,10 @@ impl ResourcesSampler {
             "limitations": LIMITATIONS,
         })
     }
+}
+
+fn cpu_count() -> Option<u64> {
+    std::thread::available_parallelism().ok().and_then(|count| u64::try_from(count.get()).ok())
 }
 
 fn timestamp_ms() -> Option<u64> {
@@ -265,6 +272,7 @@ mod tests {
         assert!(rows[0]["timestampUnixMs"].as_u64().unwrap() > 0);
         assert_eq!(value["scope"], "explicit_pids");
         assert_eq!(value["schemaVersion"], 1);
+        assert!(value["cpuCount"].as_u64().unwrap() >= 1);
         // Explicit allowlist prevents accidental command/environment metadata.
         assert_eq!(rows[0].as_object().unwrap().len(), 10);
         assert!(serde_json::to_string(&value).is_ok());

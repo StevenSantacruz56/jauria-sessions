@@ -94,7 +94,7 @@ export const shell = `
         <span class="status-spacer"></span>
         <span class="status-item status-connection"><span id="connection-dot" class="state-dot"></span><span id="connection-state" role="status">Conectando…</span><button id="connect" class="icon-button" aria-label="Reconectar" title="Reconectar">${icon('refresh')}</button></span>
         <span id="terminal-size" class="status-item terminal-size" title="Columnas × filas del terminal del panel enfocado">—</span>
-        <button id="telemetry-summary" type="button" class="status-item" aria-haspopup="dialog" title="Total de Jauría: sesiones abiertas, runner e interfaz. Pulsa para ver el detalle en Uso y recursos.">Jauría · CPU — · RAM —</button>
+        <button id="telemetry-summary" type="button" class="status-item" aria-haspopup="dialog" title="Total de Jauría: sesiones abiertas, runner e interfaz. La CPU es el porcentaje de todo el equipo; entre paréntesis, la parte de las sesiones. Pulsa para ver el detalle en Uso y recursos.">Jauría · CPU — · RAM —</button>
       </footer>
     </main>
   </div>

@@ -37,10 +37,22 @@ export function formatTelemetryPercent(value: unknown): string {
   const n = number(value);
   return n !== null && n <= 100 ? `${decimal(n)} %` : 'No disponible';
 }
-export function formatTelemetryCpu(value: unknown): string {
+/**
+ * The sampler measures CPU with 100 = one full core. With the machine's core
+ * count the figure is shown as a share of the whole machine (125 on 10 cores
+ * reads «12,5 %»); without it (older runner and bridge) it stays per core.
+ */
+export function formatTelemetryCpu(value: unknown, cores: number | null = null): string {
   const n = number(value);
-  return n === null ? 'No disponible' : `${decimal(n)} %`;
+  if (n === null) return 'No disponible';
+  if (cores === null) return `${decimal(n)} %`;
+  const share = n / cores;
+  return share > 0 && share < 0.05 ? '< 0,1 %' : `${decimal(share)} %`;
 }
+const coreCount = (value: unknown): number | null => {
+  const n = number(value);
+  return n !== null && Number.isInteger(n) && n >= 1 && n <= 4096 ? n : null;
+};
 export function formatTelemetryBytes(value: unknown): string {
   const n = number(value);
   if (n === null) return 'No disponible';
@@ -150,6 +162,8 @@ export type ResourceView = {
   webEngineNote: string | null;
   /** The total leaves something out: an unmeasured process or the web engine. Same flag for the table and the status bar. */
   partial: boolean;
+  /** Logical cores of the machine, from the bridge or the runner; null when neither says (older versions). */
+  cores: number | null;
   missing: string | null; observedAt: number | null;
 };
 const WEB_ENGINE_NOTE: Record<string, string> = {
@@ -220,12 +234,18 @@ export function resourceView(snapshot: TelemetrySnapshot | null, sessionTitle: (
   const partial = !!total && (total.unmeasured > 0 || !webEngine);
   if (total && partial) total.label = 'Total de Jauría (parcial)';
   return { sessions, runner, window, total, unattributed, others, legacy, webEngine, partial,
+    cores: coreCount(app.cpuCount) ?? coreCount(data.cpuCount),
     webEngineNote: total && !webEngine ? WEB_ENGINE_NOTE[engine ?? ''] ?? WEB_ENGINE_UNKNOWN : null,
     missing: reason ? MISSING[reason] : null, observedAt: timestamp(data.timestampUnixMs ?? data.observedAt) };
 }
-export function formatResourceCpu(line: ResourceLine | null): string {
+export function formatResourceCpu(line: ResourceLine | null, cores: number | null = null): string {
   if (!line || line.cpu === null) return line?.cpuPending ? 'midiendo…' : line?.unmeasured ? 'sin dato' : DASH;
-  return formatTelemetryCpu(line.cpu);
+  return formatTelemetryCpu(line.cpu, cores);
+}
+/** What the CPU figures mean, in one plain line: shown under the table and as the column's hint. */
+export function cpuScaleNote(cores: number | null): string {
+  return cores === null ? '100 % equivale a un núcleo completo; con varios núcleos puede pasar de 100 %.'
+    : `CPU: porcentaje de la capacidad de todo el equipo (${cores === 1 ? '1 núcleo' : `${cores} núcleos`}).`;
 }
 export function formatResourceRam(line: ResourceLine | null): string {
   return line?.rss == null ? line?.unmeasured ? 'sin dato' : DASH : formatTelemetryBytes(line.rss);
@@ -234,7 +254,11 @@ export function formatResourceRam(line: ResourceLine | null): string {
 export function telemetrySummary(view: ResourceView | null, connected: boolean): string {
   if (!connected) return 'Recursos sin conexión';
   const total = view?.total ?? null;
-  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu)} · RAM ${formatResourceRam(total)}${view?.partial ? ' (parcial)' : ''}`;
+  const cores = view?.cores ?? null;
+  // Most of the total is what the agents run, not the app: with the machine scale the bar says how much.
+  const sessionCpu = [...(view?.sessions ?? []), ...(view?.unattributed ? [view.unattributed] : [])].map(s => s.cpu).filter((c): c is number => c !== null);
+  const sessions = cores !== null && total?.cpu != null && sessionCpu.length ? ` (sesiones ${formatTelemetryCpu(sessionCpu.reduce((t, c) => t + c, 0), cores)})` : '';
+  return `Jauría · CPU ${total?.cpu == null ? DASH : formatTelemetryCpu(total.cpu, cores)}${sessions} · RAM ${formatResourceRam(total)}${view?.partial ? ' (parcial)' : ''}`;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
@@ -302,7 +326,8 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
   const thead = element('thead');
   const headRow = element('tr');
   const th = (text: string, hint?: string) => { const cell = element('th', '', text); cell.scope = 'col'; if (hint) cell.title = hint; return cell; };
-  headRow.append(th('Proceso'), th('CPU', '100 % equivale a un núcleo completo; con varios núcleos puede pasar de 100 %.'), th('RAM', 'Memoria en uso de cada proceso, sumada.'));
+  const cpuHead = th('CPU', cpuScaleNote(null));
+  headRow.append(th('Proceso'), cpuHead, th('RAM', 'Memoria en uso de cada proceso, sumada.'));
   thead.append(headRow);
   const tbody = element('tbody');
   const tfoot = element('tfoot');
@@ -356,17 +381,19 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
     return section;
   }
 
+  let cores: number | null = null;
   function resourceRow(line: ResourceLine, cls = '') {
     const row = element('tr', cls);
     row.dataset.key = line.key;
     const name = element('th', 'telemetry-name', line.label); name.scope = 'row';
     if (line.processes > 1) name.title = `${line.processes} procesos`;
-    row.append(name, element('td', 'telemetry-value', formatResourceCpu(line)), element('td', 'telemetry-value', formatResourceRam(line)));
+    row.append(name, element('td', 'telemetry-value', formatResourceCpu(line, cores)), element('td', 'telemetry-value', formatResourceRam(line)));
     return row;
   }
 
   function renderResources(staleTransport: boolean) {
     const view = resourceView(snapshot, options.sessionTitle, options.sessionOfPid);
+    cores = view.cores; cpuHead.title = cpuScaleNote(cores);
     const observedStale = view.observedAt !== null && now() - view.observedAt > RESOURCE_STALE_MS;
     const stale = staleTransport || observedStale;
     table.dataset.stale = String(stale);
@@ -394,6 +421,7 @@ export function mountTelemetry(options: Options): { open: (from?: HTMLElement | 
       const n = view.total.unmeasured;
       lines.push(element('p', 'telemetry-note telemetry-warning', `El total no incluye ${n === 1 ? '1 proceso que no se pudo medir' : `${n} procesos que no se pudieron medir`} (pudo terminar durante la lectura).`));
     }
+    if (snapshot && view.cores !== null) lines.push(element('p', 'telemetry-note telemetry-scale', cpuScaleNote(view.cores)));
     if (view.legacy) lines.push(element('p', 'telemetry-note', 'El runner es de una versión anterior: los procesos que lanzan las sesiones se suman sin desglose por sesión.'));
     if (snapshot && view.webEngineNote) lines.push(element('p', 'telemetry-note', view.webEngineNote));
     if (view.missing) lines.push(element('p', 'telemetry-note telemetry-warning', view.missing));
