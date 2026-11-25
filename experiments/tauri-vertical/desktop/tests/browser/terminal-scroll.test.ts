@@ -13,6 +13,17 @@ try {
       await page.goto(url); await page.waitForFunction(() => (window as any).fixture);
       const run = (fn: string) => page.evaluate(expression => Function(`return (${expression})(window.fixture)`)(), fn);
       const state = () => run('f => f.state()');
+      // The viewport syncs on the engine's own frames; a loaded CI runner can take longer than a fixed
+      // pause, so the scroll checks wait for the condition instead of sampling once.
+      const until = async (holds: (s: any) => boolean, message: string) => {
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const current = await state();
+          if (holds(current)) return current;
+          if (Date.now() > deadline) assert.fail(`${engine.name()}: ${message}: ${JSON.stringify({ scroll: current.scroll, y: current.y, base: current.base })}`);
+          await page.waitForTimeout(50);
+        }
+      };
       // Reproduce the actual regression first: output parsed while unselected,
       // attach with no geometry change, wheel upwards over the terminal center.
       await run('async f => { f.host.remove(); await f.fill(); }');
@@ -29,9 +40,9 @@ try {
         assert.equal((await state()).y, originalY, 'baseline reproduces inert upward wheel');
       } else console.log(`${engine.name()}: baseline not reproduced (viewport already synced); fixed path still checked`);
       await run('f => f.attach("first")'); await page.waitForTimeout(100);
-      assert.ok((await state()).scroll > 0);
-      await page.mouse.wheel(0, -160); await page.waitForTimeout(100);
-      assert.ok((await state()).y < originalY, 'upward wheel works after attachment sync');
+      await until(s => s.scroll > 0, 'viewport syncs after attachment');
+      await page.mouse.wheel(0, -160);
+      await until(s => s.y < originalY, 'upward wheel works after attachment sync');
       const reading = await state();
       await run('f => f.write("incoming while reading\\r\\n")'); await page.waitForTimeout(100);
       assert.equal((await state()).top, reading.top, 'output does not pull reader to bottom');
@@ -46,10 +57,10 @@ try {
       await run('f => f.resize(800, 350)'); await page.waitForTimeout(100);
       assert.equal((await state()).top, beforeWidth.top, 'width round trip keeps logical line');
       await run('f => f.attach("second")'); await page.waitForTimeout(100);
-      assert.equal((await state()).top, beforeWidth.top); assert.ok((await state()).scroll > 0);
+      assert.equal((await state()).top, beforeWidth.top); await until(s => s.scroll > 0, 'viewport syncs after reparent');
       await page.locator('.xterm').hover(); const y = (await state()).y;
-      await page.mouse.wheel(0, 100); await page.waitForTimeout(100);
-      assert.ok((await state()).y > y, 'wheel down works after reparent');
+      await page.mouse.wheel(0, 100);
+      await until(s => s.y > y, 'wheel down works after reparent');
       await run('f => f.term.scrollToBottom()');
       await run('f => f.write("following\\r\\n")'); await page.waitForTimeout(100);
       assert.equal((await state()).y, (await state()).base);
